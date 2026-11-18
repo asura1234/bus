@@ -150,15 +150,11 @@ fn identity_headers_prefer_unique_names_and_disambiguate_reused_historical_names
             .unwrap()[0];
         test_request_payload(&mut w.state, id).unwrap()
     };
-    let header = format!("codex1 (room {}):", room.0);
-    assert_eq!(send_payload(&mut w, "hello"), format!("{header}\nhello"));
-    assert_eq!(
-        send_payload(&mut w, "codex1:\nhello"),
-        format!("{header}\nhello")
-    );
+    assert_eq!(send_payload(&mut w, "hello"), "codex1:\nhello");
+    assert_eq!(send_payload(&mut w, "codex1:\nhello"), "codex1:\nhello");
     assert_eq!(
         send_payload(&mut w, "codex1 (room 999):\nhello"),
-        format!("{header}\ncodex1 (room 999):\nhello")
+        "codex1:\ncodex1 (room 999):\nhello"
     );
     let historical = w
         .state
@@ -179,10 +175,7 @@ fn identity_headers_prefer_unique_names_and_disambiguate_reused_historical_names
         .unwrap();
     assert_eq!(
         test_request_payload(&mut w.state, historical).unwrap(),
-        format!(
-            "codex1 (agent {}) (room {}):\nbefore rename",
-            sender.0, room.0
-        )
+        format!("codex1 (agent {}):\nbefore rename", sender.0)
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();

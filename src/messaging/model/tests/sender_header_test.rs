@@ -1,6 +1,7 @@
-//! Every agent message with a known room names that room in both the sender
-//! line and the `[Bus message N from …]` prefix. A sender with no room keeps
-//! the bare label; nothing invents one.
+//! A same-room message keeps a bare sender line in the chat, while its
+//! `[Bus message N from …]` prefix still names the sender's room. A cross-room
+//! or MASTER message names the room in both. A sender with no room keeps the
+//! bare label; nothing invents one.
 use std::path::PathBuf;
 
 use super::*;
@@ -53,20 +54,21 @@ fn delivered(
     (message, payload)
 }
 
-fn expect_room(message: u64, from: &str, body: &str, payload: &str) {
+fn expect_message(message: u64, header: &str, prefix_from: &str, body: &str, payload: &str) {
     assert_eq!(
         payload,
-        format!("{from}:\n[Bus message {message} from {from}]\n{body}"),
-        "sender header or prefix lacks the room"
+        format!("{header}:\n[Bus message {message} from {prefix_from}]\n{body}"),
+        "sender line or delivered prefix does not match the restored format"
     );
 }
 
 #[test]
-fn same_room_header_and_prefix_name_the_room() {
+fn same_room_attribution_stays_bare_while_the_prefix_names_the_room() {
     let (mut state, room, author, peer) = pair("work");
     let (message, payload) = delivered(&mut state, room, author, peer, "please recheck");
-    expect_room(
+    expect_message(
         message,
+        "builder",
         &format!("builder (room {})", room.0),
         "please recheck",
         &payload,
@@ -74,15 +76,16 @@ fn same_room_header_and_prefix_name_the_room() {
 }
 
 #[test]
-fn cross_room_header_keeps_the_senders_home_room_on_both_lines() {
+fn cross_room_delivery_names_the_senders_home_room_on_both_lines() {
     let (mut state, home, author, _) = pair("home");
     let other = state.create_room("other").unwrap();
     let peer = state
         .create_agent(other, "peer", Provider::Codex, PathBuf::from("/repo"), None)
         .unwrap();
     let (message, payload) = delivered(&mut state, other, author, peer, "hello");
-    expect_room(
+    expect_message(
         message,
+        &format!("builder (room {})", home.0),
         &format!("builder (room {})", home.0),
         "hello",
         &payload,
@@ -113,8 +116,9 @@ fn master_delivery_names_the_master_room_on_both_lines() {
         )
         .unwrap();
     let (message, payload) = delivered(&mut state, work, orch, worker, "status");
-    expect_room(
+    expect_message(
         message,
+        &format!("orch (room {})", master.0),
         &format!("orch (room {})", master.0),
         "status",
         &payload,
@@ -130,8 +134,9 @@ fn master_delivery_names_the_master_room_on_both_lines() {
         )
         .unwrap();
     let (message, payload) = delivered(&mut state, master, orch, peer, "in master");
-    expect_room(
+    expect_message(
         message,
+        &format!("orch (room {})", master.0),
         &format!("orch (room {})", master.0),
         "in master",
         &payload,
@@ -139,14 +144,15 @@ fn master_delivery_names_the_master_room_on_both_lines() {
 }
 
 #[test]
-fn numeric_and_renamed_senders_keep_the_id_and_add_the_room() {
+fn numeric_and_renamed_senders_keep_the_id_and_the_prefix_keeps_the_room() {
     let (mut state, room, author, peer) = pair("work");
     let numeric = state
         .create_agent(room, "7", Provider::Codex, PathBuf::from("/repo"), None)
         .unwrap();
     let (message, payload) = delivered(&mut state, room, numeric, peer, "numeric sender");
-    expect_room(
+    expect_message(
         message,
+        &format!("7 (agent {})", numeric.0),
         &format!("7 (agent {}) (room {})", numeric.0, room.0),
         "numeric sender",
         &payload,
@@ -167,8 +173,9 @@ fn numeric_and_renamed_senders_keep_the_id_and_add_the_room() {
     state.rename_agent(author, "renamed").unwrap();
     let message = state.request(request).unwrap().prompt.id.0;
     let payload = state.render_request_payload(request).unwrap();
-    expect_room(
+    expect_message(
         message,
+        &format!("builder (agent {})", author.0),
         &format!("builder (agent {}) (room {})", author.0, room.0),
         "before rename",
         &payload,

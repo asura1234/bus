@@ -930,9 +930,9 @@ fn orchestrators_are_green_in_work_room_messages_in_both_palettes() {
     ] {
         ui.settings.color_blind_mode = color_blind;
         ui.open_room(work);
-        let marker = format!("orch (room {}) → builder", master.0);
-        assert_eq!(name_colors(&mut ui, &marker, "orch"), [green; 4]);
-        assert_eq!(name_colors(&mut ui, &marker, "builder"), [worker_color; 7]);
+        let marker = "orch → builder";
+        assert_eq!(name_colors(&mut ui, marker, "orch"), [green; 4]);
+        assert_eq!(name_colors(&mut ui, marker, "builder"), [worker_color; 7]);
         // Workers never get You's green, so the orchestrator stays distinct.
         assert_ne!(worker_color, green);
 

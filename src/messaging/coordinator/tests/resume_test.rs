@@ -80,18 +80,12 @@ fn assert_global_names_legacy_sender(snapshot: Option<&str>, submitted: Option<&
     );
     // Current names are unique, but the old queued author's name may now
     // belong to the survivor. Preserve that historical name with its real ID.
-    // Same-room payloads still name the sender's room; frozen payloads stay exact.
+    // Same-room payloads use the compact header; frozen payloads stay exact.
     let expected = submitted
         .map(str::to_owned)
         .unwrap_or_else(|| match snapshot {
-            Some(name) => format!(
-                "{name} (agent {}) (room {}):\nlegacy question",
-                author.0, room.0
-            ),
-            None => format!(
-                "author (agent {}) (room {}):\nlegacy question",
-                author.0, room.0
-            ),
+            Some(name) => format!("{name} (agent {}):\nlegacy question", author.0),
+            None => format!("author (agent {}):\nlegacy question", author.0),
         });
     let actual = worker.state.render_request_payload(request).unwrap();
     let actual = if submitted.is_some() {

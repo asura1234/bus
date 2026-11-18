@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn room_chat_header_names_the_senders_room() {
+    fn room_chat_attribution_stays_bare_while_the_delivered_prefix_names_the_room() {
         use crate::messaging::model::{Author, Draft};
         let mut state = BusState::default();
         let room = state.create_room("work").unwrap();
@@ -331,7 +331,17 @@ mod tests {
                 None,
             )
             .unwrap();
-        state
+        let other = state.create_room("other").unwrap();
+        let outsider = state
+            .create_agent(
+                other,
+                "outsider",
+                Provider::Codex,
+                "/project".into(),
+                None,
+            )
+            .unwrap();
+        let request = state
             .submit_message_from(
                 room,
                 Draft {
@@ -341,6 +351,20 @@ mod tests {
                 },
                 Author::Agent(author),
                 1,
+            )
+            .unwrap()[0];
+        let message = state.request(request).unwrap().prompt.id.0;
+        let payload = state.render_request_payload(request).unwrap();
+        state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "cross-room hello".into(),
+                    files: Vec::new(),
+                    recipient_ids: [peer].into(),
+                },
+                Author::Agent(outsider),
+                2,
             )
             .unwrap();
         state
@@ -352,7 +376,7 @@ mod tests {
                     recipient_ids: [peer].into(),
                 },
                 Author::Developer,
-                2,
+                3,
             )
             .unwrap();
         let mut history = History::default();
@@ -366,19 +390,31 @@ mod tests {
         );
         let agent_header = lines
             .iter()
-            .find(|line| line.text.contains("builder"))
+            .find(|line| line.text.starts_with("builder"))
             .expect("agent header");
         assert!(
-            agent_header
-                .text
-                .contains(&format!("builder (room {})", room.0)),
-            "room chat header lacks the room id: {}",
+            agent_header.text.starts_with("builder → reviewer"),
+            "room chat attribution changed: {}",
             agent_header.text
         );
         assert!(
-            agent_header.text.contains("→ reviewer"),
-            "{}",
+            !agent_header.text.contains("(room"),
+            "the room chat attribution must stay bare: {}",
             agent_header.text
+        );
+        let outsider_header = lines
+            .iter()
+            .find(|line| line.text.starts_with("outsider"))
+            .expect("cross-room agent header");
+        assert!(
+            outsider_header.text.starts_with("outsider → reviewer"),
+            "room chat attribution changed: {}",
+            outsider_header.text
+        );
+        assert!(
+            !outsider_header.text.contains("(room"),
+            "the room chat attribution must stay bare: {}",
+            outsider_header.text
         );
         let you_header = lines
             .iter()
@@ -388,6 +424,17 @@ mod tests {
             !you_header.text.contains("(room"),
             "the developer has no sender room: {}",
             you_header.text
+        );
+        assert!(
+            payload.starts_with("builder:\n"),
+            "the same-room sender line must stay bare: {payload}"
+        );
+        assert!(
+            payload.contains(&format!(
+                "[Bus message {message} from builder (room {})]",
+                room.0
+            )),
+            "the delivered prefix must keep the sender's room: {payload}"
         );
     }
 

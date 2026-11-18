@@ -174,7 +174,7 @@ pub(crate) fn agent_onboarding(
          The orchestrator owns staffing and recovery, the roster, verifier allocation, dialogs, \
          product decisions and replacement announcements; workers do not edit the roster. \
          Messages from another room wait for the next turn; never fold them into a running turn. \
-         Bus adds one sender header: 'name (room R):' on every message; IDs appear only for numeric or historical names. \
+         Bus adds one sender header: 'name:' locally, 'name (room R):' across rooms or MASTER; IDs appear only for numeric or historical names. \
          Send only the body; do not add a 'from X', 'X here' or signature line.",
         id.0,
         room.0,

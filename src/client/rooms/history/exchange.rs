@@ -366,13 +366,7 @@ fn participant_label(state: &BusState, participant: &Author) -> String {
     match participant {
         Author::Developer => "You".into(),
         Author::Bus => crate::messaging::model::BUS_SENDER.into(),
-        Author::Agent(id) => {
-            let name = state.agent_label(*id);
-            match state.agent_home_room(*id) {
-                Some(room) => format!("{name} (room {})", room.0),
-                None => name,
-            }
-        }
+        Author::Agent(id) => state.agent_label(*id),
     }
 }
 
