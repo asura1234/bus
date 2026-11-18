@@ -159,7 +159,7 @@ class Run:
         self.check_build(state)
         shown = self.cli("settings")["settings"]
         assert shown["feishu_bridge_path"] == str(self.bridge) and "feishu_cli_path" not in shown
-        until(lambda: self.cli("settings")["settings"]["feishu"]["enabled"], "optional fake bridge did not enable")
+        until(lambda: self.cli("settings")["settings"]["feishu"]["available"], "optional fake bridge did not become available")
         self.orch_a = self.add_orchestrator("orch-a", "work-a")
         self.orch_b = self.add_orchestrator("orch-b", "work-b")
         self.worker = self.cli("agent", "add", "--room", "work-a", "--name", "worker-a", "--provider", "claude",
@@ -342,12 +342,12 @@ class Run:
     def plugin_off_and_failure(self):
         count = len(self.calls())
         self.settings(feishu_bridge_path=str(self.bin / "not-installed"))
-        until(lambda: not self.cli("settings")["settings"]["feishu"]["enabled"], "missing bridge did not disable Feishu")
+        until(lambda: not self.cli("settings")["settings"]["feishu"]["available"], "missing bridge was not reported unavailable")
         self.post("master", self.orch_a, "[waiting-on-you] Missing plugin")
         self.quiet()
         assert len(self.calls()) == count
         self.settings(feishu_bridge_path=str(self.bridge))
-        until(lambda: self.cli("settings")["settings"]["feishu"]["enabled"], "restored fake plugin did not enable")
+        until(lambda: self.cli("settings")["settings"]["feishu"]["available"], "restored fake plugin did not become available")
         self.quiet()
         assert len(self.calls()) == count, "restoring a plugin cannot replay off-period alerts"
         (self.bin / "bridge-mode").write_text("fail")

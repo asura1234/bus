@@ -281,7 +281,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
             "feishu_waiting_notifications": true,
             "feishu_recipient": "ou_ca1b530d792419a044e281f998ce68dc",
             "feishu_bridge_path": null,
-            "feishu": {"enabled":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
+            "feishu": {"enabled":false,"available":false,"pending":false,"queued":0,"rate_limited":false,"error":null},
             "max_compactions_per_agent": 5,
             "idle_agents_alert": 5,
             "idle_alert_minutes": 5,
@@ -335,7 +335,7 @@ fn sidebar_width_is_saved_clamped_and_announced_to_the_ui() {
 }
 
 #[test]
-fn feishu_notifications_cannot_be_disabled_or_change_sound() {
+fn feishu_notifications_toggle_persists_and_leaves_sound_alone() {
     let root = root("developer-notifications");
     let mut worker = session(&root, "developer-notifications");
     let (events, receiver) = mpsc::channel();
@@ -344,12 +344,9 @@ fn feishu_notifications_cannot_be_disabled_or_change_sound() {
             .unwrap()
             .feishu_notifications
     );
-    assert!(worker
-        .command(BusCommand::SetFeishuNotifications(false), &events)
-        .is_err());
-    {
+    for on in [false, true] {
         worker
-            .command(BusCommand::SetFeishuNotifications(true), &events)
+            .command(BusCommand::SetFeishuNotifications(on), &events)
             .unwrap();
         let echoes: Vec<_> = receiver
             .try_iter()
@@ -359,10 +356,11 @@ fn feishu_notifications_cannot_be_disabled_or_change_sound() {
             })
             .collect();
         assert_eq!(echoes.len(), 1);
-        assert!(echoes[0].feishu_notifications);
+        assert_eq!(echoes[0].feishu_notifications, on);
         let saved = settings::load(&root.join("settings.json")).unwrap();
-        assert!(saved.feishu_notifications);
+        assert_eq!(saved.feishu_notifications, on);
         assert!(saved.master_sound.enabled);
+        assert_eq!(worker.settings_json()["feishu_waiting_notifications"], on);
     }
     std::fs::remove_dir_all(root).unwrap();
 }

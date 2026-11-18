@@ -4,6 +4,7 @@ use crate::messaging::{
     model::{AgentId, PromptId, Provider},
     native::{Transport, TransportError},
 };
+use serde_json::json;
 use std::{
     os::unix::fs::PermissionsExt,
     path::PathBuf,
@@ -144,18 +145,44 @@ fn feishu_distinct_asks_have_their_own_dm_and_durable_mapping_before_and_after_t
 }
 
 #[test]
-fn feishu_missing_plugin_turns_both_transport_directions_off_without_a_tui_error() {
+fn feishu_on_without_a_bridge_stays_on_and_reports_the_setup_error() {
     let mut f = Fixture::new();
     f.settings(|s| s.feishu_bridge_path = Some("/missing/feishu-bridge".into()));
     f.post("[waiting-on-you] Choose");
-    assert!(!f.worker.attention.status.enabled);
+    assert!(f.worker.attention.status.enabled);
+    assert!(!f.worker.attention.status.available);
+    assert_eq!(
+        f.worker.attention.status.error.as_deref(),
+        Some(FEISHU_UNAVAILABLE)
+    );
     assert!(f.calls().is_empty());
     assert!(f.worker.state.feishu.outbox.is_empty());
-    assert_eq!(f.worker.attention.status.error, None);
+    // The CLI reads this state through the settings command.
+    assert_eq!(
+        f.worker.settings_json()["feishu"]["error"],
+        json!(FEISHU_UNAVAILABLE)
+    );
     assert!(!f
         .receiver
         .try_iter()
         .any(|event| matches!(event, BusEvent::CommandFinished { result: Err(_), .. })));
+}
+
+#[test]
+fn feishu_toggle_off_suppresses_sends_until_turned_back_on() {
+    let mut f = Fixture::new();
+    f.settings(|s| s.feishu_notifications = false);
+    assert!(!f.worker.attention.status.enabled);
+    assert!(!f.worker.attention.status.available);
+    f.post("[waiting-on-you] Choose while off");
+    assert!(f.calls().is_empty());
+    assert!(f.worker.state.feishu.outbox.is_empty());
+    assert_eq!(f.worker.attention.status.error, None);
+    f.settings(|s| s.feishu_notifications = true);
+    f.post("[waiting-on-you] Choose after on");
+    f.flush();
+    assert_eq!(f.calls().len(), 1);
+    assert_eq!(f.worker.state.feishu.outbox.len(), 1);
 }
 
 #[test]

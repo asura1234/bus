@@ -110,8 +110,8 @@ With the optional `feishu-bridge` installed and configured, each ask gets its ow
 Feishu DM. The developer can use Feishu Reply; the correlated reply arrives at
 the recorded orchestrator as a normal developer instruction with `in_reply_to`
 provenance. Act on it like a MASTER message and answer only through Bus.
-Without the bridge, Feishu is off: asks remain one-way TUI alerts, and the
-developer answers in Bus.
+Without a resolvable bridge, no Feishu DM can be sent: asks remain one-way TUI
+alerts, and the developer answers in Bus.
 
 Do not re-page the same ask. Repeats by the same agent within 30 minutes of the
 newest confirmed DM fold into it, and a reply answers them all. Plain DMs without

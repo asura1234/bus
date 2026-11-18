@@ -10,9 +10,17 @@ use std::thread::JoinHandle;
 
 type Completion = (String, Result<SentMessage, String>);
 
+/// The setup error behind `feishu_unavailable`: the explicit toggle is on, but
+/// the optional bridge executable cannot be resolved.
+pub(crate) const FEISHU_UNAVAILABLE: &str =
+    "feishu-bridge is not installed or not on PATH; install it or set its path in Settings";
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub(crate) struct Status {
+    /// The explicit saved toggle, independent of bridge availability.
     pub(crate) enabled: bool,
+    /// Whether the bridge executable resolves right now.
+    pub(crate) available: bool,
     pub(crate) pending: bool,
     pub(crate) queued: usize,
     pub(crate) rate_limited: bool,
@@ -110,6 +118,31 @@ impl Runtime {
         Ok(())
     }
 
+    /// Resolve the explicit toggle and the bridge program for this tick,
+    /// keeping the published status truthful about both.
+    fn resolve_program(
+        &mut self,
+        saved: Option<&settings::BusSettings>,
+    ) -> Option<std::path::PathBuf> {
+        let enabled = saved.is_some_and(|s| s.feishu_notifications);
+        let program = saved
+            .filter(|s| s.feishu_notifications)
+            .and_then(|s| self.client.program(s.feishu_bridge_path.as_deref()));
+        // Disabling cancels an in-flight send and starts none; re-enabling
+        // starts with new alerts only.
+        if !enabled {
+            self.stop();
+        }
+        self.status.enabled = enabled;
+        self.status.available = program.is_some();
+        if enabled && program.is_none() {
+            self.status.error = Some(FEISHU_UNAVAILABLE.into());
+        } else if program.is_some() && self.status.error.as_deref() == Some(FEISHU_UNAVAILABLE) {
+            self.status.error = None;
+        }
+        program
+    }
+
     fn pump(
         &mut self,
         worker: &mut Worker,
@@ -147,12 +180,9 @@ impl Runtime {
                 return Ok(());
             }
         };
-        let program = saved
-            .as_ref()
-            .and_then(|s| self.client.program(s.feishu_bridge_path.as_deref()));
-        self.status.enabled = program.is_some();
+        let program = self.resolve_program(saved.as_ref());
         if let Some((revision, previous)) = self.previous.as_ref() {
-            if *revision != worker.revision && self.status.enabled {
+            if *revision != worker.revision && self.status.available {
                 if let Some(settings) = &saved {
                     let mut next = worker.state.clone();
                     next.prepare_feishu_alerts(
@@ -255,16 +285,14 @@ impl Worker {
         on: bool,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
-        if !on {
-            return Err(
-                "Feishu follows bridge availability; this command cannot disable it".into(),
-            );
-        }
         let path = self
             .settings_path
             .as_ref()
             .ok_or("Bus settings location unavailable")?;
-        let saved = settings::update(path, |settings| settings.feishu_notifications = true)?;
+        // The toggle is explicit: it persists off even while a bridge is
+        // installed, and on even while one is missing (status then reports
+        // `feishu_unavailable` instead of silently showing off).
+        let saved = settings::update(path, |settings| settings.feishu_notifications = on)?;
         let _ = events.send(BusEvent::SettingsChanged(saved));
         self.pump_feishu(events, crate::messaging::storage::io::now_ms())
     }

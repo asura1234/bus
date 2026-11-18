@@ -14,7 +14,9 @@ coverage, not real-model acceptance. Repeat acceptance for the final head.
   fresh `BUS_DATA_DIR` with no `settings.json`, `sbus settings` shows defaults:
   `feishu_waiting_notifications` true, `feishu_recipient`
   `ou_ca1b530d792419a044e281f998ce68dc`, and `feishu_bridge_path` null. Nested
-  `feishu.enabled` is false when the optional bridge is absent. Do not run `sbus settings feishu-notifications --off`.
+  `feishu.enabled` is true and `feishu.available` false with the setup error when
+  the optional bridge is absent. Leave the toggle on; do not run
+  `sbus settings feishu-notifications --off` for this acceptance.
   Isolation is the wrapper PATH `$scratch/bin:/usr/bin:/bin` not resolving
   `feishu-bridge`: none of those three directories may contain an executable
   `feishu-bridge`. Check those paths, not `command -v` in the tester's own shell.
@@ -105,10 +107,11 @@ the server is the native process. Run `sbus settings` there too. With no `settin
 expect `result.settings.feishu_waiting_notifications` true,
 `result.settings.feishu_recipient` `ou_ca1b530d792419a044e281f998ce68dc`,
 `result.settings.feishu_bridge_path` null, and `result.settings.feishu.enabled`
-false when the optional bridge is absent. An empty bridge path discovers `feishu-bridge`
+true with `result.settings.feishu.available` false and the setup error when the
+optional bridge is absent. An empty bridge path discovers `feishu-bridge`
 on PATH, so the
-scratch PATH is the isolation. Do not run
-`sbus settings feishu-notifications --off`.
+scratch PATH is the isolation. Leave the toggle on; do not run
+`sbus settings feishu-notifications --off` for this acceptance.
 
 A shared target's top-level binary can belong to another worktree even after
 Cargo reports `Fresh`. A copy is not verified merely because Cargo succeeded.

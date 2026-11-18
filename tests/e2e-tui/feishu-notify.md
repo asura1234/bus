@@ -44,9 +44,10 @@ worker in `feishu-a`; recording bridge installed on the fixture PATH.
    Different agents, asks or recipients retain separate DMs. Only a confirmed DM
    may suppress a repeat; failed or uncertain sends allow a new explicit ask to
    send a new DM. The original attempted send is never retried automatically.
-3. Through Settings, select a missing explicit bridge path. Require Feishu off
-   and no send for a new waiting tag. Restore PATH discovery and require Feishu
-   on without replaying the off-period request.
+3. Through Settings, select a missing explicit bridge path. Require the Feishu
+   row stays on but shows the setup error, and no send happens for a new waiting
+   tag. Restore PATH discovery and require the setup error clears without
+   replaying the unavailable-period request.
 4. Make the fixture exit 7, then post a fresh waiting tag. Require one attempted
    invocation, an uncertain outbox record without a returned message ID,
    `bus.feishu.failed` in the private log and no retry. Confirm Bus remains

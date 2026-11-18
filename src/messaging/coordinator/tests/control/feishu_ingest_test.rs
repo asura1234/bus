@@ -88,6 +88,21 @@ fn feishu_ingest_cannot_acknowledge_an_uncommitted_batch() {
 }
 
 #[test]
+fn feishu_ingest_is_refused_while_notifications_are_off() {
+    let (mut worker, root, _) = mapped_worker();
+    settings::update(worker.settings_path.as_ref().unwrap(), |saved| {
+        saved.feishu_notifications = false
+    })
+    .unwrap();
+    let response = call(&mut worker, "toggle-off", "feishu.ingest", params());
+    assert!(!response.ok, "{response:?}");
+    assert_eq!(worker.state.requests().count(), 0);
+    assert!(worker.state.feishu.inbox.is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn feishu_ingest_rejects_wrong_app_bot_and_group_before_queueing() {
     let (mut worker, root, _) = mapped_worker();
     for (field, value) in [("app_id", "cli_other"), ("chat_type", "group")] {

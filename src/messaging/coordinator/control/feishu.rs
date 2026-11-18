@@ -25,6 +25,9 @@ impl Worker {
             .as_deref()
             .ok_or("Feishu settings are unavailable")?;
         let settings = settings::load(path)?;
+        if !settings.feishu_notifications {
+            return Err("Feishu notifications are disabled".into());
+        }
         if Client::default()
             .program(settings.feishu_bridge_path.as_deref())
             .is_none()

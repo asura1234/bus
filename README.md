@@ -51,9 +51,11 @@ user skills.
 [Claude Code gives personal skills precedence](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name);
 [Codex lists both same-name copies](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
 
-Feishu notifications use the optional local `feishu-bridge` plugin. Install it on
-PATH (or set its path in Settings), configure its bot transport, and choose the
-recipient open_id. Without the plugin, Feishu is off. Bus stores no credentials.
+Feishu notifications use the optional local `feishu-bridge` plugin and an explicit
+on/off toggle (`bus settings feishu-notifications --on|--off` or the Settings row).
+Install it on PATH (or set its path in Settings), configure its bot transport, and
+choose the recipient open_id. Without a resolvable plugin no DM can be sent and
+Settings shows the setup error. Bus stores no credentials.
 [Reply routing and sink setup](docs/developer-notifications.md) describe how a
 Feishu reply reaches the exact orchestrator as a developer instruction.
 

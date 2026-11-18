@@ -43,10 +43,6 @@ class Run(helper.Run):
         for room in ["master", "notify-work", "notify-other"]:
             self.bus("room", "sound", room, "--off")
         assert all(not room["sound"] for room in self.state()["rooms"]), "room sound fixture did not mute every room"
-        settings_path = Path(self.session["data_dir"]) / "settings.json"
-        saved = json.loads(settings_path.read_text())
-        saved["feishu_waiting_notifications"] = False
-        settings_path.write_text(json.dumps(saved))
         self.command("press", "f6")
         self.command("click", "--hit", "settings")
         self.command("wait", "--text", "Feishu notifications (on)")
@@ -55,14 +51,18 @@ class Run(helper.Run):
         assert self.state()["settings"]["feishu_waiting_notifications"] is True
         self.command("click", "--hit", "feishu-notifications")
         self.command("press", "enter")
+        self.command("wait", "--text", "Feishu notifications (off)")
+        assert self.state()["settings"]["feishu_waiting_notifications"] is False
+        self.command("press", "enter")
         self.command("wait", "--text", "Feishu notifications (on)")
-        self.capture("settings-mandatory")
+        assert self.state()["settings"]["feishu_waiting_notifications"] is True
+        self.capture("settings-toggle")
         self.command("press", "esc")
         self.command("click", "--hit", "room:notify-other")
         self.command("type", "KEEP DRAFT")
         self.quiet()
         sounds, calls = len(self.mandatory()), len(self.calls())
-        self.step(1, "Installed bridge Feishu row stayed on after Enter; legacy false read as true; recipient and bridge path visible, room sounds disabled; KEEP DRAFT entered; settings-mandatory.png captured")
+        self.step(1, "Installed bridge Feishu row toggled off and back on with Enter, each state saved; recipient and bridge path visible, room sounds disabled; KEEP DRAFT entered; settings-toggle.png captured")
 
         sent = self.post_room("notify-work", "notify-worker", "you", "Decide release timing")
         assert sent["result"]["stage"] == "posted" and sent["result"]["request_ids"] == []
@@ -128,9 +128,17 @@ class Run(helper.Run):
         for sender, recipient, extra in [("notify-worker", "you,notify-orch", ()), ("notify-worker", "you", ("--queue",)), ("notify-worker", "you", ("--async",)), (None, "you", ())]:
             response = self.post_room("notify-other", sender, recipient, "Rejected message", *extra, ok=False)
             assert response.get("ok") is False, response
-        assert self.bus("settings", "feishu-notifications", "--off", ok=False)["ok"] is False
+        off = self.bus("settings", "feishu-notifications", "--off")
+        assert off["ok"] is True and self.state()["settings"]["feishu_waiting_notifications"] is False
+        sounds, calls = len(self.mandatory()), len(self.calls())
+        self.post_room("notify-work", "notify-worker", "you", "[waiting-on-you] Still rings")
+        self.until(lambda: len(self.mandatory()) == sounds + 1, "mandatory sound while Feishu is off")
         self.quiet()
-        assert len(self.mandatory()) == sounds and len(self.calls()) == calls
+        assert len(self.calls()) == calls, "Feishu off must not send a DM"
+        on = self.bus("settings", "feishu-notifications", "--on")
+        assert on["ok"] is True and self.state()["settings"]["feishu_waiting_notifications"] is True
+        self.quiet()
+        assert len(self.mandatory()) == sounds + 1 and len(self.calls()) == calls
         self.bus("room", "sound", "notify-work", "--on")
         sent = self.post_room("notify-work", "notify-worker", "notify-orch", "Ordinary room sound")
         self.command("wait", "--message", sent["result"]["message_id"], "--timeout", "20s")
@@ -139,7 +147,7 @@ class Run(helper.Run):
         self.no_popup()
         (self.root / "calls.json").write_text(json.dumps(self.calls(), indent=2))
         (self.root / "sound-effects.json").write_text(json.dumps(self.sounds(), indent=2))
-        self.step(5, "human alias notified from third room; mixed recipients, queue, async, missing author and Feishu off rejected without new alerts; ordinary bus-sound target differs from mandatory system Glass.aiff target; v1 bridge argv and no terminal popup verified")
+        self.step(5, "human alias notified from third room; mixed recipients, queue, async and missing author rejected without new alerts; CLI Feishu off persisted and suppressed the DM while the TUI alert still rang; --on restored the toggle; ordinary bus-sound target differs from mandatory system Glass.aiff target; v1 bridge argv and no terminal popup verified")
 
 
 def main():

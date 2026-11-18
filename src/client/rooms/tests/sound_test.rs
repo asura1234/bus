@@ -16,10 +16,14 @@ fn sound_fixture(work_rooms: usize) -> (BusUi, RoomId, Vec<RoomId>) {
 }
 
 fn settings_rows(ui: &mut BusUi, rows: u16) -> Vec<String> {
-    let text = room_screen(ui, 100, rows);
+    settings_rows_at(ui, 100, rows)
+}
+
+fn settings_rows_at(ui: &mut BusUi, width: u16, rows: u16) -> Vec<String> {
+    let text = room_screen(ui, width, rows);
     text.chars()
         .collect::<Vec<_>>()
-        .chunks(100)
+        .chunks(width as usize)
         .map(|row| row.iter().collect::<String>().trim().to_owned())
         .collect()
 }
@@ -163,37 +167,98 @@ fn queued_sound(ui: &BusUi) -> Vec<(RoomId, bool)> {
 }
 
 #[test]
-fn feishu_settings_row_reflects_plugin_availability_and_pending_send() {
+fn feishu_settings_row_is_a_toggle_showing_bridge_recipient_and_setup_error() {
+    use crate::messaging::coordinator::attention::Status;
     let (mut ui, _, _) = sound_fixture(0);
     ui.action(render::Action::Settings);
-    assert!(settings_rows(&mut ui, 40)
-        .iter()
-        .any(|row| row.contains("Feishu notifications (off)")));
-    ui.receive_event(BusEvent::FeishuStatusChanged(
-        crate::messaging::coordinator::attention::Status {
-            pending: true,
-            ..Default::default()
-        },
-    ));
-    assert!(settings_rows(&mut ui, 40)
-        .iter()
-        .any(|row| row.contains("sending")));
-    ui.receive_event(BusEvent::FeishuStatusChanged(
-        crate::messaging::coordinator::attention::Status {
-            enabled: true,
-            ..Default::default()
-        },
-    ));
-    assert!(settings_rows(&mut ui, 40)
-        .iter()
-        .any(|row| row.contains("Feishu notifications (on)")));
+    // The default setting is on; without bridge status the row explains the setup problem.
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[x] Feishu notifications (on)")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("feishu-bridge is not installed")),
+        "{rows:#?}"
+    );
+    // An available bridge clears the setup error and shows the recipient and path.
+    ui.receive_event(BusEvent::FeishuStatusChanged(Status {
+        enabled: true,
+        available: true,
+        ..Default::default()
+    }));
+    let rows = settings_rows_at(&mut ui, 160, 40);
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains("feishu-bridge is not installed")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("ou_ca1b530d792419a044e281f998ce68dc")
+                && row.contains("feishu-bridge: PATH")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Feishu notifications (on)")),
+        "{rows:#?}"
+    );
+    // The send suffix stays on the same row.
+    ui.receive_event(BusEvent::FeishuStatusChanged(Status {
+        enabled: true,
+        available: true,
+        pending: true,
+        ..Default::default()
+    }));
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Feishu notifications (on)") && row.contains("sending")),
+        "{rows:#?}"
+    );
+    // Enter flips the explicit setting off.
     ui.settings_field = ui.feishu_field();
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(!ui
+    assert!(!ui.settings.feishu_notifications);
+    assert!(ui
         .pending
         .iter()
         .any(|pending| matches!(pending.command, BusCommand::SetFeishuNotifications(false))));
-    assert!(!room_screen(&mut ui, 100, 40).contains("Developer notifications are always on"));
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[ ] Feishu notifications (off)")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains("feishu-bridge is not installed")),
+        "{rows:#?}"
+    );
+    // A click on the row flips it back on.
+    let row = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::ToggleFeishuNotifications)
+        .unwrap()
+        .rect;
+    pointer(
+        &mut ui,
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        row.x,
+        row.y,
+    );
+    assert!(ui.settings.feishu_notifications);
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::SetFeishuNotifications(true))));
 }
 
 #[test]
@@ -1104,7 +1169,7 @@ fn developer_sound_choice_survives_color_blind_save_before_coordinator_echo() {
 }
 
 #[test]
-fn feishu_notifications_stay_on_without_changing_draft() {
+fn feishu_toggle_keeps_the_draft_and_does_not_touch_sound() {
     let (mut ui, master, _) = sound_fixture(0);
     ui.open_room(master);
     ui.locals
@@ -1115,12 +1180,18 @@ fn feishu_notifications_stay_on_without_changing_draft() {
     ui.action(render::Action::Settings);
     ui.settings_field = ui.feishu_field();
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(ui.settings.feishu_notifications);
+    assert!(!ui.settings.feishu_notifications);
     assert_eq!(ui.locals[&master].text.text, "KEEP DRAFT");
-    assert!(!ui
+    assert!(ui
         .pending
         .iter()
         .any(|p| matches!(p.command, BusCommand::SetFeishuNotifications(false))));
+    assert!(!ui.pending.iter().any(|p| matches!(
+        p.command,
+        BusCommand::SetDeveloperSoundEnabled(_)
+            | BusCommand::SetRoomSound(_, _)
+            | BusCommand::SetAllRoomsSound(_)
+    )));
     assert!(settings_rows(&mut ui, 40)
         .iter()
         .any(|row| row.contains("Feishu notifications (off)")));

@@ -38,9 +38,28 @@ notification routes remain active. No desktop popup is added.
 Feishu is an optional local plugin. Install `feishu-bridge` on the same Mac and
 configure its bot transport separately. Bus discovers it through **feishu-bridge path**
 in Settings → NOTIFICATIONS (`feishu_bridge_path` in settings.json), or PATH when
-the field is empty. Without the executable, both Feishu directions are off.
-The recipient open_id defaults to `ou_ca1b530d792419a044e281f998ce68dc`.
-Bus stores no credentials and does not invoke lark-cli directly.
+the field is empty. The recipient open_id defaults to
+`ou_ca1b530d792419a044e281f998ce68dc`. Bus stores no credentials and does not
+invoke lark-cli directly.
+
+Feishu delivery is an explicit on/off toggle, shared by every running and later
+Bus session. In Settings → NOTIFICATIONS the Feishu row (hit name
+`feishu-notifications`) toggles with Enter or a click; it shows the saved state,
+the recipient and the bridge path, and while it is on without a resolvable
+executable it shows the setup error on that same row. The CLI does the same:
+`bus settings feishu-notifications --on` and `--off` both persist.
+`--on` validates setup after saving: when `feishu_bridge_path` is empty or names
+a missing executable and nothing on PATH resolves, it fails with
+`feishu_unavailable` and the row keeps showing that setup error. The setting is
+stored as `feishu_waiting_notifications`; `bus state` and `bus settings` expose
+`feishu: {enabled, available, pending, queued, error}`, where `enabled` is the
+saved toggle and `available` reports whether the bridge executable resolves now.
+
+Turning Feishu off stops DMs in both directions: new developer alerts are not
+queued for the bridge, and inbound bridge input is refused. TUI developer alerts
+(the unread dot and the You sound) and room sounds are unaffected. A send that
+the bridge accepted while the toggle was on still records its mapping; attempts
+already marked uncertain are never replayed.
 
 Only literal `[waiting-on-you]` or `[waiting_on_you]` tags reach Feishu. Untagged
 posts, `@you` mentions and the legacy phrase stay in the TUI. Requests get separate
