@@ -99,11 +99,17 @@ fn parse(output: Output) -> (i32, Value) {
     (output.status.code().unwrap_or(-1), value)
 }
 
-/// A turn that ends without `--reply-to` stores no reply.
+/// A turn that ends without `--reply-to` stores its captured final as the
+/// request's reply.
 fn assert_turn_ended(result: &Value) {
     let request = &result["message"]["result"]["requests"][0];
-    assert!(request["reply"].is_null(), "{result}");
-    assert_eq!(request["stage"], "ended", "{result}");
+    assert!(
+        request["reply"]["text"]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty()),
+        "{result}"
+    );
+    assert_eq!(request["stage"], "replied", "{result}");
 }
 
 fn agent_screen(session: &Session, agent: &str) -> String {
