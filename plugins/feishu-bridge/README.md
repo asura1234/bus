@@ -6,7 +6,9 @@ CLI and JSON protocol. The bridge has no knowledge of sink applications.
 
 ## Setup
 
-Install `lark-cli` and authenticate its bot outside this project. The bridge
+Install `lark-cli` >= 1.0.97 (the send path passes `--text -` and streams the
+body on stdin; older releases treat `-` as the literal message and are refused
+with a version error) and authenticate its bot outside this project. The bridge
 does not manage credentials. Build with `cargo build --locked --release`, then
 place the executable at a stable absolute path.
 

@@ -2,8 +2,9 @@
 
 macOS only. This executable is independent of every sink application. It uses
 the locally authenticated `lark-cli` **bot** identity and never changes login,
-scopes, app configuration or credentials. Tested transport baseline: lark-cli
-1.0.97. All JSON below is UTF-8, compact, newline terminated. Logs go to stderr;
+scopes, app configuration or credentials. Requires lark-cli >= 1.0.97: the send
+path passes `--text -` and streams the body on stdin, which older releases treat
+as the literal text `-`; older versions are refused before any send. All JSON below is UTF-8, compact, newline terminated. Logs go to stderr;
 stdout contains only command results. Unknown config keys are errors.
 
 ## CLI

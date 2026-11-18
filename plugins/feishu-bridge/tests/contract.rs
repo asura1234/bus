@@ -16,6 +16,8 @@ impl Harness {
         h.script("lark", r#"#!/usr/bin/env python3
 import json,sys,os
 args=sys.argv[1:]
+if args==['--version']:
+ print('lark-cli version 1.0.97'); sys.exit(0)
 if args==['auth','status','--json']:
  print(json.dumps({'appId':'cli_test','identities':{'bot':{'status':'ready','available':True}}})); sys.exit(0)
 if args[:2]==['im','+messages-send']:
@@ -129,6 +131,25 @@ fn app_mismatch_prevents_send() {
             .code(),
         Some(3)
     );
+}
+
+#[test]
+fn old_lark_cli_version_blocks_send_with_a_clear_error() {
+    let h = Harness::new();
+    h.script(
+        "lark",
+        r#"#!/usr/bin/env python3
+import sys
+if sys.argv[1:]==['--version']:
+ print('lark-cli version 1.0.95'); sys.exit(0)
+raise AssertionError('send must not run on an old lark-cli')
+"#,
+    );
+    let out = h.run(&["send", "--open-id", "ou_allowed", "--text", "hello"]);
+    assert_eq!(out.status.code(), Some(3));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("1.0.95"), "stderr: {err}");
+    assert!(err.contains("1.0.97"), "stderr: {err}");
 }
 
 #[test]
@@ -643,6 +664,8 @@ fn chat_send_without_key_preserves_literal_dash_and_does_not_retry_failure() {
     h.script("lark",r#"#!/usr/bin/env python3
 import sys,json,os
 args=sys.argv[1:]
+if args==['--version']:
+ print('lark-cli version 1.0.97'); sys.exit(0)
 if args==['auth','status','--json']:
  print(json.dumps({'appId':'cli_test','identities':{'bot':{'status':'ready','available':True}}}));sys.exit(0)
 assert args[:2]==['im','+messages-send']

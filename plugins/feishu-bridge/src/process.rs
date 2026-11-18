@@ -192,7 +192,51 @@ pub fn lark(
     }
     Ok(v)
 }
+const MIN_LARK_VERSION: (u64, u64, u64) = (1, 0, 97);
+
+fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+    text.split_whitespace().find_map(|token| {
+        let mut parts = token.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch = parts.next()?.parse().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((major, minor, patch))
+    })
+}
+
+/// `--text -` only reads stdin as the message body from lark-cli 1.0.97.
+/// Older releases send the literal "-" and still exit 0, so refuse them
+/// before any send instead of corrupting every message silently.
+fn require_lark_version(c: &Config, ctl: &Control) -> Result<()> {
+    let (status, stdout) = run(
+        &c.lark_cli,
+        &["--version".into()],
+        vec![],
+        c.command_timeout_seconds,
+        ctl,
+        true,
+    )?;
+    if !status.success() {
+        return Err(upstream("lark-cli --version failed"));
+    }
+    let text = String::from_utf8_lossy(&stdout);
+    let found = parse_version(&text).ok_or_else(|| {
+        upstream("cannot determine lark-cli version; this bridge needs lark-cli >= 1.0.97")
+    })?;
+    if found < MIN_LARK_VERSION {
+        return Err(upstream(&format!(
+            "lark-cli {}.{}.{} is too old: sending needs lark-cli >= 1.0.97 for --text - stdin; upgrade lark-cli",
+            found.0, found.1, found.2
+        )));
+    }
+    Ok(())
+}
+
 pub fn verify(c: &Config, ctl: &Control) -> Result<()> {
+    require_lark_version(c, ctl)?;
     let v = lark(
         c,
         &["auth".into(), "status".into(), "--json".into()],
@@ -275,4 +319,16 @@ pub fn send(
         .map_err(|_| Error(4, "state failed after send; send outcome uncertain".into()))?;
     store.context(&c.app_id, chat, id, "root")?;
     Ok(serde_json::json!({"message_id":id,"chat_id":chat}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_version;
+
+    #[test]
+    fn parses_the_lark_version_line() {
+        assert_eq!(parse_version("lark-cli version 1.0.95\n"), Some((1, 0, 95)));
+        assert_eq!(parse_version("version 2.3.4"), Some((2, 3, 4)));
+        assert_eq!(parse_version("no version here"), None);
+    }
 }
