@@ -46,6 +46,7 @@ The startup flag can precede `resume` or follow its selector.
 | Codex | `--yolo` | `--yolo`, `--dangerously-bypass-approvals-and-sandbox` |
 | Cursor | `--force` | `--force`, `--yolo`, `-f` |
 | Kimi | `--yolo` | `--yolo`, `-y` |
+| AGY | `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 
 Evidence checked locally on 2026-10-16: Claude Code 2.1.301 `--help` describes
 `--dangerously-skip-permissions` as bypassing permission checks. Codex 0.163.0
@@ -100,6 +101,7 @@ codex:  -c 'model_reasoning_effort="high"' --sandbox workspace-write --ask-for-a
 claude: --dangerously-skip-permissions --permission-mode bypassPermissions
 cursor: --yolo --force --sandbox disabled --approve-mcps
 kimi: --yolo --model k3 --output-format text
+agy: --effort high --mode accept-edits
 ```
 
 Bus saves the original user tokens in the launch's `launch-options.json` and
@@ -138,6 +140,7 @@ command/option position:
 | Cursor | `-p`, `--print` | These select script/noninteractive output instead of the interactive terminal Bus drives. |
 | Kimi | `-p`, `--prompt`, `--agent`, `--agent-file`, `--continue`, `-c`, `--plan`, `--help`, `-h`, `--version`, `-V`, or positional input | These replace Bus's interactive prompt, agent file, session, or version/help ownership. |
 | Kimi | `--auto` with `--yolo` or `-y` | Kimi rejects this permission combination; Bus also rejects Bus `--yolo` with saved `--auto` on resume. |
+| AGY | `-p`, `--print`, `--prompt`, `-i`, `--prompt-interactive`, `-c`, `--continue`, `--remote-agent`, `-h`, `--help`, `-v`, `--version`, subcommands, or positional input | These select noninteractive/remote execution or replace Bus's local TUI prompt and conversation ownership. AGY is supported as a work-room worker only. |
 | All | A NUL byte inside a token | Operating-system process argv cannot contain NUL. Unclosed quotes or a trailing escape also cannot be tokenized. |
 
 Evidence checked locally on 2026-10-15: `codex --help` (0.162.0) labels `exec`
