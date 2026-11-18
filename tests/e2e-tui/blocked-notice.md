@@ -34,8 +34,8 @@ Read-only state/history and observe/press may corroborate the journey.
    controls. Click `agent:worker`, then capture/open a native cell screenshot.
 3. Observe again and run `bus agent press worker --text record-fixture --submit
    --terminal-id TERMINAL_ID`. Require outcome `sent`, then prove acceptance by
-   requiring the worker's question request to complete with `stage:ended`,
-   `reply:null` and no failure reason, matching native output and its ordinary
-   composer. History retains exactly one Blocked notice and adds no Resolved
+   requiring the worker's question request to complete with `stage:replied`,
+   its native reply text and no failure reason, matching native output and its
+   ordinary composer. History retains exactly one Blocked notice and adds no Resolved
    notice. The ordinary MASTER requests remain queued in their original order.
    Stop the scratch session.

@@ -126,7 +126,7 @@ If the requester must act, deliver the result with a fresh normal
 
 ### Async waits and settlement
 
-`send --async` sends and follows without a deadline, waiting through dialogs. `wait --async` follows an existing ID but stops for a dialog. A turn that ends settles its request, so both waits finish at `complete: true` without a reply. An abandoned `reply_not_captured` (steering the turn never claimed) fails a bounded wait and is accepted by an async wait. Interrupt and provider-error abandonment fail both.
+`send --async` sends and follows without a deadline, waiting through dialogs. `wait --async` follows an existing ID but stops for a dialog. A turn that ends settles its request at once, so both waits finish at `complete: true` with the captured final stored as the reply. An abandoned `reply_not_captured` (steering the turn never claimed) fails a bounded wait and is accepted by an async wait. Interrupt and provider-error abandonment fail both.
 Read `bus wait --help` and `bus message status --help` for polling, stages,
 outcome windows, provider failures, retained last status and exit codes.
 A timeout does not cancel work or authorize a duplicate send. For an uncertain

@@ -459,9 +459,10 @@ generation answering the group. Cross-room messages wait for a new turn.
 Blocked/launching recipients queue; accumulated ordinary messages form one
 ordered prompt/group with batch position/time headers.
 An explicit --reply-to settles that request while the turn stays open and does not
-release the queue. The turn's final text is not a reply and does not replace an
-earlier explicit reply. When the turn ends, every still-open request in it settles
-and the queue advances. Raw text/files remain queryable after restart.
+release the queue. When the turn ends, every still-open request in it settles at
+once and its captured final is stored as that request's reply; an earlier explicit
+reply keeps its wording. Nothing waits on a reply and no wake message is posted.
+Raw text/files remain queryable after restart.
 If you want an answer, say whom to reply to and in which room. If that agent no
 longer exists on Bus when you reply, ignore it; do not retry and do not treat it
 as an error. Bus does not forward a turn final as "Reply to message N".

@@ -22,7 +22,7 @@ For a direct Bus message, reply in its room with its original message ID:
 bus send --reply-to MESSAGE_ID --as YOUR_ID --text "..."
 ```
 
-Run the send in the foreground. Claim settlement only when its JSON reports `ok: true` and `stage: "replied"`. If it fails, inspect `bus message status MESSAGE_ID` before retrying. The receipt reports `requester_turn_queued:false`. If the requester must act, deliver the result with a fresh normal `bus send --room ROOM --as YOUR_ID --to REQUESTER --text "..."` instead. The final turn text is not captured as a reply.
+Run the send in the foreground. Claim settlement only when its JSON reports `ok: true` and `stage: "replied"`. If it fails, inspect `bus message status MESSAGE_ID` before retrying. The receipt reports `requester_turn_queued:false`. If the requester must act, deliver the result with a fresh normal `bus send --room ROOM --as YOUR_ID --to REQUESTER --text "..."` instead. When the turn ends, its captured final is stored as that request's reply; read it with `bus message status`.
 
 An answer to a developer message in MASTER belongs in MASTER. A worker's room result belongs in the work room. Send decisions and blockers that require developer attention to the developer in MASTER, following the authored reporting policy.
 

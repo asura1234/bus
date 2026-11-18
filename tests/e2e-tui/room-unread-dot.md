@@ -22,8 +22,8 @@ Preconditions: create work rooms `dot-very-long-room-name` and `dot-other` with
 the scratch CLI. Add fake Claude workers `dot-worker` and `dot-peer` to the long-named room,
 using the session's scratch work directory and consenting to their hooks. Wait
 for both to be idle. Send each one a developer `DOT bootstrap` prompt with the
-scratch CLI and require both requests to complete with `stage:ended`, `reply:null`, no
-failure reason and matching native output, so both provider conversations have
+scratch CLI and require both requests to complete with `stage:replied`, a non-empty
+reply, no failure reason and matching native output, so both provider conversations have
 completed a turn before restart. Record IDs and select `dot-other` through the sidebar.
 
 1. Fixture: send `DOT peer` as dot-worker to dot-peer in the long-named

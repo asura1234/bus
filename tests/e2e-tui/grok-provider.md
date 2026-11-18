@@ -47,8 +47,8 @@ the scratch project's .grok/bus-fake/SESSION directory. No ~/.grok writes.
 
 Scenarios:
 - ordinary prompt: native output `fake reply: PROMPT`; `fake:raw-reply TEXT`
-  prints TEXT in the native pane. Its request completes as `ended`, `reply:null`,
-  with no failure reason. Native finals are never implicit Bus replies.
+  prints TEXT in the native pane. Its request completes as `replied` with that
+  text, with no failure reason. Native finals are never implicit Bus messages.
 - fake:work N: timed working state with a live editable composer and steering.
 - fake:question / fake:card / fake:free-text: inert cards; no displayed command
   executes. Arrow keys choose, Left/Right changes permission scope, Tab parks

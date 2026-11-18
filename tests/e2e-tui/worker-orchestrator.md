@@ -5,8 +5,9 @@ providers. No desktop automation or real model use is needed. CLI commands below
 are agent-authored message fixtures and read-only evidence; room and agent setup
 also uses the scratch CLI. Record receipts, message status, history, terminal
 reads and screen text. No steps may be skipped. Ordinary fake native finals
-settle requests with `complete:true`, `stage:ended`, `reply:null` and no failure
-reason; their exact output is native evidence, never an invented chat reply.
+settle requests with `complete:true`, `stage:replied`, a non-empty reply and no
+failure reason; their exact output is native evidence, never an invented chat
+message.
 
 ## Cases (run order)
 

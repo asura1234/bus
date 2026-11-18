@@ -31,10 +31,11 @@ driver documentation was used. Results are tracked separately for each run.
 - Fixed incoming-message fixtures may be arranged through the supported scratch
   developer CLI described by `bus --help`, with a named agent author. They are
   test inputs, not model output; do not rewrite live storage to manufacture a pass.
-- A fake provider native final is terminal output, not a stored Bus reply. For
-  ordinary fake turns require `complete:true`, `stage:ended`, `reply:null` and no
+- A fake provider native final is terminal output and is stored as the
+  request's reply. For ordinary fake turns require `complete:true`,
+  `stage:replied`, a non-empty `reply.text` matching the native final and no
   failure reason; verify any expected output marker in the native pane. History
-  retains the authored prompt without inventing a reply. A case testing an explicit
+  retains the authored prompt without adding a reply row. A case testing an explicit
   reply must run `bus send --reply-to MESSAGE_ID --as RECIPIENT --text TEXT` while
   the request is active and require `ok:true`, `stage:replied`; it cannot infer this
   from a native final. Agent-authored posts to You are separate message fixtures.

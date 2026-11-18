@@ -44,7 +44,7 @@ Enter, then draws a 350ms synchronized redraw. It executes nothing.
 2. Observe again and run `bus agent press worker --select 'Yes, proceed (y)'
    --terminal-id TERMINAL_ID`. Require outcome `selected`; wait for a completed
    redraw, idle state, matching native fake output and `complete:true`,
-   `stage:ended`, `reply:null`, no failure reason for that request. Observation shows the ordinary composer.
+   `stage:replied`, the native reply text, no failure reason for that request. Observation shows the ordinary composer.
    The episode retires quietly: exactly one Blocked and zero Resolved notices.
    Recheck after stable chat rows for 1500ms.
 3. Submit `fake:dialog-null` again. Wait for a second Blocked notice, observe

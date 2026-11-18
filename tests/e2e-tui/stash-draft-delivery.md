@@ -34,8 +34,9 @@ followed by a JSON string of the exact submitted prompt, before whitespace
 trimming. Compare the decoded JSON string, including every space, tab, and LF.
 The ordinary incoming messages show their usual `fake reply:` output only in
 the native pane. Every incoming completion below requires its exact request to
-be `complete:true`, `stage:ended`, `reply:null`, `reason:null`, with a trusted
-start, and its matching native output exactly once. No stored reply is expected.
+be `complete:true`, `stage:replied` with its native reply text, `reason:null`,
+with a trusted start, and its matching native output exactly once. The stored
+reply is the native final; no separate chat row is expected.
 
 Record PASS/FAIL for every step; no skips or failed-step retries. Capture the
 native composer before sending, while a message waits, and after restoration.
@@ -45,8 +46,8 @@ end cursor after restoration without depending on a scheduler race.
 
 ### STASH-01 — Claude native stash preserves an image and a collapsed paste
 
-Preconditions: all setup bootstrap requests are complete with `stage:ended`,
-`reply:null`, `reason:null` and trusted starts; each matching native output was observed. Prepare the driver's
+Preconditions: all setup bootstrap requests are complete with `stage:replied`,
+a non-empty reply, `reason:null` and trusted starts; each matching native output was observed. Prepare the driver's
 fixture image path in the scratch workspace. Open `stash-claude`.
 
 1. With driver `paste`, enter one draft containing the quoted absolute fixture

@@ -8,7 +8,7 @@
 - **R(name), create a work room:** press Ctrl+Shift+R, type the name, press Enter, and verify `# name` opens.
 - **A(room, name), add a fake Claude worker:** click the room, press Ctrl+N, type the name, Tab to Agent, select Claude Code, replace PWD with the absolute scratch workspace and a trailing slash, leave additional args empty, and press Enter. Accept hook setup only for the isolated scratch project if asked. Wait for the fake terminal, then press F6.
 - **P(names), select recipients:** press Ctrl+P, make exactly the named workers checked, then Esc.
-- Fixed incoming messages may be arranged through the scratch CLI as `bus send --room ROOM --as AUTHOR --to RECIPIENT --text TEXT`. They are test inputs, not model output. Let fake native turns settle with `complete:true`, `stage:ended`, `reply:null` and no failure reason before judging history; no reply row is synthesized.
+- Fixed incoming messages may be arranged through the scratch CLI as `bus send --room ROOM --as AUTHOR --to RECIPIENT --text TEXT`. They are test inputs, not model output. Let fake native turns settle with `complete:true`, `stage:replied`, a non-empty reply and no failure reason before judging history; no reply row is synthesized.
 
 ## Cases
 

@@ -248,9 +248,9 @@ sbus history --room ROOM --limit 100
 Use actual returned IDs. Cases requiring a reply must ask the recipient to run
 `bus send --reply-to MESSAGE_ID --as AGENT_ID --text MARKER` in the foreground;
 require `ok: true` and `stage: replied`. A native final alone closes the request
-as `stage: ended` with `reply: null`; it does not store a reply or prove a reply
-wake. If submission is uncertain, inspect status, composer and native records
-before recovery; do not blindly resend.
+as `stage: replied` and stores its text; it does not prove a reply wake. If
+submission is uncertain, inspect status, composer and native records before
+recovery; do not blindly resend.
 
 ## Real-model messaging matrix
 
@@ -343,7 +343,7 @@ Initiate each route by sending a task **to the real source agent**, not by
 running `sbus send --as SOURCE` yourself. Ask the source to name itself and the
 result room in its recipient's task, and
 require a fresh normal `bus send --room ROOM --as WORKER --to SOURCE --text RESULT`.
-A native final is not captured as a reply. An explicit `bus send --reply-to` stores
+A native final is stored as the request's reply. An explicit `bus send --reply-to` stores
 an answer and settles the original request but never queues a requester turn; its
 receipt reports `requester_turn_queued:false`. Test explicit settlement separately
 from the normal result message that starts the source's next turn. For example:
@@ -416,9 +416,9 @@ Enter is `prompt_not_shown` and fails. A nearby length that Grok does not
 
 ## Reply capture and failure
 
-`complete_pending_final` in `src/messaging/model/callbacks.rs` treats a native
-final as turn completion, not a reply. Apply the separate checks below even where
-older dated testing lessons refer to automatic capture.
+`complete_pending_final` in `src/messaging/model/callbacks.rs` settles the turn
+on the native final and stores that text as the request's reply. Apply the
+separate checks below.
 
 - [ ] For each request save `sbus message status MESSAGE_ID` privately. Select
   the correct `requests[]` entry; record `session_id`, `turn_id`, `start_bound`,
@@ -426,8 +426,8 @@ older dated testing lessons refer to automatic capture.
   native owned session and turn. Test both paths separately:
 
   - For successful native completion without an explicit `--reply-to`, require
-    the matching committed final, `complete: true`, `stage: ended`,
-    `turn_ended: true`, and `reply: null`.
+    the matching committed final, `complete: true`, `stage: replied`,
+    `turn_ended: true`, and `reply.text` equal to that final.
   - For a reply, ask the agent to send a unique marker with foreground
     `bus send --reply-to MESSAGE_ID --as AGENT_ID --text MARKER`. Require its
     `ok: true` / `stage: replied` receipt and the same stored `reply.text` in
@@ -494,8 +494,8 @@ older dated testing lessons refer to automatic capture.
   MESSAGE_ID` (`ok: true`). If the owned turn had not ended and no explicit
   reply was stored before the stop, expect `complete: true`, `requests[].stage`
   `abandoned`, `reason` `interrupted`, and `reply` null. A stored explicit reply
-  stays `replied`; an already ended native-only request stays `ended` with
-  `reply: null`. Then read the visible composer. A Ctrl+C typed in the pane on
+  stays `replied`; an already ended native-only request stays `replied` with
+  its stored answer. Then read the visible composer. A Ctrl+C typed in the pane on
   `Waiting for response…` can put Bus's own prompt back in the idle composer,
   and the next delivery is `NotSubmitted`. Withdraw that owned text before
   sending. Ask the next request for an explicit foreground `--reply-to` marker
