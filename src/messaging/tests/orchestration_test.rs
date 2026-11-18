@@ -328,9 +328,9 @@ fn merges_are_independent_and_never_sequenced_for_conflict_avoidance() {
     }
     let skill = flat(include_str!("../../../skills/merge-pr/SKILL.md")).to_lowercase();
     for phrase in [
-        "merge independently: as soon as this pr passes its own signals, merge it",
+        "merge independently as soon as this pr's own signals allow",
         "never wait for another pr's merge, batch merges, or sequence this pr behind another",
-        "stacked pr whose parent has not landed",
+        "stacked parent that has not landed",
     ] {
         assert!(skill.contains(phrase), "merge-pr skill is missing {phrase}");
     }

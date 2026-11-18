@@ -153,11 +153,9 @@ IF host == github:
 ========== 5. Fix IN-SCOPE red checks ==========
 IF host == github:
   IF any IN-SCOPE red check exists:
-    The worktree must be clean (`git status --porcelain --untracked-files=all` is empty); otherwise first hand it to
-    `commit-and-push` to land it, or let the developer deal with it.
+    The worktree must be clean (`git status --porcelain --untracked-files=all` is empty); otherwise first hand it to `commit-and-push` to land it, or let the developer deal with it.
 
-    Invoke `gate-and-fix --base <merge-base> --command "<policy.gate_command>"` (omit `--command` when null). **This is the only thing entitled to claim "the gates are green"** —
-    hand-running a few scoped commands does not count (reasons in guide.md "Why attribution must gather evidence mechanically").
+    Invoke `gate-and-fix --base <merge-base> --command "<policy.gate_command>"` (omit `--command` when null). **This is the only thing entitled to claim "the gates are green"** — hand-running a few scoped commands does not count (reasons in guide.md "Why attribution must gather evidence mechanically").
 
     IF gate-and-fix STOPs or cannot converge
       STOP and report the artifact and blocker.
@@ -168,11 +166,9 @@ IF host == github:
 
 ========== 6. Merge ==========
 
-Merge independently: as soon as this PR passes its own signals, merge it. Never
-wait for another PR's merge, batch merges, or sequence this PR behind another
-one to minimize conflicts or keep merge order; a real conflict is handled in
-section 1b when it appears. Only a genuine dependency (a stacked PR whose parent
-has not landed) or an existing safety or authorization hold may keep it waiting.
+Merge independently as soon as this PR's own signals allow. Never wait for
+another PR's merge, batch merges, or sequence this PR behind another to minimize
+conflicts; only a stacked parent that has not landed or an existing hold waits.
 
 IF --no-merge   -- stops before the retake and assertions; --hold-before-merge stops after all of them, right before the merge command
   Report the current state and conclusion, STOP. Do not merge.
@@ -235,8 +231,7 @@ After a successful merge, append one line of review metrics:
   python3 "<skill_dir>/scripts/review_metrics.py" --pr <pr> \
     --applied <N> --rejected <N> [--flagged <N>] --verdict "<verdict text at merge time>"
 
-Review rounds, finding count, replied count and diff size are taken by the script itself; adjudication counts have no machine source of truth, fill them in
-**truthfully** from this run's ledger, and if unsure do not fill in a flattering number.
+Review rounds, finding count, replied count and diff size are taken by the script itself; adjudication counts have no machine source of truth, fill them in **truthfully** from this run's ledger, and if unsure do not fill in a flattering number.
 -- Why this ledger exists, and why it lands in `temp/`, see guide.md "Review metrics".
 -- A failed append does not roll back the merge or change the output conclusion; report it as is.
 
@@ -247,8 +242,7 @@ Report:
   - Number of rounds, and what each round did (which IN-SCOPE red checks were fixed, how many comments were handled)
   - Per-check CI conclusions: passed count; for each red check the job name, attribution class, **and which evidence it rests on**
   - Review handling: which round was handled (anchor commit), counts per disposition, triage path
-  - If diverged from origin/<base_branch>: whether rebase or merge was used, what `ahead` was, and
-    each entry of the discarded `dropped_shared_infra` (lockfile)
+  - If diverged from origin/<base_branch>: whether rebase or merge was used, what `ahead` was, and each entry of the discarded `dropped_shared_infra` (lockfile)
   - Whether a normal merge or `--admin` was used; with admin, repeat the release basis for each one
   - Unhandled FLAGs (if any) must be the last content of the output
 ```
