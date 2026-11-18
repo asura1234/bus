@@ -117,10 +117,17 @@ Fix commits, rebases, merge resolutions and any other change the gate produced
 do not open another review round. Behavioural changes still get their normal
 review before the gate.
 
-Merge order is part of the gate: merge each PR as soon as its gate is green,
-land small independent PRs first, and converge a long-lived branch or train onto
-the current base with other merges frozen so the base cannot move under its gate.
-Do not resume the queue until that merge completes.
+Merges are independent: merge this PR as soon as its own gate is green, even
+while other PRs are still in review or gating. Whoever is ready first merges
+first. Never hold, delay or sequence a ready PR behind another PR to minimize
+conflicts or to keep merge order convenient, and never batch merges. A real
+merge conflict is resolved when it appears by converging that PR onto the
+current base. If another PR's merge moves the base while a gate runs, re-run the
+gate on the new base instead of freezing or delaying that merge; when only the
+base moved and the PR's own diff is unchanged, carry exact-head verification
+forward and re-run only fast gates. Only genuine dependency order (a stacked PR
+that cannot land before its parent) and existing safety or authorization holds
+may keep a ready PR waiting.
 
 A change that only touches markdown or plans/ needs no gate:
 merge it on review, or directly when the whole workflow is docs-only.
@@ -188,10 +195,12 @@ You handle these yourself:
 
 - **PR split:** this run merges nothing; the parts replace the original PR/MR.
   Run this workflow once per part and carry over the start answer instead of
-  asking again. Start a part once all its parents have merged; parts with no
-  open parent can run in parallel, each with its own author and reviewers.
-  A part with two or more parents stays a local branch under split-pr's
-  default `wait` policy until restack leaves it one base; that is expected.
+  asking again. Start a part once all its parents have merged; that proven
+  parent dependency is the only reason to wait for another merge. Parts with no
+  open parent run in parallel, each with its own author and reviewers, and each
+  merges as soon as its own gate is green. A part with two or more parents stays
+  a local branch under split-pr's default `wait` policy until restack leaves it
+  one base; that is expected.
   A train merges strictly bottom up, never into a parent branch; after a
   parent merges, have an agent run `split-pr restack <plan> --publish` with
   the plan path (`temp/split-pr/<source-slug>/plan.json` in the worktree where

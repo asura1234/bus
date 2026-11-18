@@ -51,7 +51,7 @@ flowchart TD
     consistent -- yes --> prs[Each dev: open its repo PR]
     prs --> test[Developer: test on all three]:::developer
     test -- problem --> decision
-    test -- ok --> merge[Owning devs: auto-merge-pr under kickoff authority; order web, app, desktop]
+    test -- ok --> merge[Owning devs: auto-merge-pr under kickoff authority; recorded release order web, app, desktop]
     merge --> merged([PRs merged])
 
     classDef developer fill:#fde2e4,stroke:#c9184a
@@ -92,10 +92,13 @@ flowchart TD
   Hold and escalate sharp reviewer disagreements, goal changes, or destructive
   or outward-facing actions without existing authorization. Keep independent
   work moving while a decision is pending.
-- After requested developer acceptance passes, use `auto-merge-pr` in the
-  order web, app, desktop under recorded kickoff authority. Carry each PR's
-  explicit holds into that workflow; merge only with every required review Ready, gates and requested acceptance passing on the
-  exact head, comments adjudicated and no explicit hold.
+- After requested developer acceptance passes, use `auto-merge-pr` under
+  recorded kickoff authority. That recorded authority orders web, app, desktop
+  for this release dependency, not for merge convenience; without such a
+  recorded dependency each repository PR merges as soon as it is Ready and its
+  gate allows. Carry each PR's explicit holds into that workflow; merge only
+  with every required review Ready, gates and requested acceptance passing on
+  the exact head, comments adjudicated and no explicit hold.
 
 ## Log
 

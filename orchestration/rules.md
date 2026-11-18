@@ -119,6 +119,18 @@ the wrapper remains held.
   comments are adjudicated and no explicit hold exists. Reuse that authority;
   do not add a per-PR merge OK.
 
+<a id="merge-independence"></a>
+
+- **Merge PRs independently; never sequence them.** Every PR/MR merges
+  independently as soon as it is Ready and its own gate allows; whoever is
+  ready first merges first. Never hold, delay or sequence a ready PR behind
+  another PR to minimize conflicts or to keep merge order convenient, and never
+  batch merges. A real merge conflict is resolved when it appears. Only genuine
+  dependency order (a stacked PR that cannot land before its parent) and
+  existing safety or authorization holds may keep a ready PR waiting.
+  *Why:* a held or queued merge idles finished work and loses throughput, and a
+  conflict avoided today still has to be resolved, so delaying buys nothing.
+
 - **Report questions and blockers in MASTER; keep details in your
   room.** Follow [status reporting](orchestrator-guide.md#report-status) for
   routine progress. Report only new information. A reply appears in the message's
