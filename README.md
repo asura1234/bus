@@ -33,6 +33,7 @@ Skills are copied into each provider's user skill directory, as
 - Kimi Code: `~/.kimi-code/skills`, which is `$KIMI_CODE_HOME/skills` when that
   variable is unset
   ([Kimi Code skills](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/skills.html))
+- Antigravity (AGY): `~/.gemini/config/skills`
 
 Cursor, Grok, and Kimi also read `~/.agents/skills`. The add-on still writes each
 provider's own directory. It prints to its own terminal and does not post to Bus

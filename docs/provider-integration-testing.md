@@ -669,12 +669,14 @@ separate checks below.
 - [ ] `git -C "$scratch/project" status --short` may list `?? .codex/` and
   `?? .cursor/` after a consented Codex or Cursor add (`.codex/hooks.json` and
   `.cursor/hooks.json`). Grok writes `.grok/hooks/bus.json` and
-  `.grok/hooks/.bus-hooks.lock`; only those two paths are in `.git/info/exclude`,
-  so they may be absent from that status. Do not delete project hooks to make
-  status empty. The isolation check is no edit to a global provider config
-  (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.grok`, `~/.kimi-code`) and no
-  credential copies. Stop only the scratch server with `sbus stop` and require
-  `{"stopped":true}`. Retain only authorized, redacted evidence.
+  `.grok/hooks/.bus-hooks.lock`, and AGY writes `.agents/hooks.json` and
+  `.agents/.bus-hooks.lock`; those Bus-created paths are added to
+  `.git/info/exclude`, so they may be absent from that status. Do not delete
+  project hooks to make status empty. The isolation check is no edit to a
+  global provider config (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.grok`,
+  `~/.kimi-code`, `~/.gemini`) and no credential copies. Stop only the scratch
+  server with `sbus stop` and require `{"stopped":true}`. Retain only
+  authorized, redacted evidence.
 
 ### Real-HOME cold resume
 

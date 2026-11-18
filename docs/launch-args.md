@@ -77,9 +77,10 @@ worker permission dialogs are unchanged.
 Bus disables provider self-updates on fresh room launches and saved-session
 resumes: Codex gets `-c check_for_update_on_startup=false`, Cursor gets
 `--disable-auto-update`, Claude gets `DISABLE_AUTOUPDATER=1` when that
-environment setting is absent, and Kimi's Bus-owned `tui.toml` gets
-`upgrade.auto_install = false`. An explicit inherited Claude setting is retained;
-Claude user/project settings can override the inherited environment. Kimi's
+environment setting is absent, AGY gets `AGY_CLI_DISABLE_AUTO_UPDATE=1` when
+that environment setting is absent, and Kimi's Bus-owned `tui.toml` gets
+`upgrade.auto_install = false`. An explicit inherited Claude or AGY setting is
+retained; user/project settings can override the inherited environment. Kimi's
 private `tui.toml` also sets `cache_expiry_hint = false`; if its Cache expired
 chooser still appears, Bus exposes it as a dialog. Bus does not modify global
 user configuration or the shared provider installation.
@@ -112,22 +113,32 @@ sent again. Options after an initial prompt are retained. An unstarted launch
 retains all initial input. Unknown option arity preserves the remaining tokens
 without guessing which of them are values or one-time input.
 Bus separately supplies its capture arguments (`--no-daemon` for Codex,
-`--settings <capture-file>` for Claude, and a Bus-owned `--agent-file` for a new
-Kimi session) and the saved conversation selector. Exact Kimi resume uses
-`--session` and retains that agent file; its hooks, session files and cache
-setting live in an owner-only per-agent home, not the developer's global home.
+`--settings <capture-file>` for Claude and AGY, and a Bus-owned `--agent-file`
+for a new Kimi session) and the saved conversation selector. For AGY, any user
+`--settings <json-or-path>` options (relative paths resolved against the worker
+`--pwd`) are merged into `<spool>/agy-settings.json` alongside Bus's
+`queuedMessages: "send-immediately"`, `allowNonWorkspaceAccess: true`,
+`statusLine` tap, and default `enableTerminalSandbox: false` (omitted when
+`--sandbox`, user `enableTerminalSandbox`, or global
+`~/.gemini/antigravity-cli/settings.json` sets `enableTerminalSandbox`). Exact
+Kimi resume uses `--session` and retains that agent file; its hooks, session
+files and cache setting live in an owner-only per-agent home, not the
+developer's global home.
 When the user supplies Codex `--no-daemon`, Bus omits its generated copy:
 Codex 0.162.0 rejects the same flag appearing twice.
 An explicit UUID resume selector can be normalized and reserved for ownership;
 on add, native pickers, names and other selectors remain the provider's input.
 Bus-generated capture and orchestration options precede a literal `--` tail,
-preserving the original user token order and literal prompt.
+preserving the original user token order and literal prompt (except AGY, where
+Bus rejects `--` and merges `--settings`).
 
-Bus does not validate provider option names, required values or choices. Unknown
-syntax passes through; when its arity is unclear, Bus stops inspecting it rather
-than guessing that a value is a command or selector. Known option values and
-the literal tail after `--` are never treated as Bus mode flags. The provider
-remains responsible for accepting its own syntax and configurations.
+Other than AGY's known single-value option check and exact `--conversation`
+UUID check, Bus does not validate provider option names, required values or
+choices. Unknown syntax passes through; when its arity is unclear, Bus stops
+inspecting it rather than guessing that a value is a command or selector. Known
+option values and the literal tail after `--` are never treated as Bus mode
+flags. The provider remains responsible for accepting its own syntax and
+configurations.
 
 Bus rejects only these evidenced launch incompatibilities, when recognized in
 command/option position:
@@ -140,7 +151,7 @@ command/option position:
 | Cursor | `-p`, `--print` | These select script/noninteractive output instead of the interactive terminal Bus drives. |
 | Kimi | `-p`, `--prompt`, `--agent`, `--agent-file`, `--continue`, `-c`, `--plan`, `--help`, `-h`, `--version`, `-V`, or positional input | These replace Bus's interactive prompt, agent file, session, or version/help ownership. |
 | Kimi | `--auto` with `--yolo` or `-y` | Kimi rejects this permission combination; Bus also rejects Bus `--yolo` with saved `--auto` on resume. |
-| AGY | `-p`, `--print`, `--prompt`, `-i`, `--prompt-interactive`, `-c`, `--continue`, `--remote-agent`, `-h`, `--help`, `-v`, `--version`, subcommands, or positional input | These select noninteractive/remote execution or replace Bus's local TUI prompt and conversation ownership. AGY is supported as a work-room worker only. |
+| AGY | `-p`, `--print`, `--prompt`, `-i`, `--prompt-interactive`, `-c`, `--continue`, `--remote-agent`, `-h`, `--help`, `-v`, `--version`, `--`, subcommands, or positional input | These select noninteractive/remote execution or replace Bus's local TUI prompt and conversation ownership. AGY is supported as a work-room worker only. |
 | All | A NUL byte inside a token | Operating-system process argv cannot contain NUL. Unclosed quotes or a trailing escape also cannot be tokenized. |
 
 Evidence checked locally on 2026-10-15: `codex --help` (0.162.0) labels `exec`
