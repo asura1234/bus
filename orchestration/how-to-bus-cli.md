@@ -74,8 +74,8 @@ even if background shells keep Working; later background results are follow-ups,
 ### Who to message
 
 Use the [Bus communication guide](bus-communication-guide.md). Send only the body;
-do not add a "from X", "X here" or signature line. Bus adds `name:` locally or `name (room R):`
-across rooms/MASTER; numeric/historical names include an ID. Agent-authored batches add position/time
+do not add a "from X", "X here" or signature line. Bus adds one sender header, `name:`;
+numeric/historical names include an ID. Agent-authored batches add position/time
 without repeating that header. New agents get protocol instructions at launch;
 upgrades do not insert task turns into existing conversations with saved instructions.
 #### Reach the developer from any room

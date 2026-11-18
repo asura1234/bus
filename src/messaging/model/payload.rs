@@ -1,5 +1,5 @@
 //! Native delivery text and its exact callback-matching payload.
-use super::{AgentId, Author, BusState, Provider, RequestId, RoomId, RoomKind};
+use super::{AgentId, Author, BusState, Provider, RequestId, RoomId};
 
 impl BusState {
     pub(super) fn message_sender(&self, author: &Author) -> Option<(String, RoomId)> {
@@ -100,22 +100,10 @@ impl BusState {
                     .or_else(|| self.message_sender(&request.prompt.author));
                 let (header, from, replace_identity) = if let Some((name, room)) = identity {
                     let label = self.named_agent_label(sender, &name);
-                    // The chat attribution stays local: a same-room message
-                    // keeps the bare name. The delivered prefix below still
-                    // names the sender's home room for every recipient.
-                    let crosses_rooms = request.room_id != room
-                        || self
-                            .agent(request.agent_id)
-                            .is_some_and(|a| a.room_id != room)
-                        || self.room(room).is_some_and(|r| r.kind == RoomKind::Master)
-                        || self
-                            .room(request.room_id)
-                            .is_some_and(|r| r.kind == RoomKind::Master);
-                    let header = if crosses_rooms {
-                        format!("{label} (room {}):", room.0)
-                    } else {
-                        format!("{label}:")
-                    };
+                    // The chat attribution never names a room. The delivered
+                    // prefix below still names the sender's home room for
+                    // every recipient.
+                    let header = format!("{label}:");
                     let from = format!("{label} (room {})", room.0);
                     (
                         header,

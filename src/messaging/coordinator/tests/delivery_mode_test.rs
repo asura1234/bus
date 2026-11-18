@@ -49,7 +49,7 @@ fn last_typed(fixture: &Fixture) -> (String, bool) {
         .unwrap_or_else(|| panic!("nothing was typed"))
 }
 
-/// Agent senders carry their `name (room N):` header; compare the text tail.
+/// Agent senders carry their bare `name:` sender header; compare the text tail.
 fn assert_typed(fixture: &Fixture, expected: &str, steer: bool) {
     let (text, steered) = last_typed(fixture);
     assert_eq!(steered, steer, "{text:?}");

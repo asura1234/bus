@@ -434,8 +434,7 @@ separate checks below.
     message status. This may settle before `turn_ended`; retain separate native
     turn-end proof. A native final does not replace an explicit reply.
 
-  Deliverable prompts carry a sender line `name:` on a same-room message and
-  `name (room R):` across rooms or MASTER, then one short
+  Deliverable prompts carry a bare sender line `name:` in every room, then one short
   `[Bus message N from NAME (room R)]` header (`from you`, with no room, when
   the developer sent it). Blocked, No-reply, and idle-agent
   notices have no header. Match the native prompt on the task body. Do not

@@ -233,7 +233,7 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
 /// request lacking its own snapshot should use that real identity, not only ID.
 #[test]
 fn selector_label_deleted_author_uses_retired_identity_without_a_snapshot() {
-    let (mut w, home, sender, dir) = fixture();
+    let (mut w, _home, sender, dir) = fixture();
     let room = w.state.create_room("conversation").unwrap();
     let peer = w
         .state
@@ -266,10 +266,7 @@ fn selector_label_deleted_author_uses_retired_identity_without_a_snapshot() {
     );
     assert_eq!(
         test_request_payload(&mut w.state, request).unwrap(),
-        format!(
-            "codex1 (agent {}) (room {}):\nlegacy question",
-            sender.0, home.0
-        )
+        format!("codex1 (agent {}):\nlegacy question", sender.0)
     );
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
