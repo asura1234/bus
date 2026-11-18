@@ -41,7 +41,9 @@ adds). Evidence, strongest first:
    branch build/test on its own base is the check that catches it.
 
 Prefer fewer edges. Every edge serializes review and merge and adds restack
-work. Never add an edge for ordering taste alone.
+work. Never add an edge for ordering taste alone. A proven dependency is the
+only reason to order merges; without one, every part merges independently as
+soon as its own gate is green.
 
 ## Shapes
 

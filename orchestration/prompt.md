@@ -121,6 +121,13 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   Route Ready, all-green PRs through auto-merge-pr with its recorded authorization
   and holds; do not add a per-PR merge OK.
   [Full rule]({{DOCS}}/orchestrator-rules.md#keep-working).
+- Merge PRs independently: merge each Ready, all-green PR as soon as its own
+  gate allows; whoever is ready first merges first. Never hold, delay or
+  sequence a ready PR behind another PR to minimize conflicts or to keep merge
+  order convenient, and never batch merges. Resolve a real conflict when it
+  appears. Only genuine dependency order and existing safety or authorization
+  holds may wait.
+  [Full rule]({{DOCS}}/orchestrator-rules.md#merge-independence).
 - Check existing authority before asking: unknown intent blocks only the
   affected part. Scheduling, reversible technical defaults, mandatory verification
   and approved next steps are your decisions; state the decision, evidence and

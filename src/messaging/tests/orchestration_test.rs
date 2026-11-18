@@ -291,6 +291,56 @@ fn compaction_notice_instructions_replace_the_worker_from_a_temp_handover_note()
     }
 }
 
+/// Merge throughput comes from independent readiness, not from a queue: a
+/// ready PR never waits behind another PR to avoid a conflict.
+#[test]
+fn merges_are_independent_and_never_sequenced_for_conflict_avoidance() {
+    let prompt = flat(DEFAULT_PROMPT);
+    let rules = flat(include_str!("../../../orchestration/rules.md"));
+    let guide = flat(include_str!("../../../orchestration/guide.md"));
+    let workflow = flat(include_str!("../../../workflows/auto-merge-pr.md"));
+    for (name, text) in [
+        ("prompt", &prompt),
+        ("rules", &rules),
+        ("guide", &guide),
+        ("auto-merge-pr", &workflow),
+    ] {
+        let text = text.to_lowercase();
+        for phrase in [
+            "whoever is ready first merges first",
+            "never hold, delay or sequence a ready pr behind another pr",
+            "only genuine dependency order",
+        ] {
+            assert!(text.contains(phrase), "{name} is missing {phrase}");
+        }
+        for obsolete in [
+            "merge order is part of the gate",
+            "other merges frozen",
+            "never let a second merge move the base while a gate is in flight",
+            "do not resume the queue until that merge completes",
+            "land small independent prs first",
+        ] {
+            assert!(
+                !text.contains(obsolete),
+                "{name} still sequences merges: {obsolete}"
+            );
+        }
+    }
+    let skill = flat(include_str!("../../../skills/merge-pr/SKILL.md")).to_lowercase();
+    for phrase in [
+        "merge independently: as soon as this pr passes its own signals, merge it",
+        "never wait for another pr's merge, batch merges, or sequence this pr behind another",
+        "stacked pr whose parent has not landed",
+    ] {
+        assert!(skill.contains(phrase), "merge-pr skill is missing {phrase}");
+    }
+    let split = flat(include_str!("../../../skills/split-pr/guide.md")).to_lowercase();
+    assert!(
+        split.contains("a proven dependency is the only reason to order merges"),
+        "split-pr guide must keep ordering dependency-only"
+    );
+}
+
 #[test]
 fn one_independent_task_per_agent_and_clear_is_not_a_reuse_path() {
     let prompt = flat(DEFAULT_PROMPT);

@@ -547,11 +547,15 @@ Run this audit every few events and on a timer while work remains open:
   conflict on the PR itself, so no local precheck is needed. Converge a
   conflicted head onto the current base first - rebase a short branch, merge the
   base into a long-lived one.
-- Merge every PR the moment its gate is green. Land small independent PRs
-  first; converge a long-lived branch or train onto the current base and gate
-  it with other merges frozen, so the base cannot move under the gate. A gate
-  that aborts because HEAD or the worktree moved proves nothing. Never let a
-  second merge move the base while a gate is in flight.
+- Merge every PR the moment its own gate is green, independently of other open
+  PRs: whoever is ready first merges first. Never hold, delay or sequence a
+  ready PR behind another PR to minimize conflicts or to keep merge order
+  convenient, and never batch merges. A real merge conflict is resolved when it
+  appears by converging that PR onto the current base. A gate that aborts
+  because HEAD or the worktree moved proves nothing: if another PR's merge moved
+  the base, re-run the gate on the new base instead of freezing or delaying that
+  merge. Only genuine dependency order (a stacked PR that cannot land before its
+  parent) and existing safety or authorization holds may keep a ready PR waiting.
 - A patch-identical rebase carries its review forward. Once review has closed
   at Ready, a changed patch is not a new review: the gate is the only
   post-review verification, and the PR merges on the gate-green head. A
