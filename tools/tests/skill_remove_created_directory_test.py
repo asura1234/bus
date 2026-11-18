@@ -36,7 +36,7 @@ def test_remove_prunes_new_skills_roots_but_preserves_existing_provider_homes(tm
     home = tmp_path / "home"
     home.mkdir(mode=0o700)
     for _provider, directory in install_skills.PROVIDERS:
-        (home / directory).mkdir()
+        (home / directory).mkdir(parents=True)
     installed = run_tool(home, "install")
     assert installed.returncode == 0, installed.stdout + installed.stderr
     manifest = json.loads(install_skills.manifest_path(home).read_text())
