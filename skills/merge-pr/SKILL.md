@@ -168,7 +168,7 @@ IF host == github:
 
 Merge independently as soon as this PR's own signals allow. Never wait for
 another PR's merge, batch merges, or sequence this PR behind another to minimize
-conflicts; only a stacked parent that has not landed or an existing hold waits.
+conflicts; only a stacked parent that has not landed or an existing safety or authorization hold waits.
 
 IF --no-merge   -- stops before the retake and assertions; --hold-before-merge stops after all of them, right before the merge command
   Report the current state and conclusion, STOP. Do not merge.

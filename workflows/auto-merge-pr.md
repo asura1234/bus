@@ -123,9 +123,11 @@ first. Never hold, delay or sequence a ready PR behind another PR to minimize
 conflicts or to keep merge order convenient, and never batch merges. A real
 merge conflict is resolved when it appears by converging that PR onto the
 current base. If another PR's merge moves the base while a gate runs, re-run the
-gate on the new base instead of freezing or delaying that merge. Only genuine
-dependency order (a stacked PR that cannot land before its parent) and existing
-safety or authorization holds may keep a ready PR waiting.
+gate on the new base instead of freezing or delaying that merge; when only the
+base moved and the PR's own diff is unchanged, carry exact-head verification
+forward and re-run only fast gates. Only genuine dependency order (a stacked PR
+that cannot land before its parent) and existing safety or authorization holds
+may keep a ready PR waiting.
 
 A change that only touches markdown or plans/ needs no gate:
 merge it on review, or directly when the whole workflow is docs-only.

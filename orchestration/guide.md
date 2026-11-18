@@ -554,8 +554,10 @@ Run this audit every few events and on a timer while work remains open:
   appears by converging that PR onto the current base. A gate that aborts
   because HEAD or the worktree moved proves nothing: if another PR's merge moved
   the base, re-run the gate on the new base instead of freezing or delaying that
-  merge. Only genuine dependency order (a stacked PR that cannot land before its
-  parent) and existing safety or authorization holds may keep a ready PR waiting.
+  merge; when only the base moved and the PR's own diff is unchanged, carry
+  exact-head verification forward and re-run only fast gates. Only genuine
+  dependency order (a stacked PR that cannot land before its parent) and existing
+  safety or authorization holds may keep a ready PR waiting.
 - A patch-identical rebase carries its review forward. Once review has closed
   at Ready, a changed patch is not a new review: the gate is the only
   post-review verification, and the PR merges on the gate-green head. A
