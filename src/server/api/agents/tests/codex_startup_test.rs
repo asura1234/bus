@@ -294,3 +294,111 @@ async fn codex_startup_cached_idle_requires_current_screen_evidence() {
     );
     assert!(!admitted.launch_pending);
 }
+
+fn ready_unbound_native() -> (
+    App,
+    Method,
+    tokio::sync::mpsc::Receiver<Bytes>,
+    StartupServer,
+) {
+    let (app, method, writes) = provider_fixture(AgentKind::Codex, false, "keep developer draft");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let path = cold_runtime(&app);
+    let server = StartupServer::new(&path);
+    server.state.store(3, Ordering::Release);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !app.agent_info(0, pane).unwrap().interactive_ready {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    (app, method, writes, server)
+}
+
+fn project_unbound_working(app: &mut App) {
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].terminal_id(pane).unwrap().clone();
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    let info = app.agent_info(0, pane).unwrap();
+    assert!(info.interactive_ready);
+    assert!(info.agent_session.is_none());
+    assert_eq!(
+        info.agent_status,
+        crate::protocol::api::schema::AgentStatus::Working
+    );
+}
+
+#[tokio::test]
+async fn codex_native_unbound_working_frontend_uses_idle_native_admission() {
+    let (mut app, method, mut writes, server) = ready_unbound_native();
+    project_unbound_working(&mut app);
+    let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    assert!(
+        response.contains("agent_prompted"),
+        "native idle is usable despite startup Working chrome: {response}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "native admission must preserve the draft without typing"
+    );
+    assert_eq!(
+        server
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|v| v["method"] == "thread/queue/add")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn codex_native_unbound_working_frontend_refuses_real_busy_turn_without_typing() {
+    let (mut app, method, mut writes, server) = ready_unbound_native();
+    server.state.store(2, Ordering::Release);
+    project_unbound_working(&mut app);
+    let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    assert!(
+        response.contains("agent_not_idle")
+            || response.contains(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN),
+        "{response}"
+    );
+    assert!(writes.try_recv().is_err());
+    assert!(!server.calls.lock().unwrap().iter().any(|v| matches!(
+        v["method"].as_str(),
+        Some("thread/queue/add" | "thread/queue/start" | "turn/steer")
+    )));
+}
+
+#[tokio::test]
+async fn codex_native_unbound_working_frontend_has_no_typed_fallback() {
+    let (mut app, method, mut writes) =
+        provider_fixture(AgentKind::Codex, false, "keep developer draft");
+    project_unbound_working(&mut app);
+    let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    assert!(response.contains("agent_not_idle"), "{response}");
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_native_unbound_working_frontend_keeps_managed_identity_guard() {
+    let (mut app, mut method, mut writes, server) = ready_unbound_native();
+    project_unbound_working(&mut app);
+    let Method::AgentPromptIfUnbound(params) = &mut method else {
+        panic!("unbound prompt")
+    };
+    params.expected_managed_name = "other launch".into();
+    let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    assert!(response.contains("agent_identity_changed"), "{response}");
+    assert!(writes.try_recv().is_err());
+    assert!(!server
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|v| v["method"] == "thread/queue/add"));
+}

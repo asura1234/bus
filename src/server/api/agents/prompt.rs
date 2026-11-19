@@ -380,7 +380,14 @@ impl App {
         let agent = self
             .agent_info_for_target(&params.target)
             .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
-        if let Err((code, message)) = check_unbound_prompt_identity_and_idle(&agent, &params) {
+        let rejection = check_unbound_prompt_identity_and_idle(&agent, &params).err();
+        #[cfg(unix)]
+        let native_only = rejection.is_some_and(|(code, _)| code == "agent_not_idle")
+            && agent.agent_status == crate::protocol::api::schema::AgentStatus::Working
+            && super::codex_native::can_check_idle(&agent);
+        #[cfg(not(unix))]
+        let native_only = false;
+        if let Some((code, message)) = rejection.filter(|_| !native_only) {
             return Err(encode_error(id, code, message));
         }
         self.queue_agent_prompt(
@@ -394,7 +401,7 @@ impl App {
             hard_deadline,
             false,
             None,
-            false,
+            native_only,
         )
     }
 

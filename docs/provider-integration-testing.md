@@ -1120,7 +1120,10 @@ idle then deliver, and an approval card without `--yolo`.
   Unknown must not confirm the first readiness; an admitted launch keeps its
   readiness through later skipped detector frames. Do not downgrade the raw
   `prompt_not_shown` or `agent_not_idle` errors globally: genuine post-readiness
-  refusal still needs its WARN. Cover empty/ambiguous/active threads, a missing
+  refusal still needs its WARN. Once ready, an unbound Codex frontend's Working
+  projection must use native-only turn admission just like a bound frontend;
+  native idle may accept, real busy must refuse, and typed fallback stays forbidden.
+  Cover empty/ambiguous/active threads, a missing
   endpoint, standalone fallback, queued delivery, and a fresh runtime on the
   same pane. Native-wire fixtures are regression evidence, not real-model
   acceptance; repeat first-launch acceptance on the final head separately.
