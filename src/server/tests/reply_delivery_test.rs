@@ -1685,6 +1685,9 @@ async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_
 async fn developer_follow_up_interrupts_the_orchestrator_turn_without_blocking_the_inbox() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let orch = f.agents[0];
+    // Claude restores its accepted prompt on Esc. Keep the real native
+    // retirement guard and have this scripted provider render the restoration.
+    f.restore_claude_input_on_stop(orch);
     let lead = f.send(orch, f.master, "first", false, None);
     f.tick();
     f.start(orch, "shared", "first");
@@ -1704,12 +1707,9 @@ async fn developer_follow_up_interrupts_the_orchestrator_turn_without_blocking_t
     );
     f.status(orch, AgentState::Idle);
     f.tick();
-    // The developer's interrupt ends the turn, and the follow-up was never
-    // part of it.
-    assert_eq!(
-        f.state().request(lead).unwrap().failure_reason.as_deref(),
-        Some("interrupted")
-    );
+    // The settling poll captures the original turn's Stop before ending it.
+    // Its answer belongs to the lead. The follow-up never joined that turn.
+    f.assert_reply(lead, "stopped mid-answer");
     assert_eq!(f.state().request(folded).unwrap().group, None);
     assert!(f.state().request(folded).unwrap().failure_reason.is_none());
     // The follow-up starts the next turn; the inbox is not blocked.

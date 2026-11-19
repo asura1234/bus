@@ -28,7 +28,10 @@ impl Worker {
 /// to unrelated recipients. These controls can revoke, replace or edit input.
 pub(super) fn native_input_barrier(command: &BusCommand) -> bool {
     match command {
-        BusCommand::DeleteAgent(_) | BusCommand::DeleteRoom(_) | BusCommand::Shutdown => true,
+        BusCommand::DeleteAgent(_)
+        | BusCommand::DeleteRoom(_)
+        | BusCommand::ConfirmTerminalRetirement { .. }
+        | BusCommand::Shutdown => true,
         BusCommand::Control(call) => matches!(
             call.request.method.as_str(),
             "agent.interrupt"

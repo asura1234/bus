@@ -254,6 +254,10 @@ impl BusState {
             None => request,
         };
         let agent = self.agents.get(&lead.agent_id)?;
+        if lead.interrupt_retirement_pending || self.interrupt_retirement_owner(agent.id).is_some()
+        {
+            return None;
+        }
         if agent.provider_retry.is_some()
             || !lead.restart_continuation
                 && lead.phase == RequestPhase::Queued
@@ -769,6 +773,9 @@ pub(crate) fn rejection_reason(message: &str) -> &'static str {
 impl Request {
     /// Durable send outcome, never the agent's mutable latest error or a reply.
     pub(crate) fn submission_notice(&self) -> Option<String> {
+        if self.interrupt_retirement_pending {
+            return Some(self.interrupt_retirement_notice());
+        }
         if matches!(
             self.failure_reason.as_deref(),
             Some(super::AGENT_STARTUP_FAILED | super::CODEX_BOOTSTRAP_FAILED)

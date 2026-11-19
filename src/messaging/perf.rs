@@ -51,6 +51,7 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::RenameAgent(..) => "rename_agent",
         C::DeleteRoom(_) => "delete_room",
         C::DeleteAgent(_) => "delete_agent",
+        C::ConfirmTerminalRetirement { .. } => "confirm_terminal_retirement",
         C::SelectRoom(_) => "select_room",
         C::LeaveRoom => "leave_room",
         C::MarkRoomSeen(_) => "mark_room_seen",

@@ -33,6 +33,8 @@ mod grok_callbacks;
 mod provider_turns;
 #[path = "reports.rs"]
 mod reports;
+#[path = "callback_retirement.rs"]
+mod retirement;
 
 impl Worker {
     /// A native hook can bind its session before the Bus spool is consumed.
@@ -143,6 +145,9 @@ impl Worker {
         state: &mut BusState,
         callback: ProviderCallback,
     ) -> Result<bool, String> {
+        if state.defer_during_interrupt_retirement(&callback) {
+            return Ok(false);
+        }
         let _binding = binding::span(state, &callback).entered();
         let report = reports::pending_report(state, &callback);
         let late_final = matches!(callback.kind, CallbackEventKind::Final { .. })

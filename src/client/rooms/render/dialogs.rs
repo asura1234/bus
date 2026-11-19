@@ -21,17 +21,17 @@ impl BusUi {
         let Some(dialog) = &self.deletion else {
             return;
         };
-        let (title, message) = match dialog.target {
+        let (title, message) = match &dialog.target {
             DeleteTarget::Room(id) => {
                 let name = self
                     .snapshot
                     .state
-                    .room(id)
+                    .room(*id)
                     .map_or("room", |room| room.name.as_str());
                 let state = &self.snapshot.state;
-                let count = state.agents().filter(|agent| agent.room_id == id).count();
+                let count = state.agents().filter(|agent| agent.room_id == *id).count();
                 // The orchestrator lives in MASTER but exists only for this room.
-                let orchestrator = state.orchestrator_of(id).map_or(String::new(), |agent| {
+                let orchestrator = state.orchestrator_of(*id).map_or(String::new(), |agent| {
                     format!(" and its orchestrator \"{}\" in MASTER", agent.name)
                 });
                 (format!("Delete room \"{name}\"?"), format!("This will close its {count} agents{orchestrator} and permanently delete this room’s session data."))
@@ -40,13 +40,39 @@ impl BusUi {
                 let name = self
                     .snapshot
                     .state
-                    .agent(id)
+                    .agent(*id)
                     .map_or("agent", |agent| agent.name.as_str());
                 (format!("Delete agent \"{name}\"?"), "This will close the agent and permanently delete its session data from this room.".into())
             }
+            DeleteTarget::TerminalRetirement {
+                agent,
+                request,
+                original,
+            } => {
+                let name = self
+                    .snapshot
+                    .state
+                    .agent(*agent)
+                    .map_or("agent", |agent| agent.name.as_str());
+                let terminal = original.terminal_id.as_deref().unwrap_or_default();
+                let pane = original.pane_id.as_deref().unwrap_or_default();
+                ("Retire original terminal?".into(), format!(
+                    "{name}, request {}. Terminal {terminal}, pane {pane}. Closing this terminal discards its unsent drafts.",
+                    request.0
+                ))
+            }
         };
         let text_width = dialog_text_width(area);
+        let retirement = matches!(dialog.target, DeleteTarget::TerminalRetirement { .. });
         let mut body = wrap(&message, text_width);
+        let target_visible =
+            !retirement || (text_width >= 30 && usize::from(area.height) >= body.len() + 6);
+        if !target_visible {
+            body = wrap(
+                "Enlarge the window to see the original terminal.",
+                text_width.max(1),
+            );
+        }
         if dialog.command_id.is_some() {
             body.push("Stopping sessions…".into());
         }
@@ -60,11 +86,22 @@ impl BusUi {
             !ready,
         );
         view.row(
-            Rect::new(x + 16, y, text_width.saturating_sub(16).min(10), 1),
-            "OK (Enter)",
-            ready.then_some(Action::ConfirmDelete),
+            Rect::new(
+                x + 16,
+                y,
+                text_width
+                    .saturating_sub(16)
+                    .min(if retirement { 13 } else { 10 }),
+                1,
+            ),
+            if retirement {
+                "Close (Enter)"
+            } else {
+                "OK (Enter)"
+            },
+            (ready && target_visible).then_some(Action::ConfirmDelete),
             false,
-            !ready,
+            !ready || !target_visible,
         );
     }
 

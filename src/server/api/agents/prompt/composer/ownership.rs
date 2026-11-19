@@ -11,6 +11,7 @@ pub(super) struct OwnedComposer {
 
 struct Owned {
     body: Option<String>,
+    attested_body: Option<String>,
     text: String,
     cursor: usize,
     remainders: VecDeque<String>,
@@ -67,6 +68,7 @@ impl OwnedComposer {
                 cursor: text.len(),
                 text,
                 body: None,
+                attested_body: None,
                 remainders: VecDeque::new(),
                 lost: false,
                 progress: 0,
@@ -76,6 +78,29 @@ impl OwnedComposer {
 }
 
 impl SubmissionInspector for OwnedComposer {
+    fn interrupt_receipt(&self) -> Option<(String, String)> {
+        // Only Claude's plain-paste path proves consumption after Enter.
+        if !self.retry_owned_enter() {
+            return None;
+        }
+        let body = self.state.lock().ok()?.attested_body.clone()?;
+        (!super::preservation::opaque(&body)).then(|| (self.expected.clone(), body))
+    }
+    fn interrupted_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> Option<String> {
+        super::input_with_cursor(self.kind, screen, cursor)
+    }
+    fn interrupted_remainder(&self, body: &str) -> bool {
+        self.state.lock().is_ok_and(|owned| {
+            !owned.lost
+                && owned.body.is_some()
+                && (owned.body.as_deref() == Some(body)
+                    || owned.remainders.iter().any(|value| value == body))
+        })
+    }
+    fn cleanup_expects_empty(&self) -> bool {
+        self.state.lock().is_ok_and(|owned| owned.text.is_empty())
+    }
+
     fn retry_owned_enter(&self) -> bool {
         self.kind == AgentKind::Claude
             && crate::agents::providers::claude_code::hooks::claude_lifted_images(&self.expected).0
@@ -155,6 +180,7 @@ impl SubmissionInspector for OwnedComposer {
                 let body = super::input_since_launch(self.kind, screen, cursor, pristine);
                 if owned.body.is_none() {
                     if observation == InputObservation::Pending {
+                        owned.attested_body = body.clone();
                         owned.body = body;
                         owned.progress = owned.progress.wrapping_add(1);
                     }

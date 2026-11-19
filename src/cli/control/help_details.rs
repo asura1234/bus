@@ -341,6 +341,11 @@ const REQUEST_RECOVER: &str = r#"Explicitly close a stuck recipient request with
 requests close individually, regardless of agent status. Already abandoned is
 idempotent. Typed current work requires confirmed idle, or unavailable with
 session_invalidated; recover a joined group's lead (the group request ID).
+For an unresolved Claude interruption, retry the guarded interrupt or choose
+Retire terminal under the recipient in the Bus TUI. The TUI shows the original
+target before it asks for confirmation. Closing it discards its unsent drafts.
+--retire-terminal --confirm gives TUI directions. Resume the agent to drain
+the existing queue. The old request may have run. Do not resend it.
 Result: {request_id,agent_id,stage:"abandoned"}. Preserve other queued work.
 Errors: command_failed for unknown/non-lead/currently working typed request;
 inspect message status and current identity/revision facts, then recover the lead
