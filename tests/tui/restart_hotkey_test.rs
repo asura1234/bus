@@ -170,8 +170,12 @@ fn non_dev_ctrl_r_refuses_like_the_cli_and_keeps_running() {
     session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
     session.ok(&["type", "nondev draft"]);
     session.ok(&["press", "ctrl+r"]);
-    wait_for(|| data.join("restarts/outcome.json").exists());
-    let outcome = read_json(&data.join("restarts/outcome.json"));
+    let log = data.join("restarts/log.jsonl");
+    wait_for(|| {
+        std::fs::read_to_string(&log).is_ok_and(|text| text.contains("\"outcome\":\"refused\""))
+    });
+    let text = std::fs::read_to_string(&log).unwrap();
+    let outcome: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
     assert_eq!(outcome["outcome"], "refused");
     assert_eq!(
         outcome["reason"],
