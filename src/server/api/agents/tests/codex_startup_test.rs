@@ -137,7 +137,9 @@ async fn codex_startup_waits_for_native_thread_before_reporting_ready_or_submitt
             .unwrap()
             .iter()
             .any(|v| v["method"] == "thread/queue/add"));
-        let terminal_id = app.agent_info(0, pane).unwrap().terminal_id;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
         app.state
             .terminals
             .get_mut(&terminal_id)

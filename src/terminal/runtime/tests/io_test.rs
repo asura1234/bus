@@ -199,6 +199,8 @@ async fn focus_events_are_forwarded_when_enabled() {
         #[cfg(unix)]
         shared_codex: Arc::new(Mutex::new(None)),
         #[cfg(unix)]
+        native_startup_confirmed: Arc::new(AtomicBool::new(false)),
+        #[cfg(unix)]
         native_input_override: Mutex::new(None),
         preserve_processes_on_drop: true,
         shell_integration: None,
@@ -254,6 +256,8 @@ async fn focus_events_are_suppressed_when_disabled() {
         kimi_code_home: Arc::new(Mutex::new(None)),
         #[cfg(unix)]
         shared_codex: Arc::new(Mutex::new(None)),
+        #[cfg(unix)]
+        native_startup_confirmed: Arc::new(AtomicBool::new(false)),
         #[cfg(unix)]
         native_input_override: Mutex::new(None),
         preserve_processes_on_drop: true,
