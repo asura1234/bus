@@ -2219,3 +2219,20 @@ fn agy_task_tray_alone_or_live_permission_has_no_submittable_composer() {
         assert!(!inspector.submission_available(frame));
     }
 }
+
+#[test]
+fn claude_retirement_accepts_nbsp_chrome_but_rejects_nbsp_editable_content() {
+    let frame = |row: &str| format!("────────────────\n{row}\n────────────────");
+    let cursor = Some((2, 1));
+    assert!(claude_empty_editable_composer(&frame("❯\u{a0}   "), cursor));
+    for row in ["❯\u{a0}\u{a0}", "❯ \u{a0}", "❯\u{a0}\x1b[2mhidden\x1b[0m"] {
+        assert!(
+            !claude_empty_editable_composer(&frame(row), cursor),
+            "{row:?}"
+        );
+    }
+    assert!(!claude_empty_editable_composer(
+        &frame("❯\u{a0}"),
+        Some((3, 1))
+    ));
+}

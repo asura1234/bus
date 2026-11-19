@@ -239,6 +239,9 @@ fn press_claude_stop<'a>(
     if *stopped {
         return Ok(None);
     }
+    // The known-stream proof needs a tool row that existed before Esc
+    // could reach the PTY. Cancellation still requires the later watermark.
+    let pre_stop = anchor.and_then(|anchor| anchor.watermark(session));
     let deadline = submission.hard_deadline;
     let completion = lease.with_unedited(|| {
         submission.io.queue_input_write_scoped(
@@ -259,7 +262,7 @@ fn press_claude_stop<'a>(
     let proof = anchor
         .and_then(|anchor| anchor.watermark(session))
         .map(|watermark| NoRestoration {
-            watermark,
+            watermark: watermark.with_pre_stop(pre_stop),
             after_stop: settled_pty_revision(submission),
             empty_since: None,
         });

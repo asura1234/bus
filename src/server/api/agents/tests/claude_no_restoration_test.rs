@@ -25,10 +25,12 @@ fn interrupted_frame_bytes(body: &str, bottom: &str, footer: &str) -> String {
 enum EarlyEvidence {
     None,
     Cancel,
+    ToolBeforeDelivery,
     Frame,
     InFlightFrame,
     Scroll,
     SynchronizedFrame,
+    LiveChrome,
 }
 
 async fn exercise(
@@ -52,7 +54,8 @@ async fn exercise(
     let clock = runtime.test_submission_clock().unwrap();
     clock.pause();
     let generation = clock.advance(Duration::ZERO);
-    let delivery = (early != EarlyEvidence::None).then(|| clock.hold_next_write_delivery());
+    let delivery = (!matches!(early, EarlyEvidence::None | EarlyEvidence::LiveChrome))
+        .then(|| clock.hold_next_write_delivery());
     let sender = runtime.submission_handle(true);
     let original = receipt.clone();
     let stop = tokio::task::spawn_blocking(move || {
@@ -64,12 +67,12 @@ async fn exercise(
             Some(&anchor),
         )
     });
-    let append = || {
+    let append = |rows: &str| {
         fs::OpenOptions::new()
             .append(true)
             .open(&path)
             .unwrap()
-            .write_all(after.as_bytes())
+            .write_all(rows.as_bytes())
             .unwrap();
     };
     if let Some((waiting, release)) = delivery {
@@ -86,7 +89,9 @@ async fn exercise(
             });
         } else {
             if early == EarlyEvidence::Cancel {
-                append();
+                append(after);
+            } else if early == EarlyEvidence::ToolBeforeDelivery {
+                append(after.split_inclusive('\n').next().unwrap());
             } else {
                 if early == EarlyEvidence::SynchronizedFrame {
                     runtime.test_process_pty_bytes(b"\x1b[?2026h");
@@ -102,12 +107,18 @@ async fn exercise(
     assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
     clock.wait_for_submission_check(generation);
     clock.resume();
-    if early != EarlyEvidence::Cancel {
-        append();
+    match early {
+        EarlyEvidence::Cancel => {}
+        EarlyEvidence::ToolBeforeDelivery => append(after.split_once('\n').unwrap().1),
+        _ => append(after),
     }
     match early {
-        EarlyEvidence::None | EarlyEvidence::Cancel => {
+        EarlyEvidence::None | EarlyEvidence::Cancel | EarlyEvidence::ToolBeforeDelivery => {
             interrupted_frame(&runtime, body, bottom, footer);
+        }
+        EarlyEvidence::LiveChrome => {
+            let frame = interrupted_frame_bytes(body, bottom, footer).replace("❯ ", "❯\u{a0}");
+            runtime.test_process_pty_bytes(frame.as_bytes());
         }
         EarlyEvidence::Scroll => {
             runtime.scroll_up(1);
@@ -434,4 +445,121 @@ async fn claude_no_restoration_rejects_a_branch_in_the_anchored_parent_chain() {
         )
         .await;
     }
+}
+
+#[tokio::test]
+async fn claude_ds_completed_tool_progress_retires_the_live_nbsp_composer() {
+    let attachment = r#"{"type":"attachment","uuid":"metadata","parentUuid":"result","sessionId":"session","version":"2.1.316","isSidechain":false}"#;
+    let stream = STREAM.replace(r#""parentUuid":"result""#, r#""parentUuid":"metadata""#);
+    exercise(
+        &format!("{PROMPT}\n{TOOL}\n{RESULT}\n{attachment}\n"),
+        &format!("{stream}\n{CANCEL}\n"),
+        "",
+        "────────────────",
+        "",
+        true,
+        false,
+        EarlyEvidence::LiveChrome,
+    )
+    .await;
+}
+
+const CANCELLED_STREAM: &str = "11111111-2222-4333-8444-555555555555";
+
+fn with_stream_id(row: &str) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(row).unwrap();
+    value["message"]["id"] = serde_json::json!(CANCELLED_STREAM);
+    value.to_string()
+}
+
+#[tokio::test]
+async fn claude_ds_cancelled_first_tool_retires_its_linked_api_stream() {
+    let thinking = with_stream_id(
+        &STREAM
+            .replace(r#""uuid":"thinking""#, r#""uuid":"initial-thinking""#)
+            .replace(r#""parentUuid":"result""#, r#""parentUuid":"original""#),
+    );
+    let tool = with_stream_id(&TOOL.replace(
+        r#""parentUuid":"original""#,
+        r#""parentUuid":"initial-thinking""#,
+    ));
+    let cancelled_result = RESULT.replace(
+        r#""type":"tool_result""#,
+        r#""type":"tool_result","is_error":true"#,
+    );
+    for bridge in [false, true] {
+        let parent = if bridge { "result" } else { "tool" };
+        let cancel = CANCEL.replace(
+            r#""parentUuid":"thinking""#,
+            &format!(r#""parentUuid":"{parent}""#),
+        );
+        let after = if bridge {
+            format!("{cancelled_result}\n{cancel}\n")
+        } else {
+            format!("{cancel}\n")
+        };
+        exercise(
+            &format!("{PROMPT}\n{thinking}\n{tool}\n"),
+            &after,
+            "",
+            "────────────────",
+            "",
+            true,
+            false,
+            EarlyEvidence::None,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn claude_linked_api_id_requires_the_cancelled_streams_own_pre_stop_tool() {
+    let matching_tool = with_stream_id(TOOL);
+    let thinking =
+        with_stream_id(&STREAM.replace(r#""parentUuid":"result""#, r#""parentUuid":"original""#));
+    let mixed = STREAM.replace(r#""parentUuid":"result""#, r#""parentUuid":"tool""#);
+    let prior_foreign = thinking.replace(CANCELLED_STREAM, "foreign-stream");
+    let tool_after_thinking =
+        matching_tool.replace(r#""parentUuid":"original""#, r#""parentUuid":"thinking""#);
+    let cancelled_result = RESULT.replace(
+        r#""type":"tool_result""#,
+        r#""type":"tool_result","is_error":true"#,
+    );
+    let wrong_bridge =
+        cancelled_result.replace(r#""tool_use_id":"tool-id""#, r#""tool_use_id":"foreign""#);
+    let cancel_tool = CANCEL.replace(r#""parentUuid":"thinking""#, r#""parentUuid":"tool""#);
+    let cancel_result = CANCEL.replace(r#""parentUuid":"thinking""#, r#""parentUuid":"result""#);
+    for (before, after) in [
+        (PROMPT.to_owned(), format!("{matching_tool}\n{cancel_tool}")),
+        (format!("{PROMPT}\n{thinking}"), CANCEL.to_owned()),
+        (
+            format!("{PROMPT}\n{matching_tool}"),
+            format!("{mixed}\n{CANCEL}"),
+        ),
+        (
+            format!("{PROMPT}\n{prior_foreign}\n{tool_after_thinking}"),
+            cancel_tool.clone(),
+        ),
+        (
+            format!("{PROMPT}\n{matching_tool}"),
+            format!("{wrong_bridge}\n{cancel_result}"),
+        ),
+        (
+            format!("{PROMPT}\n{matching_tool}\n{cancelled_result}"),
+            cancel_result,
+        ),
+    ] {
+        reject(
+            format!("{before}\n"),
+            format!("{after}\n"),
+            EarlyEvidence::None,
+        )
+        .await;
+    }
+    reject(
+        format!("{PROMPT}\n"),
+        format!("{matching_tool}\n{cancel_tool}\n"),
+        EarlyEvidence::ToolBeforeDelivery,
+    )
+    .await;
 }

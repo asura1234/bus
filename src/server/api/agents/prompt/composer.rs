@@ -567,7 +567,7 @@ fn claude_empty_editable_composer(screen: &str, cursor: Option<(u16, u16)>) -> b
     rows.next().is_some_and(rail)
         && rows
             .next()
-            .is_some_and(|row| row.trim_end_matches(' ') == "❯")
+            .is_some_and(|row| matches!(row.trim_end_matches(' '), "❯" | "❯\u{a0}"))
         && rows.next().is_some_and(rail)
 }
 
