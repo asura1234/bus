@@ -77,17 +77,21 @@ impl SendInterrupt {
                 && self.provider_turn_id.is_some())
     }
 
-    pub(crate) fn same_turn(&self, observed: &Self) -> bool {
-        self.target == observed.target
-            && self.submission_boundary == observed.submission_boundary
-            && self.submission_status_revision == observed.submission_status_revision
-            && self.identity.launch_id == observed.identity.launch_id
-            && self.identity.terminal_id == observed.identity.terminal_id
+    fn matches_runtime(&self, identity: &AgentRuntimeIdentity) -> bool {
+        self.identity.launch_id == identity.launch_id
+            && self.identity.terminal_id == identity.terminal_id
             && self
                 .identity
                 .session_id
                 .as_ref()
-                .is_none_or(|session| observed.identity.session_id.as_ref() == Some(session))
+                .is_none_or(|session| identity.session_id.as_ref() == Some(session))
+    }
+
+    pub(crate) fn same_turn(&self, observed: &Self) -> bool {
+        self.target == observed.target
+            && self.submission_boundary == observed.submission_boundary
+            && self.submission_status_revision == observed.submission_status_revision
+            && self.matches_runtime(&observed.identity)
             && self
                 .provider_turn_id
                 .as_ref()
@@ -211,6 +215,21 @@ impl BusState {
         if let Some(owner) = self.agents.get_mut(&id) {
             let activity = &mut owner.autonomous_stop;
             if started {
+                // The first late Started does not prove a new episode. Two
+                // distinct authenticated turns fence the claim to the earlier one.
+                if let Some((previous, claim)) = activity
+                    .provider_turn_id
+                    .as_ref()
+                    .zip(activity.claim.as_mut())
+                    .filter(|(previous, claim)| {
+                        *previous != &turn
+                            && claim.target.is_none()
+                            && claim.provider_turn_id.is_none()
+                            && claim.matches_runtime(&owner.runtime_identity)
+                    })
+                {
+                    claim.provider_turn_id = Some(previous.clone());
+                }
                 activity.provider_turn_id = Some(turn);
                 activity.turn_activity = activity.activity;
             } else if activity.provider_turn_id.as_ref() == Some(&turn) {
@@ -294,6 +313,35 @@ impl BusState {
                         .as_ref()
                         .is_some_and(|claim| claim.same_turn(&SendInterrupt::autonomous(owner)))
                 })
+    }
+
+    /// A refused join returns stop ownership to the autonomous episode.
+    pub(super) fn transfer_requeued_stop_claim(&mut self, head: RequestId) {
+        let Some(request) = self
+            .requests
+            .get_mut(&head)
+            .filter(|r| !r.restart_continuation)
+        else {
+            return;
+        };
+        let Some(owner) = self
+            .agents
+            .get_mut(&request.agent_id)
+            .filter(|a| a.current_request.is_none())
+        else {
+            return;
+        };
+        if let Some(mut claim) = request.send_interrupt_claim.take().filter(|claim| {
+            claim.target == Some(head)
+                && claim.provider_turn_id.is_some()
+                && claim.provider_turn_id == owner.autonomous_stop.provider_turn_id
+                && claim.matches_runtime(&owner.runtime_identity)
+        }) {
+            claim.target = None;
+            claim.submission_boundary = None;
+            claim.submission_status_revision = 0;
+            owner.autonomous_stop.claim = Some(claim);
+        }
     }
 
     pub(crate) fn release_send_interrupt_claim(

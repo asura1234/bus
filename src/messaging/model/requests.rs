@@ -164,8 +164,7 @@ impl BusState {
                         member.latency.clear_attempt();
                     }
                 }
-                let queue = self.queues.entry(agent_id).or_default();
-                queue.splice(
+                self.queues.entry(agent_id).or_default().splice(
                     0..0,
                     std::iter::once(request)
                         .chain(members.into_iter().filter(|_| !restart_continuation)),
@@ -182,6 +181,7 @@ impl BusState {
                         .into(),
                 );
                 agent.actionable_error = rejection;
+                self.transfer_requeued_stop_claim(request);
                 self.retain_rejected_provider_retry(request);
             }
             SubmissionOutcome::Confirmed {

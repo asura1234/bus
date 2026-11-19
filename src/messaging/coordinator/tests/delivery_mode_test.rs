@@ -1273,8 +1273,14 @@ impl Transport for DeferredBusyJoin {
 }
 
 fn claimed_busy_join() -> (Fixture, AgentId, RequestId, SendInterrupt) {
+    busy_join_with_autonomous_claim(true)
+}
+
+fn busy_join_with_autonomous_claim(
+    authenticated: bool,
+) -> (Fixture, AgentId, RequestId, SendInterrupt) {
     let mut f = Fixture::new(Provider::Codex);
-    let autonomous = add_autonomous(&mut f, true);
+    let autonomous = add_autonomous(&mut f, authenticated);
     let mut state = f.worker.state.clone();
     let original = state.send_interrupt_target(autonomous).unwrap();
     let head = state
@@ -1298,6 +1304,17 @@ fn claimed_busy_join() -> (Fixture, AgentId, RequestId, SendInterrupt) {
     assert_eq!(stop_keys(&f).len(), 1);
     reopen_after_interrupt(&mut f);
     poll_autonomous(&mut f, "working", 10, false, None);
+    if !authenticated {
+        callbacks::initialize(
+            &f.dir.join("callbacks/autonomous-launch"),
+            &callbacks::Manifest {
+                routing_key: callbacks::RoutingKey(autonomous.0),
+                provider: Provider::Cursor,
+                launch_id: "autonomous-launch".into(),
+            },
+        )
+        .unwrap();
+    }
     assert!(saved_autonomous_claim(&f, autonomous, &original));
     (f, autonomous, head, original)
 }
@@ -1759,4 +1776,112 @@ fn provider_started_without_proof_does_not_advance_a_provisional_episode() {
     }
     assert_head_stays_provisional(&f, autonomous, head);
     assert!(saved_autonomous_claim(&f, autonomous, &original));
+}
+
+#[test]
+fn initially_unbound_stop_claim_only_covers_the_first_authenticated_episode() {
+    let (mut f, autonomous, head, original) = busy_join_with_autonomous_claim(false);
+    assert!(original.provider_turn_id.is_none());
+    uncertain_busy_join(&mut f, head);
+
+    for payload in ["first late start", "another start in the same turn"] {
+        autonomous_started_with_prompt(&mut f, autonomous, "late-turn-a", payload);
+        let params =
+            json!({"room": f.room.0.to_string(), "to": ["autonomous"], "text": "same turn"});
+        let send_result = send(&mut f, params);
+        assert!(send_result.ok, "{send_result:?}");
+        assert_eq!(send_result.result["stage"], "queued");
+        assert_eq!(send_result.result["interrupts"][0]["outcome"], "unknown");
+        assert_eq!(recorded_stop_terminals(&f), ["autonomous-terminal"]);
+        assert!(saved_autonomous_claim(&f, autonomous, &original));
+    }
+
+    autonomous_started_with_prompt(&mut f, autonomous, "provider-turn-b", "provider work B");
+    reopen_after_interrupt(&mut f);
+    poll_autonomous(&mut f, "working", 11, false, None);
+    assert_head_stays_provisional(&f, autonomous, head);
+    assert_later_autonomous_send(&mut f, autonomous);
+    let scoped_claim = SendInterrupt {
+        provider_turn_id: Some("late-turn-a".into()),
+        ..original
+    };
+    assert!(saved_autonomous_claim(&f, autonomous, &scoped_claim));
+    assert_head_stays_provisional(&f, autonomous, head);
+}
+
+fn requeued_join_keeps_the_foreign_stop_claim(code: Option<&str>) {
+    let (mut f, autonomous, head, _) = claimed_busy_join();
+    let (reply, _) = defer_busy_join(&mut f, head);
+    autonomous_started_with_prompt(&mut f, autonomous, "provider-turn-b", "provider work B");
+    poll_autonomous(&mut f, "working", 11, false, None);
+
+    assert_later_autonomous_send(&mut f, autonomous);
+    assert_eq!(
+        f.request(head)
+            .send_interrupt_claim
+            .as_ref()
+            .unwrap()
+            .provider_turn_id
+            .as_deref(),
+        Some("provider-turn-b")
+    );
+    let expected_queue: Vec<_> = std::iter::once(head)
+        .chain(f.worker.state.queued_requests(autonomous).iter().copied())
+        .collect();
+    reply.send(busy_join_error(code, true)).unwrap();
+    f.worker.finish_native_submissions(false);
+    assert_eq!(f.request(head).phase, RequestPhase::Queued);
+    assert_eq!(f.worker.state.queued_requests(autonomous), expected_queue);
+
+    reopen_after_interrupt(&mut f);
+    poll_autonomous(&mut f, "working", 11, false, None);
+    assert_eq!(
+        f.worker.state.agent(autonomous).unwrap().current_request,
+        None
+    );
+    assert_eq!(f.worker.state.queued_requests(autonomous), expected_queue);
+    let foreign_episode = f.worker.state.send_interrupt_target(autonomous).unwrap();
+    assert!(foreign_episode.target.is_none());
+    assert_eq!(
+        foreign_episode.provider_turn_id.as_deref(),
+        Some("provider-turn-b")
+    );
+    let params = json!({"room": f.room.0.to_string(), "to": ["autonomous"], "text": "still in B"});
+    let repeated = send(&mut f, params);
+    assert!(repeated.ok, "{repeated:?}");
+    assert_eq!(repeated.result["stage"], "queued");
+    assert_eq!(
+        (
+            repeated.result["interrupts"][0]["outcome"].as_str(),
+            stop_keys(&f).len()
+        ),
+        (Some("unknown"), 2)
+    );
+    let state = f.worker.store.load().unwrap().unwrap();
+    assert!(state.request(head).unwrap().send_interrupt_claim.is_none());
+    assert!(state.send_interrupt_already_claimed(autonomous, &foreign_episode));
+    assert_eq!(
+        state.queued_requests(autonomous).last(),
+        Some(&sent_request(&repeated))
+    );
+
+    autonomous_started_with_prompt(&mut f, autonomous, "provider-turn-c", "provider work C");
+    poll_autonomous(&mut f, "working", 12, false, None);
+    let params = json!({"room": f.room.0.to_string(), "to": ["autonomous"], "text": "new turn C"});
+    let next = send(&mut f, params);
+    assert!(next.ok, "{next:?}");
+    assert_eq!(next.result["stage"], "queued");
+    assert_eq!(next.result["interrupts"][0]["outcome"], "interrupting");
+    assert_eq!(stop_keys(&f).len(), 3);
+    assert_eq!(recorded_stop_terminals(&f), ["autonomous-terminal"; 3]);
+}
+
+#[test]
+fn definitely_requeued_join_keeps_the_foreign_stop_claim_after_reopen() {
+    requeued_join_keeps_the_foreign_stop_claim(None);
+}
+
+#[test]
+fn composer_busy_requeued_join_keeps_the_foreign_stop_claim_after_reopen() {
+    requeued_join_keeps_the_foreign_stop_claim(Some(crate::protocol::api::AGENT_COMPOSER_BUSY));
 }
