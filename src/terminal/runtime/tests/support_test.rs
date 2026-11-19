@@ -192,6 +192,8 @@ impl TerminalRuntime {
                 #[cfg(unix)]
                 shared_codex: Arc::new(Mutex::new(None)),
                 #[cfg(unix)]
+                native_startup_confirmed: Arc::new(AtomicBool::new(false)),
+                #[cfg(unix)]
                 native_input_override: Mutex::new(None),
                 preserve_processes_on_drop: true,
                 shell_integration: None,

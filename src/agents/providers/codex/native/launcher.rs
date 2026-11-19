@@ -1,5 +1,5 @@
 //! Executed in the initialized pane shell, then replaced by the native TUI.
-use super::{remote_argv, rpc::Rpc, runtime};
+use super::{remote_argv, rpc::Rpc, runtime, MODE_FILE, STANDALONE_MODE};
 use crate::platform::owned_process::{
     acquire_writer_lock, ensure_owner_alive, inherit_writer_lock, supervised_command,
     terminate_group,
@@ -51,11 +51,11 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         argv.to_vec()
     };
     fs::write(
-        Path::new(directory).join("mode"),
+        Path::new(directory).join(MODE_FILE),
         if attached {
             b"native".as_slice()
         } else {
-            b"standalone".as_slice()
+            STANDALONE_MODE
         },
     )?;
     let mut command = Command::new(&tui[0]);

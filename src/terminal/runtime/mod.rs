@@ -186,6 +186,8 @@ pub struct TerminalRuntime {
     /// call when one is.
     #[cfg(unix)]
     shared_codex: Arc<Mutex<Option<crate::agents::providers::codex::native::Runtime>>>,
+    #[cfg(unix)]
+    native_startup_confirmed: Arc<AtomicBool>,
     /// Test stand-in for the admission port. Empty in production tests, so
     /// admission still uses the pane runtime above.
     #[cfg(all(test, unix))]
@@ -353,17 +355,20 @@ impl TerminalRuntime {
                 .shared_codex
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = Some(runtime);
+            self.native_startup_confirmed
+                .store(false, Ordering::Release);
         }
     }
 
     #[cfg(unix)]
     pub(crate) fn launch_shared_codex(&self, argv: Vec<String>) -> std::io::Result<Vec<String>> {
-        match self
+        let mut runtime = self
             .shared_codex
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_mut()
-        {
+            .unwrap_or_else(|error| error.into_inner());
+        self.native_startup_confirmed
+            .store(false, Ordering::Release);
+        match runtime.as_mut() {
             Some(runtime) => runtime.launch(&argv),
             None => Ok(argv),
         }
@@ -402,6 +407,7 @@ impl TerminalRuntime {
         }
         Some(Arc::new(native_input::PaneCodex::new(
             self.shared_codex_handle(),
+            self.native_startup_confirmed.clone(),
         )))
     }
 

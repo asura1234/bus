@@ -981,3 +981,7 @@ mod codex_native_tests;
 
 #[path = "codex_legacy_submission_test.rs"]
 mod codex_legacy_submission_tests;
+
+#[cfg(unix)]
+#[path = "codex_startup_test.rs"]
+mod codex_startup_tests;

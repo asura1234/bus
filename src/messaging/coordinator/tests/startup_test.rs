@@ -2064,3 +2064,71 @@ fn definite_launch_rejection_after_shell_retry_allows_later_recovery() {
 
 #[path = "startup_retry_test.rs"]
 mod startup_retry_tests;
+
+#[test]
+fn native_startup_wait_preserves_the_queue_through_blocked_and_ready_retry() {
+    let mut waiting = native_info("pane", "codex", "session");
+    waiting.launch_pending = true;
+    waiting.interactive_ready = false;
+    waiting.native_ready = false;
+    let mut blocked = waiting.clone();
+    blocked.agent_status = schema::AgentStatus::Blocked;
+    let mut ready = waiting.clone();
+    ready.launch_pending = false;
+    ready.interactive_ready = true;
+    ready.native_ready = true;
+    let replies = vec![
+        Ok(ResponseResult::AgentList {
+            agents: vec![waiting],
+        }),
+        Ok(ResponseResult::AgentList {
+            agents: vec![blocked],
+        }),
+        Ok(ResponseResult::AgentList {
+            agents: vec![ready.clone()],
+        }),
+        Ok(ResponseResult::AgentPrompted {
+            agent: ready,
+            timestamps: Default::default(),
+        }),
+    ];
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, replies);
+    let request = queue(&mut worker, room, agent, "first queued task");
+    for expected in [RuntimeStatus::Launching, RuntimeStatus::Blocked] {
+        worker.poll().unwrap();
+        worker.submit_ready().unwrap();
+        assert_eq!(worker.state.agent(agent).unwrap().status, expected);
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Queued
+        );
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_none());
+        assert!(!calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|method| method.starts_with("agent.prompt")));
+    }
+    worker.poll().unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| method.starts_with("agent.prompt"))
+            .count(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

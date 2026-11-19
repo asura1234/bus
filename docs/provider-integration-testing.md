@@ -1115,3 +1115,20 @@ idle then deliver, and an approval card without `--yolo`.
   or missing hooks still require confirmation before capture is initialized.
   Cover adding a second Grok agent (including a MASTER orchestrator) in the
   same project, and a hook file changed during identity validation.
+
+- **2026-11-19 — Codex native startup precedes usable input:** Screen Idle
+  and `bus.agent.ready` can precede the attached TUI's loaded thread. Captured
+  logs show agent 20057 reported ready at 03:31:32.607Z, but native
+  preflight rejected its first request because no unique loaded thread existed.
+  Keep native startup in launch progress until bounded read-only metadata proves
+  one idle loaded thread and a current idle frontend. Cached Idle masked as
+  Unknown must not confirm the first readiness; an admitted launch keeps its
+  readiness through later skipped detector frames. Do not downgrade the raw
+  `prompt_not_shown` or `agent_not_idle` errors globally: genuine post-readiness
+  refusal still needs its WARN. Once ready, an unbound Codex frontend's Working
+  projection must use native-only turn admission just like a bound frontend;
+  native idle may accept, real busy must refuse, and typed fallback stays forbidden.
+  Cover empty/ambiguous/active threads, a missing
+  endpoint, standalone fallback, queued delivery, and a fresh runtime on the
+  same pane. Native-wire fixtures are regression evidence, not real-model
+  acceptance; repeat first-launch acceptance on the final head separately.

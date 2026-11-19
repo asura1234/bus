@@ -1,4 +1,5 @@
 mod info;
+pub(in crate::server) use info::startup_readiness;
 
 use std::time::{Duration, Instant};
 
