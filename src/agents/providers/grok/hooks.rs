@@ -1,27 +1,10 @@
 //! Native Grok observations. A Stop gate is never a publishable final.
+use crate::agents::providers::callback_entry::is_foreign_callback;
 use crate::agents::providers::{
     spool::{field, Parsed},
     ProviderKind,
 };
 use serde_json::Value;
-
-/// Grok imports Claude/Cursor hook commands but sends its own camelCase payload.
-/// Filter that traffic before another adapter can spool a malformed observation;
-/// actual native callbacks on those adapters keep their existing behavior.
-pub(crate) fn is_foreign_callback(adapter: ProviderKind, value: &Value) -> bool {
-    match adapter {
-        // Grok 1.0.70 sends its native event and Claude-compatible alias in
-        // the same envelope. The native field decides ownership.
-        ProviderKind::Grok => {
-            value.get("hookEventName").is_none() && value.get("hook_event_name").is_some()
-        }
-        // AGY natively sends camelCase `hookEventName` without `hook_event_name`.
-        ProviderKind::Agy => {
-            value.get("hookEventName").is_none() || value.get("hook_event_name").is_some()
-        }
-        _ => value.get("hookEventName").is_some(),
-    }
-}
 
 pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
     if is_foreign_callback(ProviderKind::Grok, value) {

@@ -1,7 +1,7 @@
 //! Bounded durable retries and transcript-backed completion settlement for AGY workers.
 use super::{
     callback, callbacks,
-    grok_callbacks::{claim_with_policy, observation_paths_with_ext, Claim},
+    callback_observations::{claim_with_policy, observation_paths_with_ext, Claim},
     AgentId, BusState, CallbackEventKind, CallbackRecordResult, ControlFlow, Path,
     ProviderCallback, Worker,
 };

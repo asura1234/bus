@@ -23,6 +23,8 @@ enum CallbackFlow {
 mod agy_callbacks;
 #[path = "callback_binding.rs"]
 mod binding;
+#[path = "callback_observations.rs"]
+mod callback_observations;
 #[path = "callback_completion.rs"]
 mod completion;
 #[path = "grok_callbacks.rs"]

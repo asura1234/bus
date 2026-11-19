@@ -1,10 +1,29 @@
 //! Observation-only hook entry, before ordinary CLI parsing and session checks.
 use super::{claude_code::statusline, spool, ProviderKind};
 use crate::utils::logging::{self, LoggingOptions};
+use serde_json::Value;
 use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
+
+/// Grok imports Claude/Cursor hook commands but sends its own camelCase payload.
+/// Filter that traffic before another adapter can spool a malformed observation;
+/// actual native callbacks on those adapters keep their existing behavior.
+pub(super) fn is_foreign_callback(adapter: ProviderKind, value: &Value) -> bool {
+    match adapter {
+        // Grok 1.0.70 sends its native event and Claude-compatible alias in
+        // the same envelope. The native field decides ownership.
+        ProviderKind::Grok => {
+            value.get("hookEventName").is_none() && value.get("hook_event_name").is_some()
+        }
+        // AGY natively sends camelCase `hookEventName` without `hook_event_name`.
+        ProviderKind::Agy => {
+            value.get("hookEventName").is_none() || value.get("hook_event_name").is_some()
+        }
+        _ => value.get("hookEventName").is_some(),
+    }
+}
 
 /// The Bus server's pid, set on every pane. Its child is the pane shell, so a hook
 /// can tell the pane's own agent from a provider that agent started.
@@ -100,7 +119,7 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
         return Err(io::Error::other("Bus callback exceeds 2 MiB"));
     }
     let value = serde_json::from_slice(&bytes)?;
-    if super::grok::hooks::is_foreign_callback(provider, &value) {
+    if is_foreign_callback(provider, &value) {
         tracing::debug!(event = "bus.callback.ignored", provider = ?provider,
             reason = "foreign_provider_hook", "Hook belongs to another provider");
         return Ok(());

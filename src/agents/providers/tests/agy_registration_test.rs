@@ -93,7 +93,7 @@ fn agy_hooks_parse_session_outer_turn_and_reconcile_stop() {
     assert_eq!(stop_verdict(&bg).unwrap(), StopVerdict::BackgroundPending);
 
     // Foreign callback filter allows native AGY camelCase and rejects Grok dual-envelope traffic.
-    assert!(!super::grok::hooks::is_foreign_callback(
+    assert!(!super::callback_entry::is_foreign_callback(
         ProviderKind::Agy,
         &outer
     ));
@@ -102,7 +102,7 @@ fn agy_hooks_parse_session_outer_turn_and_reconcile_stop() {
         "hook_event_name": "SessionStart",
         "sessionId": "grok-1",
     });
-    assert!(super::grok::hooks::is_foreign_callback(
+    assert!(super::callback_entry::is_foreign_callback(
         ProviderKind::Agy,
         &grok_dual
     ));
