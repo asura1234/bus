@@ -32,14 +32,6 @@ pub(super) struct ReplyDeliveryRetry {
 }
 
 impl Worker {
-    pub(super) fn reply_waiter_now(&self) -> std::time::Instant {
-        #[cfg(test)]
-        if let Some(now) = self.test_reply_waiter_now {
-            return now;
-        }
-        std::time::Instant::now()
-    }
-
     /// Retaining a wake must not keep pasting into a broken composer forever.
     /// Status, identity or queue changes permit a fresh attempt; repeated
     /// idle polls alone do not.
@@ -119,22 +111,7 @@ impl Worker {
         let mut state = self.state.clone();
         let now_ms = super::io::now_ms();
         let mut changed = self.prepare_provider_retries(&mut state, now_ms);
-        {
-            let now = self.reply_waiter_now();
-            // Keep lease registration ordered with the in-memory routing decision.
-            // Release the lock before any storage or provider operations.
-            let mut waiters = self
-                .reply_waiters
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            waiters.retain(|_, at| {
-                now.saturating_duration_since(*at) < std::time::Duration::from_secs(3)
-            });
-            let waited = waiters.keys().copied().collect();
-            changed |= state
-                .route_worker_replies(now_ms, &waited)
-                .map_err(|error| error.to_string())?;
-        }
+        changed |= self.route_replies_with_waiters(&mut state, now_ms)?;
         changed |= self.prepare_orchestrator_inboxes(&mut state, now_ms);
         if changed {
             self.save(state)?;
