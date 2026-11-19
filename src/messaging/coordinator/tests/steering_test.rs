@@ -1576,6 +1576,41 @@ fn agy_unbound_onboarding_turn_stays_queued_while_bound_turn_steers() {
 }
 
 #[test]
+fn agy_hooks_child_invocation_leaves_parent_and_steered_request_intact() {
+    let mut fixture = Fixture::new(Provider::Agy);
+    let lead = running(&mut fixture, "review the change", "1");
+    let steered = fixture.send("include the regression test", false);
+    fixture.deliver();
+    assert_eq!(fixture.request(steered).group, Some(lead));
+
+    let logs = fixture.dir.join("agy-brain/child/.system_generated/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let transcript = logs.join("transcript_full.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"step_index\":0,\"source\":\"SYSTEM\",\"type\":\"SYSTEM_MESSAGE\",\"status\":\"DONE\"}\n",
+    )
+    .unwrap();
+    fixture.record(json!({
+        "hookEventName": "PreInvocation",
+        "conversationId": "child",
+        "invocationNum": 0,
+        "initialNumSteps": 0,
+        "lastUserInput": "",
+        "transcriptPath": transcript,
+    }));
+    fixture.consume();
+    assert_eq!(fixture.error(), None);
+
+    fixture.stopped("1", "review complete");
+    fixture.consume();
+    for request in [lead, steered] {
+        assert_eq!(fixture.request(request).phase, RequestPhase::Completed);
+        assert_eq!(fixture.reply(request).as_deref(), Some("review complete"));
+    }
+}
+
+#[test]
 fn agy_corrupt_completed_transcript_fails_closed_and_preexisting_error_keeps_pending_retries() {
     // Part 1: Corrupt completed UTF-8 record fails the turn closed and retains actionable_error.
     let mut corrupt = Fixture::new(Provider::Agy);
