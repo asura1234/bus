@@ -37,6 +37,7 @@ fn pane_info(
 ) -> crate::protocol::api::schema::PaneInfo {
     crate::protocol::api::schema::PaneInfo {
         agent_process_exited: false,
+        agent_exited_session_id: None,
         pane_id: pane_id.into(),
         terminal_id: "term_1".into(),
         workspace_id: "ws_1".into(),

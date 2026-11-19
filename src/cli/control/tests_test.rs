@@ -574,11 +574,6 @@ fn commands_route_to_exact_methods_with_string_selectors() {
             json!({"request": "64", "confirm": true, "as": "codex1"}),
         ),
         (
-            &["request", "recover", "64", "--confirm", "--retire-terminal"],
-            "request.recover",
-            json!({"request": "64", "confirm": true, "retire_terminal": true}),
-        ),
-        (
             &["history", "--room", "Planning"],
             "room.history",
             json!({"room": "Planning"}),
@@ -591,6 +586,11 @@ fn commands_route_to_exact_methods_with_string_selectors() {
         assert_eq!(parsed.request_id, "generated-request", "{args:?}");
         assert!(parsed.wait_timeout.is_none(), "{args:?}");
     }
+}
+
+#[test]
+fn request_recovery_rejects_the_removed_destructive_flag() {
+    assert!(command(&["request", "recover", "64", "--confirm", "--retire-terminal"]).is_err());
 }
 
 #[test]

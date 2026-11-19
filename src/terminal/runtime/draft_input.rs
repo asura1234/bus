@@ -15,7 +15,8 @@ pub(super) struct DraftInput {
     revision: u64,
     invalidation_revision: u64,
     pending: Option<PendingPaste>,
-    confirmed: Option<ConfirmedPaste>,
+    confirmed: Vec<ConfirmedPaste>,
+    confirmed_revoked: bool,
     completed_retirement: Option<String>,
     session: Option<String>,
     working_started: Option<Instant>,
@@ -32,7 +33,8 @@ impl Default for DraftInput {
             revision: 0,
             invalidation_revision: 0,
             pending: None,
-            confirmed: None,
+            confirmed: Vec::new(),
+            confirmed_revoked: false,
             completed_retirement: None,
             session: None,
             working_started: None,
@@ -52,10 +54,12 @@ pub(super) struct PendingPaste {
 }
 
 pub(super) struct ConfirmedPaste {
-    pub(super) session: String,
+    pub(super) session: Option<String>,
+    pub(super) opaque: bool,
     pub(super) payload: String,
     pub(super) body: String,
     pub(super) stopped: bool,
+    pub(super) cleanup_started: bool,
     pub(super) attempt: Option<String>,
     pub(super) final_clear_revision: Option<u64>,
     pub(super) paste: PendingPaste,
@@ -87,11 +91,24 @@ impl DraftInput {
 
     pub(super) fn bind_session(state: &SharedDraftInput, session: &str) {
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.session.as_deref() != Some(session) {
-            state.revision = state.revision.wrapping_add(1);
-            state.confirmed = None;
-            state.invalidation_revision = state.invalidation_revision.wrapping_add(1);
-            state.session = Some(session.to_owned());
+        match state.session.as_deref() {
+            Some(current) if current == session => {}
+            None => {
+                // First binding may follow Enter on the same PTY. Raw input
+                // and process replacement already revoke unbound witnesses.
+                for confirmed in &mut state.confirmed {
+                    confirmed.session = Some(session.to_owned());
+                }
+                state.session = Some(session.to_owned());
+            }
+            Some(_) => {
+                state.revision = state.revision.wrapping_add(1);
+                let had_confirmed = !state.confirmed.is_empty();
+                state.confirmed.clear();
+                state.confirmed_revoked |= had_confirmed;
+                state.invalidation_revision = state.invalidation_revision.wrapping_add(1);
+                state.session = Some(session.to_owned());
+            }
         }
     }
 
@@ -127,7 +144,9 @@ impl DraftInput {
         if result.is_ok() {
             state.revision = state.revision.wrapping_add(1);
             state.pending = None;
-            state.confirmed = None;
+            let had_confirmed = !state.confirmed.is_empty();
+            state.confirmed.clear();
+            state.confirmed_revoked |= had_confirmed;
         }
         result
     }
@@ -171,7 +190,9 @@ impl DraftInput {
         state.revision = state.revision.wrapping_add(1);
         state.invalidation_revision = state.invalidation_revision.wrapping_add(1);
         state.pending = None;
-        state.confirmed = None;
+        let had_confirmed = !state.confirmed.is_empty();
+        state.confirmed.clear();
+        state.confirmed_revoked |= had_confirmed;
         state.session = None;
         state.working_started = None;
         state.completed_turn = None;
@@ -224,14 +245,34 @@ impl DraftInputLease {
         Ok(())
     }
 
-    pub(super) fn take_confirmed(&self) -> Option<ConfirmedPaste> {
-        self.state.lock().ok()?.confirmed.take()
+    pub(super) fn take_confirmed(&self) -> Vec<ConfirmedPaste> {
+        self.state
+            .lock()
+            .map(|mut state| std::mem::take(&mut state.confirmed))
+            .unwrap_or_default()
     }
 
-    pub(super) fn retain_confirmed(&self, confirmed: ConfirmedPaste) {
+    pub(super) fn confirmed_revoked(&self) -> bool {
+        self.state.lock().is_ok_and(|state| state.confirmed_revoked)
+    }
+
+    pub(super) fn retain_confirmed(&self, mut confirmed: ConfirmedPaste, joined: bool) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.revision == self.revision && state.session.as_ref() == Some(&confirmed.session) {
-            state.confirmed = Some(confirmed);
+        if state.revision == self.revision
+            && (confirmed.session.is_none() || state.session == confirmed.session)
+        {
+            confirmed.session.clone_from(&state.session);
+            state.confirmed_revoked = false;
+            if joined {
+                state
+                    .confirmed
+                    .retain(|previous| previous.payload != confirmed.payload);
+            } else {
+                state.confirmed.clear();
+            }
+            state.confirmed.push(confirmed);
+        } else {
+            state.confirmed_revoked = true;
         }
     }
 

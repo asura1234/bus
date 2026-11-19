@@ -27,7 +27,7 @@ struct Screen {
     clear_on_confirm: bool,
     selected_option: usize,
     driver_presses: Vec<schema::AgentPressParams>,
-    driver_observations: u32,
+    driver_observations: Vec<Option<String>>,
     native_gets: u32,
     durable_reservation: Option<(PathBuf, AgentId)>,
 }
@@ -79,12 +79,12 @@ impl Transport for FakeServer {
                     agents: vec![screen.info("pane")],
                 }
             }
-            Method::AgentObserve(_) => {
+            Method::AgentObserve(params) => {
                 assert!(
                     screen.allow_driver_input,
                     "blocker verification must consume one coherent native projection"
                 );
-                screen.driver_observations += 1;
+                screen.driver_observations.push(params.selection_label);
                 ResponseResult::TerminalObserved {
                     observation: automatic_observation(&screen),
                 }

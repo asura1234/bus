@@ -64,22 +64,10 @@ impl Worker {
             })
             .map(|request| request.id)
             .collect();
-        for id in created {
-            let Some((room, recipients)) = state
-                .request(id)
-                .map(|request| (request.room_id, request.prompt.recipient_ids.clone()))
-            else {
-                continue;
-            };
-            self.interrupt_queued_message(
-                &mut state,
-                room,
-                &recipients,
-                &crate::messaging::model::Author::Developer,
-                now,
-            );
-        }
+        super::stage_send_interrupts(&mut state, &created)?;
         self.save(state)?;
+        self.dispatch_committed_send_interrupts(&created, now);
+        self.note_requests_queued(&created);
         serde_json::to_value(outcome).map_err(|error| error.to_string())
     }
 }

@@ -438,114 +438,6 @@ fn a_completed_anchor_cannot_release_unretired_joined_input() {
     assert_eq!(f.request(follower).phase, RequestPhase::Queued);
 }
 
-struct RetirementClose(Arc<Mutex<Vec<Method>>>, bool);
-
-impl Transport for RetirementClose {
-    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        if matches!(&method, Method::PaneLocateProcess(_)) {
-            return Ok(ResponseResult::CallerLocation {
-                location: crate::protocol::api::schema::CallerLocation {
-                    pane: None,
-                    agent_owned: false,
-                },
-            });
-        }
-        if matches!(&method, Method::PaneCloseIfIdentity(_)) {
-            self.0.lock().unwrap().push(method);
-            return if self.1 {
-                Ok(ResponseResult::Ok {})
-            } else {
-                Err(TransportError {
-                    code: Some("terminal_identity_changed".into()),
-                    message: "The old terminal still has unverifiable ownership".into(),
-                    definitely_rejected: true,
-                    timestamps: Default::default(),
-                })
-            };
-        }
-        Native(self.0.clone()).request(method)
-    }
-}
-
-#[test]
-fn revoked_or_missing_receipt_requires_verified_terminal_retirement() {
-    let mut f = Fixture::new(Provider::ClaudeDs);
-    let lead = running(&mut f, "original input", "turn-1");
-    let first = f.send("first follower", true);
-    let second = f.send("second follower", true);
-    f.worker.transport = Box::new(UnconfirmedRetirement(f.native.clone()));
-    assert!(interrupt(&mut f).ok);
-    f.status(RuntimeStatus::Idle);
-    f.worker.transport = Box::new(RetirementClose(f.native.clone(), false));
-    assert!(confirm_retirement_in_ui(&mut f, lead).is_err());
-    assert!(f.request(lead).interrupt_retirement_pending);
-    assert_eq!(f.worker.state.queued_requests(f.agent), &[first, second]);
-    // Reopen the actual Worker to check the old terminal fence survives.
-    let old_worker = std::mem::replace(
-        &mut f.worker,
-        Worker::open(
-            crate::utils::test_temp::unique_temp_path("retirement-restart-swap"),
-            Box::new(Native(f.native.clone())),
-        )
-        .unwrap(),
-    );
-    drop(old_worker);
-    f.worker = Worker::open(
-        f.dir.clone(),
-        Box::new(RetirementClose(f.native.clone(), true)),
-    )
-    .unwrap();
-    assert!(f.request(lead).interrupt_retirement_pending);
-    confirm_retirement_in_ui(&mut f, lead).unwrap();
-    assert_eq!(
-        f.request(lead).failure_reason.as_deref(),
-        Some("interrupt_outcome_unknown")
-    );
-    assert_eq!(f.worker.state.queued_requests(f.agent), &[first, second]);
-    assert_eq!(f.worker.state.agent(f.agent).unwrap().current_request, None);
-    confirm_retirement_in_ui(&mut f, lead).unwrap();
-    let calls = f.native.lock().unwrap();
-    let closes: Vec<_> = calls
-        .iter()
-        .filter_map(|call| match call {
-            Method::PaneCloseIfIdentity(p) => Some(p),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(closes.len(), 2);
-    assert!(closes.iter().all(|p| p.expected_terminal_id == "terminal"
-        && p.expected_session_id.as_deref() == Some("session")));
-    drop(calls);
-    // Once a new session is ready, only the two queued requests may run.
-    let mut state = f.worker.state.clone();
-    let mut identity = state.agent(f.agent).unwrap().runtime_identity.clone();
-    identity.pane_id = Some("pane".into());
-    identity.terminal_id = Some("new-terminal".into());
-    state.set_agent_runtime_identity(f.agent, identity).unwrap();
-    f.worker.save(state).unwrap();
-    f.status(RuntimeStatus::Idle);
-    f.deliver();
-    assert_eq!(
-        f.typed_content().last(),
-        Some(&("first follower".into(), false))
-    );
-    f.started("turn-2", "first follower");
-    f.consume();
-    f.stopped("turn-2", "done first");
-    f.consume();
-    f.status(RuntimeStatus::Idle);
-    f.deliver();
-    assert_eq!(
-        f.typed_content().last(),
-        Some(&("second follower".into(), false))
-    );
-    assert_eq!(
-        f.typed().len(),
-        3,
-        "no replay or duplicate follower dispatch"
-    );
-}
-
 #[test]
 fn claude_interrupt_mode_composer_journal_persists_each_follower_once() {
     let mut f = Fixture::new(Provider::ClaudeDs);
@@ -593,80 +485,17 @@ fn idle_unresolved_request_can_retry_guarded_retirement() {
     assert!(!f.request(lead).interrupt_retirement_pending);
 }
 
-fn retire_with_caller(
-    f: &mut Fixture,
-    lead: RequestId,
-    nonce: &str,
-    caller: Option<Value>,
-) -> crate::messaging::control::Response {
-    let mut params =
-        json!({"request": lead.0.to_string(), "confirm": true, "retire_terminal": true});
-    if let Some(caller) = caller {
-        params["caller"] = caller;
-    }
-    f.worker.control_response_with_events(
-        &crate::messaging::control::Request {
-            id: nonce.into(),
-            method: "request.recover".into(),
-            params,
-        },
-        None,
-    )
-}
-
-struct RetirementOperator(Arc<Mutex<Vec<Method>>>, Option<bool>);
-
-impl Transport for RetirementOperator {
-    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-        match &method {
-            Method::PaneLocateProcess(_) => {
-                self.0.lock().unwrap().push(method);
-                let agent_owned = self.1.ok_or_else(|| TransportError {
-                    code: Some("caller_unknown".into()),
-                    message: "unresolved process".into(),
-                    definitely_rejected: true,
-                    timestamps: Default::default(),
-                })?;
-                let pane = agent_owned.then(|| {
-                    serde_json::from_value(json!({
-                        "terminal_id":"terminal", "pane_id":"pane", "agent":"claude",
-                        "workspace_id":"w", "tab_id":"t", "focused":false,
-                        "agent_status":"working", "revision":1
-                    }))
-                    .unwrap()
-                });
-                Ok(ResponseResult::CallerLocation {
-                    location: crate::protocol::api::schema::CallerLocation { pane, agent_owned },
-                })
-            }
-            _ => RetirementClose(self.0.clone(), true).request(method),
-        }
-    }
-}
-
-fn confirm_retirement_in_ui(f: &mut Fixture, request: RequestId) -> Result<(), String> {
-    let original = f.request(request).native_delivery_identity.clone().unwrap();
-    f.worker.command(
-        BusCommand::ConfirmTerminalRetirement { request, original },
-        &mpsc::channel().0,
-    )
-}
-
-fn verified_retirement_caller() -> Value {
-    json!({"process":{"pid":123,"birth":456}})
-}
-
 #[test]
 fn round2_deferred_joined_answers_survive_guarded_retry() {
     deferred_joined_answers_survive_retirement(false);
 }
 
 #[test]
-fn round2_deferred_joined_answers_survive_confirmed_teardown() {
+fn round2_deferred_joined_answers_survive_verified_original_exit() {
     deferred_joined_answers_survive_retirement(true);
 }
 
-fn deferred_joined_answers_survive_retirement(teardown: bool) {
+fn deferred_joined_answers_survive_retirement(exited: bool) {
     let mut f = Fixture::new(Provider::ClaudeDs);
     let lead = running(&mut f, "original input", "turn-1");
     let member = f.send("joined correction", false);
@@ -684,9 +513,14 @@ fn deferred_joined_answers_survive_retirement(teardown: bool) {
         f.worker.state.agent(f.agent).unwrap().current_request,
         Some(lead)
     );
-    if teardown {
-        f.worker.transport = Box::new(RetirementOperator(f.native.clone(), Some(false)));
-        confirm_retirement_in_ui(&mut f, lead).unwrap();
+    if exited {
+        f.worker.transport = Box::new(ObservedOriginalExit {
+            calls: f.native.clone(),
+            terminal: "terminal",
+            exited: true,
+        });
+        let response = recover_held_request(&mut f, lead);
+        assert!(response.ok, "{response:?}");
         let mut state = f.worker.state.clone();
         let mut identity = state.agent(f.agent).unwrap().runtime_identity.clone();
         identity.terminal_id = Some("replacement".into());
@@ -706,7 +540,7 @@ fn deferred_joined_answers_survive_retirement(teardown: bool) {
     assert_eq!(
         f.reply(member).as_deref(),
         Some("member answer"),
-        "teardown={teardown}"
+        "original exited={exited}"
     );
     assert_eq!(
         f.request(member).provider_turn_id.as_deref(),
@@ -720,100 +554,6 @@ fn deferred_joined_answers_survive_retirement(teardown: bool) {
         f.typed_content().last(),
         Some(&("queued follower".into(), false))
     );
-}
-
-#[test]
-fn round2_terminal_retirement_requires_a_verified_developer_operator() {
-    let mut f = Fixture::new(Provider::ClaudeDs);
-    let lead = running(&mut f, "original input", "turn-1");
-    f.worker.transport = Box::new(UnconfirmedRetirement(f.native.clone()));
-    assert!(interrupt(&mut f).ok);
-    for (nonce, native_owner, caller) in [
-        ("omitted-caller", Some(true), None),
-        (
-            "agent-origin",
-            Some(true),
-            Some(verified_retirement_caller()),
-        ),
-        (
-            "unresolved-origin",
-            None,
-            Some(verified_retirement_caller()),
-        ),
-    ] {
-        f.worker.transport = Box::new(RetirementOperator(f.native.clone(), native_owner));
-        let response = retire_with_caller(&mut f, lead, nonce, caller);
-        assert!(!response.ok, "{nonce}: {response:?}");
-        assert!(f.request(lead).interrupt_retirement_pending);
-        assert!(!f
-            .native
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|m| matches!(m, Method::PaneCloseIfIdentity(_))));
-    }
-    // Even the in-process confirmation path checks the coordinator-owning UI.
-    for unverifiable_ui in [Some(true), None] {
-        f.worker.transport = Box::new(RetirementOperator(f.native.clone(), unverifiable_ui));
-        assert!(confirm_retirement_in_ui(&mut f, lead).is_err());
-        assert!(f.request(lead).interrupt_retirement_pending);
-    }
-    assert!(!f
-        .native
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|method| matches!(method, Method::PaneCloseIfIdentity(_))));
-    f.worker.transport = Box::new(RetirementOperator(f.native.clone(), Some(false)));
-    confirm_retirement_in_ui(&mut f, lead).unwrap();
-    assert_eq!(
-        f.native
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|m| matches!(m, Method::PaneCloseIfIdentity(_)))
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn round2_first_interrupt_never_retires_a_preexisting_replacement_terminal() {
-    let mut f = Fixture::new(Provider::ClaudeDs);
-    let lead = running(&mut f, "original input", "turn-1");
-    let follower = f.send("queued follower", true);
-    let mut state = f.worker.state.clone();
-    let mut replacement = state.agent(f.agent).unwrap().runtime_identity.clone();
-    replacement.terminal_id = Some("terminal-B".into());
-    replacement.pane_id = Some("pane-B".into());
-    state
-        .set_agent_runtime_identity(f.agent, replacement.clone())
-        .unwrap();
-    f.worker.save(state).unwrap();
-    f.worker.transport = Box::new(UnconfirmedRetirement(f.native.clone()));
-    assert!(interrupt(&mut f).ok);
-    f.worker.transport = Box::new(RetirementOperator(f.native.clone(), Some(false)));
-    confirm_retirement_in_ui(&mut f, lead).unwrap();
-    let calls = f.native.lock().unwrap();
-    let targets: Vec<_> = calls
-        .iter()
-        .filter_map(|method| match method {
-            Method::PaneCloseIfIdentity(p) => {
-                Some((p.expected_terminal_id.as_str(), p.pane_id.as_str()))
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(targets, [("terminal", "pane")]);
-    assert!(!calls
-        .iter()
-        .any(|method| matches!(method, Method::AgentSendKeys(p) if p.target == "pane-B")));
-    drop(calls);
-    assert_eq!(
-        f.worker.state.agent(f.agent).unwrap().runtime_identity,
-        replacement
-    );
-    assert_eq!(f.request(follower).phase, RequestPhase::Queued);
 }
 
 struct IdleRetirementPoll {
@@ -885,7 +625,7 @@ fn round2_joined_answer_published_after_native_retry_survives_the_idle_tick() {
 }
 
 #[test]
-fn round2_legacy_delivery_without_original_identity_refuses_destructive_recovery() {
+fn legacy_delivery_without_original_identity_cannot_use_exit_evidence() {
     let mut f = Fixture::new(Provider::ClaudeDs);
     let lead = running(&mut f, "original input", "turn-1");
     let follower = f.send("queued follower", true);
@@ -902,24 +642,12 @@ fn round2_legacy_delivery_without_original_identity_refuses_destructive_recovery
         .unwrap();
 
     assert_eq!(interrupt(&mut f).result["agents"][0]["outcome"], "failed");
-    f.worker.transport = Box::new(RetirementOperator(f.native.clone(), Some(false)));
-    let replacement = f
-        .worker
-        .state
-        .agent(f.agent)
-        .unwrap()
-        .runtime_identity
-        .clone();
-    assert!(f
-        .worker
-        .command(
-            BusCommand::ConfirmTerminalRetirement {
-                request: lead,
-                original: replacement
-            },
-            &mpsc::channel().0,
-        )
-        .is_err());
+    f.worker.transport = Box::new(ObservedOriginalExit {
+        calls: f.native.clone(),
+        terminal: "terminal",
+        exited: true,
+    });
+    assert!(!recover_held_request(&mut f, lead).ok);
     assert!(f.request(lead).interrupt_retirement_pending);
     assert_eq!(f.request(follower).phase, RequestPhase::Queued);
     assert!(!f.native.lock().unwrap().iter().any(|method| matches!(
@@ -928,116 +656,409 @@ fn round2_legacy_delivery_without_original_identity_refuses_destructive_recovery
     )));
 }
 
-#[test]
-fn out_of_pane_control_relay_cannot_authorize_destructive_retirement() {
-    let mut f = Fixture::new(Provider::ClaudeDs);
-    let lead = running(&mut f, "original input", "turn-1");
-    let follower = f.send("queued follower", true);
-    f.worker.transport = Box::new(UnconfirmedRetirement(f.native.clone()));
-    assert!(interrupt(&mut f).ok);
+struct ObservedOriginalExit {
+    calls: Arc<Mutex<Vec<Method>>>,
+    terminal: &'static str,
+    exited: bool,
+}
 
-    // The kernel peer is resolvable, but the native ancestry walk places it
-    // outside all managed panes. This also describes a local control relay.
-    f.worker.transport = Box::new(RetirementOperator(f.native.clone(), Some(false)));
-    let response = retire_with_caller(
-        &mut f,
-        lead,
-        "outside-pane-relay",
-        Some(verified_retirement_caller()),
-    );
-    let calls = f.native.lock().unwrap();
-    assert!(calls
-        .iter()
-        .any(|method| matches!(method, Method::PaneLocateProcess(_))));
-    assert!(
-        !calls
-            .iter()
-            .any(|method| matches!(method, Method::PaneCloseIfIdentity(_))),
-        "an ordinary control peer issued a destructive close: {response:?}"
-    );
-    assert!(!response.ok);
-    assert!(f.request(lead).interrupt_retirement_pending);
-    assert_eq!(f.request(follower).phase, RequestPhase::Queued);
+impl Transport for ObservedOriginalExit {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(method, Method::TerminalRequireAbsent(_)) {
+            self.calls.lock().unwrap().push(method);
+            return Err(TransportError {
+                code: Some("terminal_present".into()),
+                message: "original terminal remains attached or detached".into(),
+                definitely_rejected: true,
+                timestamps: Default::default(),
+            });
+        }
+        if matches!(method, Method::AgentListWithDetectionContext(_)) {
+            self.calls.lock().unwrap().push(method);
+            return Ok(ResponseResult::AgentList { agents: Vec::new() });
+        }
+        if let Method::PaneGet(params) = &method {
+            let pane = serde_json::from_value(json!({
+                "terminal_id": self.terminal, "pane_id": params.pane_id,
+                "workspace_id":"w", "tab_id":"t", "focused":false,
+                "agent_status":"unknown", "revision":1,
+                "agent_process_exited": self.exited,
+                "agent_exited_session_id": self.exited.then_some("session"),
+            }))
+            .unwrap();
+            self.calls.lock().unwrap().push(method);
+            return Ok(ResponseResult::PaneInfo { pane });
+        }
+        Native(self.calls.clone()).request(method)
+    }
+}
+
+fn recover_held_request(f: &mut Fixture, lead: RequestId) -> crate::messaging::control::Response {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    f.worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: format!("recover-original-{}", NEXT.fetch_add(1, Ordering::Relaxed)),
+            method: "request.recover".into(),
+            params: json!({"request": lead.0.to_string(), "confirm": true}),
+        },
+        None,
+    )
 }
 
 #[test]
-fn terminal_retirement_ui_confirmation_is_fenced_to_the_displayed_original() {
+fn claude_ds_missing_receipt_resolves_unknown_after_verified_original_exit_without_touching_drafts()
+{
     let mut f = Fixture::new(Provider::ClaudeDs);
     let lead = running(&mut f, "original input", "turn-1");
-    let follower = f.send("queued follower", true);
+    let first = f.send("first follower", true);
+    let second = f.send("second follower", true);
     f.worker.transport = Box::new(UnconfirmedRetirement(f.native.clone()));
-    assert!(interrupt(&mut f).ok);
-
-    let mut stale = f.request(lead).native_delivery_identity.clone().unwrap();
-    stale.session_id = Some("different-session".into());
-    let response = f.worker.command(
-        BusCommand::ConfirmTerminalRetirement {
-            request: lead,
-            original: stale,
-        },
-        &mpsc::channel().0,
+    assert_eq!(interrupt(&mut f).result["agents"][0]["outcome"], "failed");
+    f.status(RuntimeStatus::Idle);
+    for (terminal, exited) in [("terminal", false), ("replacement", true)] {
+        f.worker.transport = Box::new(ObservedOriginalExit {
+            calls: f.native.clone(),
+            terminal,
+            exited,
+        });
+        let _ = recover_held_request(&mut f, lead);
+        f.deliver();
+        assert!(f.request(lead).interrupt_retirement_pending);
+        assert_eq!(f.typed().len(), 1);
+    }
+    f.worker.transport = Box::new(ObservedOriginalExit {
+        calls: f.native.clone(),
+        terminal: "terminal",
+        exited: true,
+    });
+    let response = recover_held_request(&mut f, lead);
+    assert!(response.ok, "{response:?}");
+    assert!(f.request(lead).uncertain_outcome);
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("interrupt_outcome_unknown")
     );
-    assert!(response.is_err());
-    assert!(f.request(lead).interrupt_retirement_pending);
-    assert_eq!(f.request(follower).phase, RequestPhase::Queued);
-    assert!(!f
-        .native
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|method| matches!(method, Method::PaneCloseIfIdentity(_))));
-
-    f.worker.transport = Box::new(RetirementOperator(f.native.clone(), Some(false)));
-    confirm_retirement_in_ui(&mut f, lead).unwrap();
-    confirm_retirement_in_ui(&mut f, lead).unwrap();
+    assert_eq!(f.worker.state.queued_requests(f.agent), &[first, second]);
+    assert!(recover_held_request(&mut f, lead).ok);
+    assert!(!f.native.lock().unwrap().iter().any(|method| matches!(
+        method,
+        Method::PaneClose(_) | Method::PaneCloseIfIdentity(_)
+    )));
     assert_eq!(
         f.native
             .lock()
             .unwrap()
             .iter()
-            .filter(|method| matches!(method, Method::PaneCloseIfIdentity(_)))
+            .filter(|method| matches!(method, Method::AgentSendKeys(_)))
             .count(),
         1
     );
+
+    let mut state = f.worker.state.clone();
+    let mut identity = state.agent(f.agent).unwrap().runtime_identity.clone();
+    identity.pane_id = Some("pane".into());
+    identity.terminal_id = Some("new-terminal".into());
+    state.set_agent_runtime_identity(f.agent, identity).unwrap();
+    f.worker.save(state).unwrap();
+    f.status(RuntimeStatus::Idle);
+    f.deliver();
+    assert_eq!(
+        f.typed_content().last(),
+        Some(&("first follower".into(), false))
+    );
+    f.started("turn-2", "first follower");
+    f.consume();
+    f.stopped("turn-2", "done first");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    f.deliver();
+    assert_eq!(
+        f.typed_content().last(),
+        Some(&("second follower".into(), false))
+    );
+    assert_eq!(f.typed().len(), 3);
 }
 
-#[cfg(unix)]
 #[test]
-fn terminal_retirement_control_socket_ignores_forged_caller_and_refuses_an_agent() {
-    use crate::messaging::control;
-    use std::{thread, time::Duration};
+fn request_recovery_rejects_the_removed_destructive_wire_parameter() {
+    let mut f = Fixture::new(Provider::ClaudeDs);
+    let lead = running(&mut f, "original input", "turn-1");
+    let result = f.worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: "obsolete-terminal-recovery-flag".into(),
+            method: "request.recover".into(),
+            params: json!({"request": lead.0.to_string(), "confirm": true, "retire_terminal": true}),
+        },
+        None,
+    );
+    assert!(!result.ok);
+    assert_eq!(result.error.unwrap().code, "invalid_params");
+    assert!(!f.native.lock().unwrap().iter().any(|method| matches!(
+        method,
+        Method::PaneClose(_) | Method::PaneCloseIfIdentity(_)
+    )));
+}
 
+#[test]
+fn claude_ds_original_exit_resolves_the_retirement_hold_on_poll() {
     let mut f = Fixture::new(Provider::ClaudeDs);
     let lead = running(&mut f, "original input", "turn-1");
     let follower = f.send("queued follower", true);
     f.worker.transport = Box::new(UnconfirmedRetirement(f.native.clone()));
-    assert!(interrupt(&mut f).ok);
-    f.worker.transport = Box::new(RetirementOperator(f.native.clone(), Some(true)));
-    let (tx, rx) = mpsc::sync_channel(1);
-    let _server = control::start(&f.dir, tx).unwrap();
-    let dir = f.dir.clone();
-    let sender = thread::spawn(move || {
-        control::request(&dir, &control::Request {
-            id: "forged-retirement-caller".into(),
-            method: "request.recover".into(),
-            params: json!({"request": lead.0.to_string(), "confirm":true, "retire_terminal":true,
-                "caller": {"process":{"pid":1,"birth":0},"interrupt_request_id":"forged"}}),
-        }).unwrap()
+    assert_eq!(interrupt(&mut f).result["agents"][0]["outcome"], "failed");
+    f.worker.transport = Box::new(ObservedOriginalExit {
+        calls: f.native.clone(),
+        terminal: "terminal",
+        exited: true,
     });
-    let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(5)).unwrap() else {
-        panic!("the wire path must only enqueue a control request");
-    };
-    let peer = crate::platform::process_instance(std::process::id()).unwrap();
-    assert_eq!(call.request.params["caller"], json!({"process":peer}));
-    let response = f.worker.control_response_with_events(&call.request, None);
-    call.reply.send(response).unwrap();
-    let response = sender.join().unwrap();
-    assert!(!response.ok);
-    assert!(f.request(lead).interrupt_retirement_pending);
+    f.worker.tick().unwrap();
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("interrupt_outcome_unknown")
+    );
     assert_eq!(f.request(follower).phase, RequestPhase::Queued);
-    let calls = f.native.lock().unwrap();
-    assert!(calls.iter().any(|method| matches!(method, Method::PaneLocateProcess(process) if process.pid == peer.pid && process.birth == peer.birth)));
-    assert!(!calls
-        .iter()
-        .any(|method| matches!(method, Method::PaneCloseIfIdentity(_))));
+    assert!(!f.native.lock().unwrap().iter().any(|method| matches!(
+        method,
+        Method::PaneClose(_) | Method::PaneCloseIfIdentity(_)
+    )));
+}
+
+struct PressAliases(Arc<Mutex<Vec<Method>>>);
+
+impl Transport for PressAliases {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        let target = match &method {
+            Method::AgentObserve(params) => &params.target,
+            Method::AgentPress(params) => &params.target,
+            _ => return Native(self.0.clone()).request(method),
+        };
+        let (terminal, pane) = match target.as_str() {
+            "terminal" | "moved-pane" => ("terminal", "moved-pane"),
+            "replacement-pane" | "replacement-terminal" | "claude" | "claude-ds" => {
+                ("replacement-terminal", "replacement-pane")
+            }
+            "unrelated" => ("other-terminal", "other-pane"),
+            target if target.starts_with("bus-r") => ("replacement-terminal", "replacement-pane"),
+            _ => panic!("unexpected native target {target}"),
+        };
+        let ResponseResult::TerminalObserved { mut observation } = open_native_question(pane)
+        else {
+            unreachable!()
+        };
+        observation.terminal_id = terminal.into();
+        let result = match &method {
+            Method::AgentPress(params) => {
+                if target == "unrelated" {
+                    assert_eq!(params.expected_terminal_id.as_deref(), Some(terminal));
+                }
+                ResponseResult::TerminalPressed {
+                    press: schema::TerminalPressResult {
+                        observation,
+                        keys: params.keys.clone(),
+                        text_written: false,
+                        selection_pending: false,
+                    },
+                }
+            }
+            _ => ResponseResult::TerminalObserved { observation },
+        };
+        self.0.lock().unwrap().push(method);
+        Ok(result)
+    }
+}
+
+#[test]
+fn agent_press_refuses_held_terminal_by_id_or_moved_pane() {
+    for missing_origin in [false, true] {
+        let mut f = Fixture::new(Provider::ClaudeDs);
+        let lead = running(&mut f, "held work", "turn-1");
+        let mut state = f.worker.state.clone();
+        state.set_interrupt_retirement(f.agent, true).unwrap();
+        let mut replacement = state.agent(f.agent).unwrap().runtime_identity.clone();
+        replacement.terminal_id = Some("replacement-terminal".into());
+        replacement.pane_id = Some("replacement-pane".into());
+        state
+            .set_agent_runtime_identity(f.agent, replacement)
+            .unwrap();
+        if missing_origin {
+            let mut saved = serde_json::to_value(&state).unwrap();
+            let row = &mut saved["requests"][lead.0.to_string()];
+            row.as_object_mut()
+                .unwrap()
+                .remove("interrupt_retirement_identity");
+            row.as_object_mut()
+                .unwrap()
+                .remove("native_delivery_identity");
+            state = serde_json::from_value(saved).unwrap();
+        }
+        assert_eq!(
+            state.interrupt_retirement_origin(lead).is_none(),
+            missing_origin
+        );
+        f.worker.save(state).unwrap();
+        f.worker.transport = Box::new(PressAliases(f.native.clone()));
+
+        let observed = f.worker.control_response_with_events(
+            &crate::messaging::control::Request {
+                id: "observe-held".into(),
+                method: "agent.observe".into(),
+                params: json!({"agent":"moved-pane", "pane":true}),
+            },
+            None,
+        );
+        assert!(observed.ok);
+        assert_eq!(observed.result["terminal_id"], "terminal");
+        let managed = crate::messaging::identity::managed_name(f.room, f.agent);
+        let mut press = |target: &str, pane: bool, terminal: Option<&str>| {
+            let mut params = json!({"agent":target, "pane":pane, "keys":["enter"]});
+            if let Some(terminal) = terminal {
+                params["terminal_id"] = json!(terminal);
+            }
+            f.worker.control_response_with_events(
+                &crate::messaging::control::Request {
+                    id: format!("press-{target}"),
+                    method: "agent.press".into(),
+                    params,
+                },
+                None,
+            )
+        };
+        for (target, pane, terminal) in [
+            ("terminal", true, Some("terminal")),
+            ("moved-pane", true, None),
+            (managed.as_str(), true, None),
+            ("claude", true, None),
+            ("claude-ds", true, None),
+            ("builder", false, None),
+            ("replacement-terminal", true, None),
+        ] {
+            let response = press(target, pane, terminal);
+            assert!(!response.ok, "wrote through {target}");
+            assert!(
+                response.error.unwrap().message.contains("retirement"),
+                "{target}"
+            );
+        }
+        assert!(press("unrelated", true, None).ok);
+        assert_eq!(
+            f.native
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|call| matches!(call, Method::AgentPress(_)))
+                .count(),
+            1
+        );
+    }
+}
+
+struct AbsentOriginal(Arc<Mutex<Vec<Method>>>, Option<schema::AgentInfo>);
+
+impl Transport for AbsentOriginal {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(method, Method::AgentListWithDetectionContext(_)) {
+            self.0.lock().unwrap().push(method);
+            return Ok(ResponseResult::AgentList {
+                agents: self.1.clone().into_iter().collect(),
+            });
+        }
+        if let Method::TerminalRequireAbsent(params) = &method {
+            let terminal_id = params.terminal_id.clone();
+            self.0.lock().unwrap().push(method);
+            return Ok(ResponseResult::TerminalAbsent { terminal_id });
+        }
+        Native(self.0.clone()).request(method)
+    }
+}
+
+#[test]
+fn claude_ds_verified_absence_keeps_an_unbound_leads_spooled_answer() {
+    for case in ["matched", "different session", "ambiguous start"] {
+        let mut f = Fixture::new(Provider::ClaudeDs);
+        let lead = f.send("original unbound input", true);
+        let mut state = f.worker.state.clone();
+        let mut identity = state.agent(f.agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        state.set_agent_runtime_identity(f.agent, identity).unwrap();
+        state.begin_submission(lead, "launch", 0).unwrap();
+        state
+            .stamp_native_delivery_epoch(
+                lead,
+                crate::messaging::model::DeliveryEpoch {
+                    generation: 1,
+                    terminal_id: "terminal".into(),
+                    pane_id: "pane".into(),
+                },
+                Some(0),
+            )
+            .unwrap();
+        state
+            .record_submission(
+                lead,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: None,
+                    provider_turn_id: None,
+                },
+            )
+            .unwrap();
+        state.set_interrupt_retirement(f.agent, true).unwrap();
+        f.worker.save(state).unwrap();
+        let first = f.send("first follower", true);
+        let second = f.send("second follower", true);
+        f.started("turn-1", "original unbound input");
+        if case == "different session" {
+            f.record(json!({
+                "hook_event_name":"Stop", "session_id":"foreign-session", "prompt_id":"turn-1",
+                "last_assistant_message":"foreign answer", "background_tasks":[], "session_crons":[]
+            }));
+        } else {
+            if case == "ambiguous start" {
+                f.started("turn-2", "original unbound input");
+            }
+            f.stopped("turn-1", "captured original answer");
+        }
+        f.worker.transport = Box::new(AbsentOriginal(f.native.clone(), None));
+        assert!(recover_held_request(&mut f, lead).ok);
+        let expected = (case == "matched").then_some("captured original answer");
+        assert_eq!(f.reply(lead).as_deref(), expected, "{case}");
+        if expected.is_none() {
+            assert_eq!(
+                f.request(lead).failure_reason.as_deref(),
+                Some("interrupt_outcome_unknown")
+            );
+            assert!(!f.request(lead).trusted_start_bound);
+        }
+        assert_eq!(f.worker.state.queued_requests(f.agent), &[first, second]);
+    }
+}
+
+#[test]
+fn verified_original_absence_does_not_skip_the_replacement_poll() {
+    let mut f = Fixture::new(Provider::ClaudeDs);
+    running(&mut f, "original work", "turn-1");
+    let mut state = f.worker.state.clone();
+    state.set_interrupt_retirement(f.agent, true).unwrap();
+    let mut replacement = state.agent(f.agent).unwrap().runtime_identity.clone();
+    replacement.terminal_id = Some("replacement-terminal".into());
+    replacement.pane_id = Some("replacement-pane".into());
+    state
+        .set_agent_runtime_identity(f.agent, replacement)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let info = serde_json::from_value(json!({
+        "terminal_id":"replacement-terminal", "pane_id":"replacement-pane", "agent":"claude",
+        "name":crate::messaging::identity::managed_name(f.room, f.agent),
+        "native_ready":true, "interactive_ready":true, "agent_status":"idle",
+        "agent_session":{"source":"herdr:claude","agent":"claude","kind":"id","value":"session"},
+        "workspace_id":"w", "tab_id":"t", "focused":false, "revision":1
+    }))
+    .unwrap();
+    f.worker.transport = Box::new(AbsentOriginal(f.native.clone(), Some(info)));
+    f.worker.tick().unwrap();
+    let agent = f.worker.state.agent(f.agent).unwrap();
+    assert_eq!(
+        agent.runtime_identity.terminal_id.as_deref(),
+        Some("replacement-terminal")
+    );
+    assert_eq!(agent.status, RuntimeStatus::Idle);
 }

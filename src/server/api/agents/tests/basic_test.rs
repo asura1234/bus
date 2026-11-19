@@ -168,6 +168,8 @@ async fn agent_send_keys_validates_every_key_before_writing() {
     let rejected = app.handle_agent_send_keys(
         "req-invalid".into(),
         AgentSendKeysParams {
+            expected_terminal_id: None,
+            expected_activity: None,
             target: "reviewer".into(),
             keys: vec!["enter".into(), "not-a-key".into()],
             native_interrupt: None,
@@ -181,6 +183,8 @@ async fn agent_send_keys_validates_every_key_before_writing() {
     let sent = app.handle_agent_send_keys(
         "req-valid".into(),
         AgentSendKeysParams {
+            expected_terminal_id: None,
+            expected_activity: None,
             target: "reviewer".into(),
             keys: vec!["up".into(), "enter".into()],
             native_interrupt: None,
@@ -329,3 +333,55 @@ async fn guarded_agent_start_rejects_stale_owner_or_lost_prompt_integration_with
 
 #[path = "startup_identity_test.rs"]
 mod startup_identity;
+
+#[tokio::test]
+async fn agent_send_keys_rejects_a_replacement_terminal_before_writing() {
+    let mut app = app_with_agent();
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal = app.state.workspaces[0].tabs[0].panes[&pane]
+        .attached_terminal_id
+        .clone();
+    let target = app.public_pane_id(0, pane).unwrap();
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Cursor), AgentState::Working);
+    let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+    app.state.insert_test_runtime(pane, runtime);
+
+    let params = serde_json::from_value(serde_json::json!({
+        "target": target, "keys": ["ctrl+c"], "expected_terminal_id": "original-terminal"
+    }))
+    .unwrap();
+    let response: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_send_keys("stale".into(), params)).unwrap();
+    assert_eq!(
+        response["error"]["code"], "agent_identity_changed",
+        "{response}"
+    );
+    assert!(writes.try_recv().is_err());
+
+    let params = serde_json::from_value(serde_json::json!({
+        "target": target, "keys": ["ctrl+c"], "expected_terminal_id": terminal.to_string(),
+        "expected_activity": {"generation": 123, "state_change_seq": 12}
+    }))
+    .unwrap();
+    let response: serde_json::Value =
+        serde_json::from_str(&app.handle_agent_send_keys("wrong-activity".into(), params)).unwrap();
+    assert_eq!(
+        response["error"]["code"], "agent_identity_changed",
+        "{response}"
+    );
+    assert!(writes.try_recv().is_err());
+
+    let params = serde_json::from_value(serde_json::json!({
+        "target": target, "keys": ["ctrl+c"], "expected_terminal_id": terminal.to_string()
+    }))
+    .unwrap();
+    let response: SuccessResponse =
+        serde_json::from_str(&app.handle_agent_send_keys("current".into(), params)).unwrap();
+    assert!(matches!(response.result, ResponseResult::Ok {}));
+    assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\x03"));
+    assert!(writes.try_recv().is_err());
+}

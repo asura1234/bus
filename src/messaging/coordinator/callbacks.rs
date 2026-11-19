@@ -182,6 +182,13 @@ impl Worker {
         if started && Self::is_inherited_shell_wake(state, id, &callback) {
             state.mark_unowned_background_turn(&callback);
         }
+        let autonomous_turn = state.autonomous_callback_turn(&callback);
+        let turn_ended = matches!(
+            callback.kind,
+            CallbackEventKind::Final { .. }
+                | CallbackEventKind::Error { .. }
+                | CallbackEventKind::BackgroundPending
+        );
         let disposition = state.accept_callback(callback);
         if let Some(report) = report {
             reports::post_report(
@@ -201,9 +208,15 @@ impl Worker {
                 true,
             ) => {
                 self.own_turns.insert(id, std::time::Instant::now());
+                if let Some(turn) = autonomous_turn {
+                    state.observe_autonomous_turn(id, turn, true);
+                }
             }
             (_, false) if !late_final => {
                 self.own_turns.remove(&id);
+                if let Some(turn) = autonomous_turn.filter(|_| turn_ended) {
+                    state.observe_autonomous_turn(id, turn, false);
+                }
             }
             _ => {}
         }

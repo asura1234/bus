@@ -69,6 +69,7 @@ impl ObservedSubmission {
             .content_lock
             .lock()
             .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+        let mut retirement_frame = None;
         if let Some(retirement) = retirement {
             let screen = self
                 .terminal
@@ -107,6 +108,7 @@ impl ObservedSubmission {
                     "Claude clear remainder is no longer owned",
                 ));
             }
+            retirement_frame = Some((screen, cursor));
         }
         match self.observe("clear_preflight") {
             InputObservation::Empty => {
@@ -158,6 +160,9 @@ impl ObservedSubmission {
             Some(lease) => lease.with_uninvalidated(queue),
             None => queue(),
         }?;
+        if let Some((screen, cursor)) = retirement_frame {
+            self.inspect.retirement_clear_frame(index, &screen, cursor);
+        }
         self.inspect.clearing(index);
         if let Some(retirement) = retirement {
             if index != 0 && self.inspect.cleanup_expects_empty() {

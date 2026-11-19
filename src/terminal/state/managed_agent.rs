@@ -302,6 +302,7 @@ impl TerminalState {
                 self.recent_agent_process_exit = Some(RecentAgentProcessExit {
                     agent,
                     observed_at: now,
+                    confirmed_session: None,
                 });
             }
         }

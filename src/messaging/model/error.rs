@@ -99,7 +99,7 @@ impl std::fmt::Display for ModelError {
             Self::RecipientDeleted { agent, name } => {
                 write!(formatter, "{}", recipient_deleted_message(name, *agent))
             }
-            Self::InterruptRetirementPending => write!(formatter, "Claude draft retirement is unresolved. Retry the guarded interrupt or confirm Retire terminal under the recipient in the Bus TUI. Do not resend."),
+            Self::InterruptRetirementPending => write!(formatter, "Claude draft retirement is unresolved. Retry the guarded interrupt, or use request recover to check for the original provider exit. Do not resend."),
             _ => write!(formatter, "Bus model operation failed: {self:?}"),
         }
     }

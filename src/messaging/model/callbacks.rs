@@ -299,9 +299,30 @@ impl BusState {
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
+                let runtime = self
+                    .agents
+                    .get(&callback.agent_id)
+                    .map(|agent| &agent.runtime_identity);
                 let Some(request) = self.requests.get_mut(&request_id) else {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 };
+                if let (Some(origin), Some(runtime)) =
+                    (request.native_delivery_identity.as_mut(), runtime)
+                {
+                    if provider.uses_claude_harness()
+                        && origin.session_id.is_none()
+                        && origin.launch_id == runtime.launch_id
+                        && origin.terminal_id == runtime.terminal_id
+                        && origin.pane_id == runtime.pane_id
+                        && callback.provider_session_id == runtime.session_id
+                    {
+                        if request.interrupt_retirement_identity.as_ref() == Some(&*origin) {
+                            request.interrupt_retirement_identity = Some(runtime.clone());
+                        }
+                        origin.session_id = runtime.session_id.clone();
+                    }
+                }
+                let binds_provisional_owner = request.phase == RequestPhase::Submitting;
                 request.provider_session_id = callback.provider_session_id;
                 request.provider_turn_id = callback.provider_turn_id;
                 request.provider_prompt_id = callback.provider_prompt_id;
@@ -319,6 +340,9 @@ impl BusState {
                     self.bind_restart_continuation_group(request_id);
                 }
                 if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
+                    if binds_provisional_owner {
+                        agent.autonomous_stop = Default::default();
+                    }
                     agent.actionable_error = None;
                 }
                 self.release_parked_prepared_retry(callback.agent_id, request_id);

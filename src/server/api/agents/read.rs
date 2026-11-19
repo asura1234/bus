@@ -82,6 +82,26 @@ impl App {
         else {
             return Err(agent_not_found(id, &params.target));
         };
+        if params
+            .expected_terminal_id
+            .as_ref()
+            .is_some_and(|expected| expected != &resolved.terminal_id)
+            || params.expected_activity.is_some_and(|expected| {
+                expected.generation != self.state.generation
+                    || self
+                        .state
+                        .terminals
+                        .get(terminal_id)
+                        .and_then(|terminal| terminal.last_agent_state_change_seq)
+                        != Some(expected.state_change_seq)
+            })
+        {
+            return Err(encode_error(
+                id,
+                "agent_identity_changed",
+                "Agent terminal or activity changed",
+            ));
+        }
         let Some(expected_agent) = self
             .state
             .terminals
@@ -114,6 +134,7 @@ impl App {
             }
             if expected_agent == crate::agents::AgentKind::Claude {
                 let sender = runtime.submission_handle(true);
+                sender.bind_claude_session(&expected.expected_session_id);
                 let expected = expected.clone();
                 let completion_path = expected.retirement_request_id.map(|request| {
                     use sha2::{Digest, Sha256};

@@ -2,15 +2,378 @@
 //! closes instead of running on. A message that never joined that turn stays
 //! queued for the next one.
 use super::{
-    AgentId, Author, BusState, ModelError, Prompt, PromptId, RequestId, RequestPhase, RoomId,
-    RuntimeStatus,
+    AgentId, AgentRuntimeIdentity, Author, BusState, CallbackEventKind, ModelError, Prompt,
+    PromptId, Request, RequestId, RequestPhase, RoomId, RuntimeStatus,
 };
+use serde::{Deserialize, Serialize};
 
 /// The reason an interrupted request closed with, which `wait` reports as
 /// `message_interrupted`.
 pub(crate) const INTERRUPTED: &str = "interrupted";
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct SendInterrupt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) target: Option<RequestId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) activity: Option<(u64, u64)>,
+    pub(crate) identity: AgentRuntimeIdentity,
+    #[serde(default)]
+    pub(crate) submission_boundary: Option<u64>,
+    #[serde(default)]
+    pub(crate) submission_status_revision: u64,
+    #[serde(default)]
+    pub(crate) provider_turn_id: Option<String>,
+}
+
+/// Durable autonomous activity and any stop that may already have been written.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct AutonomousStopState {
+    pub(super) provider_turn_id: Option<String>,
+    pub(super) activity: Option<(u64, u64)>,
+    #[serde(default)]
+    pub(super) turn_activity: Option<(u64, u64)>,
+    pub(super) claim: Option<SendInterrupt>,
+}
+
+impl AutonomousStopState {
+    pub(super) fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    fn clear_activity(&mut self) {
+        self.provider_turn_id = None;
+        self.activity = None;
+        self.turn_activity = None;
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub(crate) struct SendInterruptOutcome {
+    pub(crate) outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+}
+
+impl SendInterrupt {
+    fn autonomous(owner: &super::RoomAgent) -> Self {
+        let episode = &owner.autonomous_stop;
+        Self {
+            target: None,
+            activity: episode
+                .activity
+                .filter(|activity| episode.turn_activity.as_ref() == Some(activity)),
+            identity: owner.runtime_identity.clone(),
+            submission_boundary: None,
+            submission_status_revision: 0,
+            provider_turn_id: episode.provider_turn_id.clone(),
+        }
+    }
+
+    pub(crate) fn replayable(&self) -> bool {
+        self.target.is_some()
+            || (self.activity.is_some()
+                && self.identity.session_id.is_some()
+                && self.provider_turn_id.is_some())
+    }
+
+    fn matches_runtime(&self, identity: &AgentRuntimeIdentity) -> bool {
+        self.identity.launch_id == identity.launch_id
+            && self.identity.terminal_id == identity.terminal_id
+            && self
+                .identity
+                .session_id
+                .as_ref()
+                .is_none_or(|session| identity.session_id.as_ref() == Some(session))
+    }
+
+    pub(crate) fn same_turn(&self, observed: &Self) -> bool {
+        self.target == observed.target
+            && self.submission_boundary == observed.submission_boundary
+            && self.submission_status_revision == observed.submission_status_revision
+            && self.matches_runtime(&observed.identity)
+            && self
+                .provider_turn_id
+                .as_ref()
+                .is_none_or(|turn| observed.provider_turn_id.as_ref() == Some(turn))
+    }
+}
+
+fn is_provisional_stop_owner(request: &Request) -> bool {
+    request.phase == RequestPhase::Submitting && !request.trusted_start_bound
+}
+
 impl BusState {
+    pub(crate) fn send_interrupt_target(&self, recipient: AgentId) -> Option<SendInterrupt> {
+        let owner = self.agent(recipient)?;
+        if owner.interrupt_pending {
+            return None;
+        }
+        let Some(target) = owner.current_request.and_then(|id| self.request(id)) else {
+            return self
+                .needs_interrupt_stop(owner)
+                .then(|| SendInterrupt::autonomous(owner));
+        };
+        // A request-scoped stop on a provisional head still needs the
+        // observed provider turn to distinguish consecutive autonomous episodes.
+        let observed_turn = if is_provisional_stop_owner(target) {
+            owner.autonomous_stop.provider_turn_id.as_ref()
+        } else {
+            None
+        };
+        Some(SendInterrupt {
+            target: Some(target.id),
+            activity: None,
+            identity: owner.runtime_identity.clone(),
+            submission_boundary: target.submission_boundary,
+            submission_status_revision: target.submission_status_revision,
+            provider_turn_id: observed_turn.or(target.provider_turn_id.as_ref()).cloned(),
+        })
+    }
+
+    pub(crate) fn observe_stop_activity(&mut self, id: AgentId, activity: Option<(u64, u64)>) {
+        if let Some(owner) = self.agents.get_mut(&id) {
+            owner.autonomous_stop.activity = activity;
+        }
+    }
+
+    /// A coherent native idle sample ends the observed episode. A bound claim
+    /// can still deduplicate if its authenticated provider turn reappears.
+    pub(crate) fn observe_autonomous_idle(
+        &mut self,
+        id: AgentId,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        let Some(owner) = self
+            .agents
+            .get_mut(&id)
+            .filter(|agent| agent.current_request.is_none())
+        else {
+            return Ok(());
+        };
+        let matches_unbound_claim = owner.autonomous_stop.claim.as_ref().is_some_and(|claim| {
+            claim.target.is_none()
+                && claim.provider_turn_id.is_none()
+                && claim.identity.launch_id == owner.runtime_identity.launch_id
+                && claim.identity.terminal_id == owner.runtime_identity.terminal_id
+                && claim.identity.session_id.as_ref().is_none_or(|session| {
+                    owner.runtime_identity.session_id.as_ref() == Some(session)
+                })
+        });
+        owner.autonomous_stop.clear_activity();
+        if matches_unbound_claim {
+            owner.autonomous_stop.claim = None;
+        }
+        if owner.interrupt_pending {
+            self.close_interrupted(id, now_ms)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn autonomous_callback_turn(
+        &self,
+        callback: &super::ProviderCallback,
+    ) -> Option<String> {
+        let owner = self.agent(callback.agent_id)?;
+        let session = owner
+            .runtime_identity
+            .session_id
+            .as_deref()
+            .filter(|session| !session.is_empty())?;
+        if owner.deletion_pending
+            || owner.runtime_identity.launch_id.as_deref() != Some(&callback.launch_id)
+            || callback.provider_session_id.as_deref() != Some(session)
+        {
+            return None;
+        }
+        if let Some(head) = owner.current_request {
+            let request = self.request(head)?;
+            let payload = callback
+                .prompt_payload
+                .as_deref()
+                .filter(|payload| !payload.trim().is_empty())?;
+            // Only an unrelated Started after this reservation can advance the
+            // autonomous episode alongside a still-provisional Bus owner.
+            if !is_provisional_stop_owner(request)
+                || !matches!(callback.kind, CallbackEventKind::PromptStarted)
+                || request.expected_launch_id.as_deref() != Some(&callback.launch_id)
+                || request
+                    .submission_boundary
+                    .is_none_or(|boundary| callback.sequence <= boundary)
+                || request.matches_callback_payload(payload, owner.provider)
+            {
+                return None;
+            }
+        }
+        callback
+            .provider_turn_id
+            .clone()
+            .filter(|turn| !turn.is_empty())
+    }
+
+    pub(crate) fn observe_autonomous_turn(&mut self, id: AgentId, turn: String, started: bool) {
+        if let Some(owner) = self.agents.get_mut(&id) {
+            let activity = &mut owner.autonomous_stop;
+            if started {
+                // The first late Started does not prove a new episode. Two
+                // distinct authenticated turns fence the claim to the earlier one.
+                if let Some((previous, claim)) = activity
+                    .provider_turn_id
+                    .as_ref()
+                    .zip(activity.claim.as_mut())
+                    .filter(|(previous, claim)| {
+                        *previous != &turn
+                            && claim.target.is_none()
+                            && claim.provider_turn_id.is_none()
+                            && claim.matches_runtime(&owner.runtime_identity)
+                    })
+                {
+                    claim.provider_turn_id = Some(previous.clone());
+                }
+                activity.provider_turn_id = Some(turn);
+                activity.turn_activity = activity.activity;
+            } else if activity.provider_turn_id.as_ref() == Some(&turn) {
+                activity.provider_turn_id = None;
+                activity.turn_activity = None;
+                if activity.claim.as_ref().is_some_and(|claim| {
+                    claim
+                        .provider_turn_id
+                        .as_ref()
+                        .is_none_or(|claimed| claimed == &turn)
+                }) {
+                    activity.claim = None;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn stage_send_interrupt(
+        &mut self,
+        id: RequestId,
+        interrupt: SendInterrupt,
+    ) -> Result<(), ModelError> {
+        self.requests
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownRequest(id))?
+            .send_interrupt = Some(interrupt);
+        Ok(())
+    }
+
+    pub(crate) fn record_send_interrupt_progress(
+        &mut self,
+        request: RequestId,
+        claim: bool,
+        outcome: SendInterruptOutcome,
+    ) -> Result<(), ModelError> {
+        let row = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        let recipient = row.agent_id;
+        let intent = row.send_interrupt.take();
+        row.send_interrupt_outcome = Some(outcome);
+        if let Some(intent) = intent.filter(|_| claim) {
+            if let Some(slot) = self.send_interrupt_claim_mut(recipient, intent.target) {
+                *slot = Some(intent);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn send_interrupt_already_claimed(
+        &self,
+        recipient: AgentId,
+        intent: &SendInterrupt,
+    ) -> bool {
+        let owner = self.agent(recipient);
+        let Some(id) = intent.target else {
+            return owner
+                .and_then(|owner| owner.autonomous_stop.claim.as_ref())
+                .is_some_and(|claim| claim.same_turn(intent));
+        };
+        let Some(row) = self.request(id) else {
+            return false;
+        };
+        if row
+            .send_interrupt_claim
+            .as_ref()
+            .is_some_and(|claim| claim.same_turn(intent))
+        {
+            return true;
+        }
+        // A provisional join may still be in the autonomous episode that
+        // already received a stop. A lost native receipt leaves it provisional.
+        is_provisional_stop_owner(row)
+            && owner
+                .filter(|owner| owner.current_request == Some(id))
+                .is_some_and(|owner| {
+                    owner
+                        .autonomous_stop
+                        .claim
+                        .as_ref()
+                        .is_some_and(|claim| claim.same_turn(&SendInterrupt::autonomous(owner)))
+                })
+    }
+
+    /// A refused join returns stop ownership to the autonomous episode.
+    pub(super) fn transfer_requeued_stop_claim(&mut self, head: RequestId) {
+        let Some(request) = self
+            .requests
+            .get_mut(&head)
+            .filter(|r| !r.restart_continuation)
+        else {
+            return;
+        };
+        let Some(owner) = self
+            .agents
+            .get_mut(&request.agent_id)
+            .filter(|a| a.current_request.is_none())
+        else {
+            return;
+        };
+        if let Some(mut claim) = request.send_interrupt_claim.take().filter(|claim| {
+            claim.target == Some(head)
+                && claim.provider_turn_id.is_some()
+                && claim.provider_turn_id == owner.autonomous_stop.provider_turn_id
+                && claim.matches_runtime(&owner.runtime_identity)
+        }) {
+            claim.target = None;
+            claim.submission_boundary = None;
+            claim.submission_status_revision = 0;
+            owner.autonomous_stop.claim = Some(claim);
+        }
+    }
+
+    pub(crate) fn release_send_interrupt_claim(
+        &mut self,
+        recipient: AgentId,
+        intent: &SendInterrupt,
+    ) {
+        if let Some(slot) = self
+            .send_interrupt_claim_mut(recipient, intent.target)
+            .filter(|slot| slot.as_ref() == Some(intent))
+        {
+            *slot = None;
+        }
+    }
+
+    fn send_interrupt_claim_mut(
+        &mut self,
+        recipient: AgentId,
+        target: Option<RequestId>,
+    ) -> Option<&mut Option<SendInterrupt>> {
+        match target {
+            Some(id) => self
+                .requests
+                .get_mut(&id)
+                .map(|row| &mut row.send_interrupt_claim),
+            None => self
+                .agents
+                .get_mut(&recipient)
+                .map(|agent| &mut agent.autonomous_stop.claim),
+        }
+    }
+
     pub(crate) fn stamp_native_delivery_epoch(
         &mut self,
         id: RequestId,
@@ -25,10 +388,6 @@ impl BusState {
         let origin = (agent.provider.uses_claude_harness()
             && identity.pane_id.as_ref() == Some(&epoch.pane_id)
             && identity.terminal_id.as_ref() == Some(&epoch.terminal_id)
-            && identity
-                .session_id
-                .as_ref()
-                .is_some_and(|id| !id.is_empty())
             && identity.launch_id == request.expected_launch_id)
             .then(|| identity.clone());
         for member in std::iter::once(id).chain(self.group_members(id)) {
@@ -132,8 +491,8 @@ impl BusState {
         Ok(())
     }
 
-    /// Resolve only after the coordinator receives guarded close/absence proof.
-    pub(crate) fn resolve_closed_interrupt_terminal(
+    /// Resolve only after native evidence proves the original provider cannot execute its draft.
+    pub(crate) fn resolve_exited_interrupt_terminal(
         &mut self,
         request: RequestId,
         identity: &super::AgentRuntimeIdentity,
@@ -280,6 +639,9 @@ impl BusState {
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?;
         agent_state.interrupt_pending = false;
+        if agent_state.current_request.is_none() {
+            agent_state.autonomous_stop.clear_activity();
+        }
         let hold = agent_state.provider_retry.take();
         let held = hold.as_ref().map(|retry| retry.lead);
         let prepared = hold.map(|retry| retry.queued_ids).unwrap_or_default();
@@ -431,8 +793,8 @@ impl super::Request {
         if self.native_delivery_identity.is_none()
             || self.native_delivery_identity != self.interrupt_retirement_identity
         {
-            return "Claude interrupt draft retirement is unresolved. Bus lacks the original delivery identity and cannot safely stop or close a terminal for this request. The queue remains held. Please do not resend.".into();
+            return "Claude interrupt draft retirement is unresolved. Bus lacks the original delivery identity and cannot safely stop the original provider. The queue remains held. Please do not resend.".into();
         }
-        "Claude interrupt draft retirement is unresolved. Inspect the composer and retry the guarded interrupt. To close the original terminal, choose Retire terminal under the recipient in the Bus TUI and confirm the displayed target. Closing it discards its drafts. Resume the agent afterward. Please do not resend.".into()
+        "Claude interrupt draft retirement is unresolved. Retry the guarded interrupt or use request recover to check for the original provider exit. The queue will remain held until Bus can verify the original draft is safe. Please do not resend.".into()
     }
 }

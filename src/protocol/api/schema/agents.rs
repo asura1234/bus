@@ -51,9 +51,21 @@ pub struct AgentReadParams {
 pub struct AgentSendKeysParams {
     pub target: String,
     pub keys: Vec<String>,
+    /// Refuse input if the pane now contains a different terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_terminal_id: Option<String>,
+    /// Native server generation and state-change sequence of an autonomous stop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_activity: Option<AgentKeyActivity>,
     /// Only the bound agent interrupt operation requests native cancellation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_interrupt: Option<NativeInterruptIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentKeyActivity {
+    pub generation: u64,
+    pub state_change_seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

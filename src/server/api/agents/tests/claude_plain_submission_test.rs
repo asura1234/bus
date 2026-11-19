@@ -261,6 +261,8 @@ async fn claude_plain_bus_interrupt_api_retires_only_its_fenced_restored_prompt(
     let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
     let mut params = match &method {
         Method::AgentPromptIfIdle(p) => crate::protocol::api::schema::AgentSendKeysParams {
+            expected_terminal_id: None,
+            expected_activity: None,
             target: p.target.clone(),
             keys: vec!["esc".into()],
             native_interrupt: Some(crate::protocol::api::schema::NativeInterruptIdentity {

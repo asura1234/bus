@@ -3,7 +3,9 @@
 use super::payload::payload_matches;
 pub(crate) use super::stall::{BLOCKED_STALL_MS, DELIVERED_STALL_MS, QUEUED_STALL_MS};
 use super::{
-    payload::payload_matches_for_provider, DeliveryLatency, DialogNoticeDelivery, QueuedRejection,
+    interrupts::{AutonomousStopState, SendInterrupt, SendInterruptOutcome},
+    payload::payload_matches_for_provider,
+    DeliveryLatency, DialogNoticeDelivery, QueuedRejection,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -401,6 +403,8 @@ pub(crate) struct RoomAgent {
     /// never joined that turn, stay queued for the next one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupt_pending: bool,
+    #[serde(default, skip_serializing_if = "AutonomousStopState::is_empty")]
+    pub(crate) autonomous_stop: AutonomousStopState,
     /// When the agent entered its current `status`, or its visible dialog
     /// last closed while Idle. Recovery deadlines counts usable idle time.
     #[serde(default)]
@@ -583,6 +587,14 @@ pub(crate) struct Request {
     #[serde(default)]
     pub(crate) trusted_start_bound: bool,
     pub(crate) uncertain_outcome: bool,
+    /// An independently queued send must stop this specific still-current turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) send_interrupt: Option<SendInterrupt>,
+    /// A stop that may already have been written to this request's native turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) send_interrupt_claim: Option<SendInterrupt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) send_interrupt_outcome: Option<SendInterruptOutcome>,
     /// Native interrupt cannot settle until its restored Bus draft is retired.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupt_retirement_pending: bool,

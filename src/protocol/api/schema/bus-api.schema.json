@@ -626,6 +626,13 @@
                 "null"
               ]
             },
+            "agent_exited_session_id": {
+              "description": "Session reported by the process incarnation whose exit is confirmed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "agent_process_exited": {
               "default": false,
               "description": "Explicit native process-exit evidence, excluding automatic self-update restarts.",
@@ -1056,6 +1063,25 @@
           ],
           "type": "object"
         },
+        "AgentKeyActivity": {
+          "properties": {
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state_change_seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "generation",
+            "state_change_seq"
+          ],
+          "type": "object"
+        },
         "AgentObserveParams": {
           "additionalProperties": false,
           "description": "Provider-independent observation, including terminals with no agent.",
@@ -1297,6 +1323,24 @@
         },
         "AgentSendKeysParams": {
           "properties": {
+            "expected_activity": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/AgentKeyActivity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Native server generation and state-change sequence of an autonomous stop."
+            },
+            "expected_terminal_id": {
+              "description": "Refuse input if the pane now contains a different terminal.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "keys": {
               "items": {
                 "type": "string"
@@ -3113,6 +3157,17 @@
           ],
           "type": "object"
         },
+        "TerminalTarget": {
+          "properties": {
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id"
+          ],
+          "type": "object"
+        },
         "ToastBusPosition": {
           "enum": [
             "top-left",
@@ -4053,6 +4108,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.require_absent",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TerminalTarget"
             }
           },
           "required": [
@@ -5754,6 +5825,13 @@
                 "null"
               ]
             },
+            "agent_exited_session_id": {
+              "description": "Session reported by the process incarnation whose exit is confirmed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "agent_process_exited": {
               "default": false,
               "description": "Explicit native process-exit evidence, excluding automatic self-update restarts.",
@@ -6615,6 +6693,22 @@
               "required": [
                 "type",
                 "press"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "terminal_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "terminal_absent",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "terminal_id"
               ],
               "type": "object"
             },

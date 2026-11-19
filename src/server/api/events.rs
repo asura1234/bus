@@ -8,7 +8,12 @@ impl App {
     fn observe_native_submission_state(&self, event: &TerminalEvent) {
         let pane_id = match event {
             TerminalEvent::StateChanged { pane_id, .. }
-            | TerminalEvent::AgentSessionReported { pane_id, .. }
+            | TerminalEvent::AgentSessionReported {
+                pane_id,
+                session_ref: None,
+                ..
+            }
+            | TerminalEvent::PaneDied { pane_id, .. }
             | TerminalEvent::AgentProcessDetected {
                 pane_id,
                 replaced: Some(_),
@@ -24,23 +29,16 @@ impl App {
         };
         match event {
             TerminalEvent::StateChanged {
-                state, observed_at, ..
-            } => {
-                runtime.observe_submission_agent_state(*state, *observed_at);
-            }
-            TerminalEvent::AgentSessionReported {
-                agent_label,
-                session_ref,
+                state,
+                observed_at,
+                process_exited,
+                exited_process,
                 ..
             } => {
-                if matches!(agent_label.as_str(), "claude" | "claude-ds") {
-                    if let Some(session) = session_ref {
-                        runtime
-                            .submission_handle(true)
-                            .bind_claude_session(&session.value);
-                    } else {
-                        runtime.invalidate_submission_ownership();
-                    }
+                if *process_exited && exited_process.is_some() {
+                    runtime.invalidate_submission_ownership();
+                } else {
+                    runtime.observe_submission_agent_state(*state, *observed_at);
                 }
             }
             _ => runtime.invalidate_submission_ownership(),
@@ -134,7 +132,32 @@ impl App {
 
         let terminal_cwd_reported = matches!(ev, TerminalEvent::TerminalCwdReported { .. });
         let previous_toast = self.state.toast.clone();
+        let reported_session_pane = match &ev {
+            TerminalEvent::AgentSessionReported {
+                pane_id,
+                session_ref: Some(_),
+                ..
+            } => Some(*pane_id),
+            _ => None,
+        };
         let pane_updates = self.state.handle_app_event(ev);
+        if let Some((workspace, pane)) = reported_session_pane
+            .and_then(|pane| self.find_pane(pane).map(|(workspace, _)| (workspace, pane)))
+        {
+            let session = self
+                .state
+                .terminal_id_for_pane(workspace, pane)
+                .and_then(|id| self.state.terminals.get(&id))
+                .and_then(|terminal| terminal.persisted_agent_session.as_ref())
+                .filter(|session| matches!(session.agent.as_str(), "claude" | "claude-ds"));
+            if let (Some(session), Some(runtime)) =
+                (session, self.lookup_runtime_sender(workspace, pane))
+            {
+                runtime
+                    .submission_handle(true)
+                    .bind_claude_session(&session.session_ref.value);
+            }
+        }
         if checkpointed_pane_exit {
             self.finish_checkpointed_pane_exit();
         }
@@ -613,6 +636,7 @@ impl App {
                 .is_some_and(|focused| focused == pane_id);
         Some(crate::protocol::api::schema::PaneInfo {
             agent_process_exited: terminal.attention_process_exited(),
+            agent_exited_session_id: terminal.confirmed_exited_agent_session().map(str::to_owned),
             pane_id: self.public_pane_id(ws_idx, pane_id)?,
             terminal_id: terminal.id.to_string(),
             workspace_id: self.public_workspace_id(ws_idx),

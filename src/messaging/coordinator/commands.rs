@@ -1,7 +1,7 @@
 //! Single-writer command dispatch.
 use super::{
-    mpsc, schema, AgentId, Author, BusCommand as C, BusEvent, BusState, Method, Provider,
-    ResponseResult, RoomId, Worker,
+    mpsc, schema, AgentId, BusCommand as C, BusEvent, BusState, Method, Provider, ResponseResult,
+    RoomId, Worker,
 };
 use crate::messaging::storage::state_store::JournalOp;
 
@@ -18,13 +18,6 @@ impl Worker {
             C::RenameAgent(id, name) => state.rename_agent(id, &name),
             C::DeleteRoom(id) => return self.delete_room(id, events),
             C::DeleteAgent(id) => return self.delete_agent(id, events),
-            C::ConfirmTerminalRetirement { request, original } => {
-                return self.recover_interrupt_by_terminal_close(
-                    request,
-                    &original,
-                    super::io::now_ms(),
-                );
-            }
             C::SelectRoom(id) => state.select_room(id),
             C::LeaveRoom => {
                 state.leave_room_view();
@@ -154,29 +147,21 @@ impl Worker {
             .collect::<Result<Vec<_>, _>>()?;
         let now = crate::messaging::storage::io::now_ms();
         let mut state = self.state.clone();
-        // The room composer is always the developer. Developer messages always
-        // interrupt the recipient's running turn and run as the next turn, so
-        // the Enter/Option+Enter choice cannot weaken delivery. The journal
-        // records the queued form so a replay keeps that own-turn boundary.
+        // Composer sends persist the independent next turn and its exact stop targets.
         let requests = state
             .submit_draft_exact(room, draft.clone(), now, true)
             .map_err(|e| e.to_string())?;
-        if let Some(recipients) = requests
-            .first()
-            .and_then(|id| state.request(*id))
-            .map(|request| request.prompt.recipient_ids.clone())
-        {
-            self.interrupt_queued_message(&mut state, room, &recipients, &Author::Developer, now);
-        }
+        let interrupts = super::control_dispatch::stage_send_interrupts(&mut state, &requests)?;
         self.journal(
             state,
-            JournalOp::SubmitDraft {
+            JournalOp::SubmitInterruptDraft {
                 room,
                 draft,
-                queued: true,
                 now_ms: now,
+                interrupts,
             },
         )?;
+        self.dispatch_committed_send_interrupts(&requests, now);
         self.note_requests_queued(&requests);
         for id in requests {
             super::super::diagnostics::request(&self.state, id, "bus.message.queued", "persisted");

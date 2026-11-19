@@ -97,7 +97,10 @@ mod tests;
 mod claude_rich_draft_tests;
 
 impl SubmissionInspector for PreservingComposer {
-    fn interrupt_receipt(&self) -> Option<(String, String)> {
+    fn retains_joined_claude_receipts(&self) -> bool {
+        self.kind == AgentKind::Claude && self.steer
+    }
+    fn interrupt_receipt(&self) -> Option<(String, String, bool)> {
         self.owned.interrupt_receipt()
     }
     fn interrupted_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> Option<String> {
@@ -185,6 +188,10 @@ impl SubmissionInspector for PreservingComposer {
     ) -> InputObservation {
         self.owned.observe_with_launch(screen, cursor, pristine)
     }
+    fn retirement_clear_frame(&self, index: usize, screen: &str, cursor: Option<(u16, u16)>) {
+        self.owned.retirement_clear_frame(index, screen, cursor);
+    }
+
     fn clearing(&self, index: usize) {
         self.owned.clearing(index);
     }

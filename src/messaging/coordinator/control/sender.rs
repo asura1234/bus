@@ -119,43 +119,6 @@ impl Worker {
         })
     }
 
-    // This classification only refuses agent-owned or unverifiable control peers.
-    // A permitted peer may receive directions to the TUI, never close authority.
-    pub(super) fn require_retirement_peer(&mut self, params: &Value) -> Result<(), String> {
-        let denied =
-            "Terminal retirement is unavailable to agent-owned or unverifiable control peers";
-        let caller: SendCaller =
-            serde_json::from_value(params["caller"].clone()).map_err(|_| denied)?;
-        self.require_retirement_process(&caller, denied)
-    }
-
-    pub(super) fn require_retirement_ui_process(&mut self) -> Result<(), String> {
-        let denied =
-            "Terminal retirement requires a verifiable Bus UI outside a managed agent pane";
-        // The confirmation and the coordinator share a process. Verify that
-        // incarnation as well as receiving the non-wire confirmation command.
-        let identity = crate::platform::process_instance(std::process::id()).ok_or(denied)?;
-        let caller = SendCaller {
-            process: Some(crate::protocol::api::schema::ReportingProcess {
-                pid: identity.pid,
-                birth: identity.birth,
-            }),
-            ..SendCaller::default()
-        };
-        self.require_retirement_process(&caller, denied)
-    }
-
-    fn require_retirement_process(
-        &mut self,
-        caller: &SendCaller,
-        denied: &str,
-    ) -> Result<(), String> {
-        match self.process_author(caller) {
-            Ok(None) => Ok(()),
-            _ => Err(denied.into()),
-        }
-    }
-
     fn process_author(&mut self, caller: &SendCaller) -> Result<Option<AgentId>, String> {
         let process = caller.process.ok_or(UNKNOWN_CALLER)?;
         let location = match self.transport.request(Method::PaneLocateProcess(process)) {

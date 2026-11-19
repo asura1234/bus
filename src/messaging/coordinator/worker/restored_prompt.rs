@@ -49,6 +49,8 @@ impl Worker {
             if let Err(error) =
                 self.transport
                     .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
+                        expected_terminal_id: None,
+                        expected_activity: None,
                         target: pane,
                         keys,
                         native_interrupt: None,

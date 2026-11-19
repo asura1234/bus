@@ -6,6 +6,7 @@ mod inspect;
 mod messages;
 mod rooms;
 mod selectors;
+mod send_interrupt;
 mod sender;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod ui_hits;
@@ -23,6 +24,7 @@ use super::{
 use crate::messaging::control::{Request as ControlRequest, Response};
 #[cfg(test)]
 use crate::messaging::model::MASTER_ROOM_NAME;
+pub(super) use send_interrupt::stage_send_interrupts;
 use serde_json::{json, Value};
 
 /// Receipts younger than this are never evicted, so a retry within it replays.
@@ -535,7 +537,7 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec(
         "request.recover",
         "request recover",
-        &["request", "confirm", "as", "retire_terminal", "caller"],
+        &["request", "confirm", "as"],
         true,
         Tier::Agent,
     ),

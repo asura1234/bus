@@ -1,7 +1,7 @@
 //! Durable request grouping, history caching, headers and age labels.
 use super::super::render::{display, wrap, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
-use super::source::Direction;
+use super::source::{Direction, Exchange};
 use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
@@ -136,7 +136,7 @@ impl History {
                     &mut active_markdown,
                     state,
                     room.id,
-                    prompt,
+                    &exchange,
                     width,
                     now,
                     thumbnails,
@@ -196,13 +196,14 @@ impl History {
         active_markdown: &mut BTreeSet<MarkdownSource>,
         state: &BusState,
         room: RoomId,
-        prompt: &Prompt,
+        exchange: &Exchange<'_>,
         width: u16,
         now: u64,
         thumbnails: &mut Thumbnails,
         submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
         direction: Direction,
     ) {
+        let prompt = exchange.prompt;
         let start = lines.len();
         let header_timer = super::phases::HEADER.start();
         let mut header = vec![
@@ -212,11 +213,34 @@ impl History {
             ),
             (" → ".into(), Tone::Muted),
         ];
+        let show_stops = exchange.requests.values().any(|row| {
+            row.send_interrupt_outcome
+                .as_ref()
+                .is_some_and(|stop| stop.outcome != "already_idle")
+        });
         for (index, id) in prompt.recipient_ids.iter().enumerate() {
             if index > 0 {
                 header.push((", ".into(), Tone::Muted));
             }
             header.push((state.agent_label(*id), Tone::Agent(*id)));
+            if show_stops {
+                if let Some(stop) = exchange
+                    .requests
+                    .get(id)
+                    .and_then(|row| row.send_interrupt_outcome.as_ref())
+                {
+                    let label = match stop.outcome.as_str() {
+                        "already_idle" => " [already idle]",
+                        "interrupting" => " [interrupting]",
+                        "stopped" => " [stopped]",
+                        "failed" => " [stop failed]",
+                        "unknown" => " [stop uncertain]",
+                        "skipped" => " [stop skipped]",
+                        _ => continue,
+                    };
+                    header.push((label.into(), Tone::Muted));
+                }
+            }
         }
         if prompt.recipient_ids.is_empty() {
             header.push(("You".into(), Tone::You));
@@ -420,6 +444,7 @@ fn signature(
         request.prompt.id.0.hash(&mut hash);
         request.prompt.submitted_at_ms.hash(&mut hash);
         request.group.map(|lead| lead.0).hash(&mut hash);
+        request.send_interrupt_outcome.hash(&mut hash);
         let outcome = request
             .group
             .and_then(|lead| state.request(lead))
