@@ -245,3 +245,85 @@ fn startup_retry_count_does_not_turn_rejected_first_input_into_provider_turn_rep
         Some("prompt_not_shown")
     );
 }
+
+#[test]
+fn agy_prompt_refusal_stays_queued_until_the_busy_turn_releases_it() {
+    let (mut state, room, agent, lead) = fixture(Provider::Agy);
+    state.begin_submission(lead, "launch", 0).unwrap();
+    state
+        .record_submission(
+            lead,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Working, 2_000)
+        .unwrap();
+    let follower = send(&mut state, room, agent, "while working", 2_001);
+    state.begin_steering(follower, lead).unwrap();
+    state
+        .record_steering(
+            follower,
+            SubmissionOutcome::DefinitelyRejected {
+                message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
+            },
+        )
+        .unwrap();
+
+    let after_deadline = 2_001 + QUEUED_STALL_MS + 1;
+    assert!(state
+        .expire_stalled_queued_requests(after_deadline)
+        .unwrap()
+        .is_empty());
+    assert_eq!(state.queued_requests(agent), &[follower]);
+    assert_eq!(state.request(follower).unwrap().phase, RequestPhase::Queued);
+
+    state
+        .observe_dialog(agent, true, after_deadline + 1)
+        .unwrap();
+    assert_eq!(state.next_steering(agent), None);
+    assert!(state
+        .expire_stalled_queued_requests(after_deadline + 1)
+        .unwrap()
+        .is_empty());
+
+    let idle_at = after_deadline + 2;
+    state
+        .observe_status(agent, RuntimeStatus::Idle, idle_at)
+        .unwrap();
+    state.observe_dialog(agent, false, idle_at).unwrap();
+    assert!(state
+        .expire_stalled_queued_requests(idle_at)
+        .unwrap()
+        .is_empty());
+    assert_eq!(state.queued_requests(agent), &[follower]);
+}
+
+#[test]
+fn agy_idle_prompt_refusal_still_expires_after_a_full_idle_window() {
+    let (mut state, _, agent, head) = fixture(Provider::Agy);
+    let idle_at = 1_020 + QUEUED_STALL_MS + 1;
+    state
+        .observe_status(agent, RuntimeStatus::Working, 2_000)
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, idle_at)
+        .unwrap();
+    assert!(state
+        .expire_stalled_queued_requests(idle_at)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        state
+            .expire_stalled_queued_requests(idle_at + QUEUED_STALL_MS)
+            .unwrap(),
+        [head]
+    );
+    assert_eq!(
+        state.request(head).unwrap().failure_reason.as_deref(),
+        Some("prompt_not_shown")
+    );
+}

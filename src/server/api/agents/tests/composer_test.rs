@@ -2185,3 +2185,37 @@ fn codex_composer_keeps_literal_yes_no_hint_as_owned_input() {
         "literal message text must not become an input-control blocker"
     );
 }
+
+#[test]
+fn agy_task_tray_keeps_the_framed_composer_available() {
+    use crate::terminal::runtime::SubmissionInspector;
+
+    // Sanitized geometry from bus agent observe agy-flake-rca --room 1 --cells.
+    let frame = include_str!("fixtures/agy_working_with_task_tray.txt");
+    let inspector = observer(AgentKind::Antigravity, "from bus".into());
+    assert_eq!(
+        inspector.observe_with_cursor(frame, Some((2, 1))),
+        InputObservation::Empty
+    );
+    assert!(inspector.submission_available(frame));
+
+    let pasted = frame.replacen("\n>\n", "\n> from bus\n", 1);
+    assert_eq!(inspector.observe(&pasted), InputObservation::Pending);
+    assert!(inspector.submission_available(&pasted));
+
+    let draft = frame.replacen("\n>\n", "\n> developer draft\n", 1);
+    assert_eq!(inspector.observe(&draft), InputObservation::Other);
+}
+
+#[test]
+fn agy_task_tray_alone_or_live_permission_has_no_submittable_composer() {
+    use crate::terminal::runtime::SubmissionInspector;
+
+    let tray_only = include_str!("fixtures/agy_working_with_task_tray_no_composer.txt");
+    let permission = include_str!("fixtures/agy_command_permission.txt");
+    for frame in [tray_only, permission] {
+        let inspector = observer(AgentKind::Antigravity, "from bus".into());
+        assert_ne!(inspector.observe(frame), InputObservation::Empty);
+        assert!(!inspector.submission_available(frame));
+    }
+}

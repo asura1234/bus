@@ -985,3 +985,65 @@ mod codex_legacy_submission_tests;
 #[cfg(unix)]
 #[path = "codex_startup_test.rs"]
 mod codex_startup_tests;
+
+#[tokio::test]
+async fn agy_busy_task_tray_guarded_prompt_writes_only_with_a_composer() {
+    let active = include_str!("fixtures/agy_working_with_task_tray.txt");
+    let cancellable = active.replacen("? for shortcuts", "esc to cancel", 1);
+    let draft = active.replacen("\n>\n", "\n> [Pasted text #1 1500 chars]\n", 1);
+    for (frame, accepted, expected_error) in [
+        (active, true, None),
+        (cancellable.as_str(), true, None),
+        (
+            draft.as_str(),
+            false,
+            Some(crate::protocol::api::AGENT_COMPOSER_BUSY),
+        ),
+        (
+            include_str!("fixtures/agy_working_with_task_tray_no_composer.txt"),
+            false,
+            Some(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN),
+        ),
+        (
+            include_str!("fixtures/agy_command_permission.txt"),
+            false,
+            None,
+        ),
+    ] {
+        let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Antigravity, true, "");
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Antigravity), AgentState::Working);
+        let Method::AgentPromptIfIdle(params) = &mut method else {
+            unreachable!();
+        };
+        params.steer = true;
+        let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+        let frame = frame.replace('\n', "\r\n");
+        runtime.test_process_pty_bytes(format!("\x1b[2J\x1b[H{frame}\x1b[2;3H").as_bytes());
+
+        let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+        assert_eq!(response.contains("agent_prompted"), accepted, "{response}");
+        if let Some(code) = expected_error {
+            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(response["error"]["code"], code, "{response}");
+        }
+        if accepted {
+            assert_eq!(
+                next_write(&mut writes).await.as_ref(),
+                b"\x1b[200~from bus\x1b[201~"
+            );
+            assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+        }
+        assert!(
+            writes.try_recv().is_err(),
+            "unexpected native write: {response}"
+        );
+    }
+}

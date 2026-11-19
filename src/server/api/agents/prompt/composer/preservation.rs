@@ -76,6 +76,7 @@ impl PreservingComposer {
                     directory: self.directory.clone(),
                 })
             }
+            AgentKind::Antigravity => Some(DraftPreservation::Hold),
             _ => None,
         }
     }

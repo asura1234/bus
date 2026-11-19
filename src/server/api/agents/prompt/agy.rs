@@ -82,6 +82,26 @@ fn is_rule(line: &str) -> bool {
     count >= 10 && trimmed.chars().all(|c| c == '─')
 }
 
+fn preceding_rule(lines: &[String], end: usize) -> Option<usize> {
+    lines[..end].iter().rposition(|line| is_rule(line))
+}
+
+fn is_task_row(row: &str) -> bool {
+    let Some((timestamp, task)) = row.strip_prefix("● [").and_then(|row| row.split_once("] "))
+    else {
+        return false;
+    };
+    !task.is_empty()
+        && timestamp.len() == 8
+        && timestamp
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                2 | 5 => byte == b':',
+                _ => byte.is_ascii_digit(),
+            })
+}
+
 fn is_mode_placeholder(text: &str) -> bool {
     [
         "Auto mode: edits & safe commands auto-approved",
@@ -103,18 +123,32 @@ fn rows_from_styled(
     plain_lines: &[String],
     cursor: Option<(u16, u16)>,
 ) -> Option<Vec<String>> {
-    let bottom = plain_lines.iter().rposition(|line| is_rule(line))?;
-    let top = (0..bottom)
-        .rev()
-        .find(|&index| is_rule(&plain_lines[index]))?;
-    if bottom <= top + 1 || bottom - top > 64 {
-        return None;
-    }
-    let footer = plain_lines[bottom + 1..]
+    let last_rule = preceding_rule(plain_lines, plain_lines.len())?;
+    let footer = plain_lines[last_rule + 1..]
         .iter()
         .find(|line| !line.trim().is_empty())
         .map(|line| line.trim().to_ascii_lowercase())?;
     if !footer.starts_with("? for shortcuts") && !footer.starts_with("esc to cancel") {
+        return None;
+    }
+    // The background task tray sits between the composer and status bar.
+    // Step over it only when both the footer and the enclosed rows identify it.
+    let previous = preceding_rule(plain_lines, last_rule)?;
+    let tray = &plain_lines[previous + 1..last_rule];
+    let mut task_rows = tray
+        .iter()
+        .map(|row| row.trim())
+        .filter(|row| !row.is_empty());
+    let bottom = if footer.ends_with(" task(s) · /tasks")
+        && task_rows.next().is_some_and(is_task_row)
+        && task_rows.all(is_task_row)
+    {
+        previous
+    } else {
+        last_rule
+    };
+    let top = preceding_rule(plain_lines, bottom)?;
+    if bottom <= top + 1 || bottom - top > 64 {
         return None;
     }
     let interior = &plain_lines[top + 1..bottom];

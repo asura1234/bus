@@ -1,6 +1,7 @@
-//! A definite refusal has its own durable clock, independent of provider work.
+//! Track definite composer refusals and when the affected queue entries expire.
+use super::super::Provider;
 use super::{
-    rejection_reason, BusState, Request, RequestId, RequestPhase, SubmissionOutcome,
+    rejection_reason, BusState, Request, RequestId, RequestPhase, RuntimeStatus, SubmissionOutcome,
     QUEUED_STALL_MS,
 };
 
@@ -48,7 +49,24 @@ impl BusState {
             return None;
         }
         let rejected = request.queued_rejection.as_ref()?;
-        (now_ms.saturating_sub(rejected.at_ms) >= QUEUED_STALL_MS)
-            .then_some(rejected.reason.as_str())
+        let mut since = rejected.at_ms;
+        if let Some(agent) = self
+            .agent(request.agent_id)
+            .filter(|agent| agent.provider == Provider::Agy)
+        {
+            // A refused AGY follow-up can wait for the next turn. Give it a
+            // fresh delivery window after the live turn or dialog releases it.
+            if matches!(
+                agent.activity_status(),
+                RuntimeStatus::Working | RuntimeStatus::Blocked
+            ) || agent.current_request.is_some_and(|id| id != request.id)
+            {
+                return None;
+            }
+            since = since
+                .max(agent.status_since_ms)
+                .max(self.last_progress_ms(agent.id));
+        }
+        (now_ms.saturating_sub(since) >= QUEUED_STALL_MS).then_some(rejected.reason.as_str())
     }
 }
