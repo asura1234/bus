@@ -32,7 +32,7 @@ fn delivered_status_has_no_outcome_ack_or_orchestrator_wake() {
             .ok
         );
     }
-    f.worker.reply_waiters.clear();
+    f.worker.reply_waiters.lock().unwrap().clear();
     collect(&mut f);
     let calls = f.calls.lock().unwrap();
     assert!(

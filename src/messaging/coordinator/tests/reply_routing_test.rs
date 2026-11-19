@@ -406,6 +406,37 @@ fn reply_waiter_lease_keeps_the_reply_until_exactly_three_seconds() {
 }
 
 #[test]
+fn reply_routing_honors_a_waiter_registered_by_the_follower_snapshot() {
+    let mut f = Fixture::new();
+    let source = f.send(Author::Agent(f.orch), "build this");
+    let mut state = f.worker.state.clone();
+    state
+        .set_agent_runtime_identity(
+            f.agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("worker-launch".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state.begin_submission(source, "worker-launch", 0).unwrap();
+    f.worker.save(state).unwrap();
+    let message = f.worker.state.request(source).unwrap().prompt.id;
+    let snapshot = Arc::new(Mutex::new(Arc::new(f.worker.snapshot())));
+    let follower = FollowerStatus::new(snapshot, &f.worker);
+    assert!(follower
+        .response(&ControlRequest {
+            id: "pending-follower".into(),
+            method: "message.status".into(),
+            params: json!({"message":message.0.to_string(),"as":f.orch.0.to_string()}),
+        })
+        .is_some());
+    f.finish(source, "Reply for the live follower");
+    f.worker.submit_ready().unwrap();
+    assert_no_reply_wake(&f, "Reply for the live follower");
+}
+
+#[test]
 fn reply_routing_an_expired_waiter_lease_releases_the_reply() {
     let mut f = Fixture::new();
     let source = f.send(Author::Agent(f.orch), "build this");
@@ -413,6 +444,8 @@ fn reply_routing_an_expired_waiter_lease_releases_the_reply() {
     let message = f.worker.state.request(source).unwrap().prompt.id;
     f.worker
         .reply_waiters
+        .lock()
+        .unwrap()
         .insert(message, std::time::Instant::now() - Duration::from_secs(4));
     f.worker.submit_ready().unwrap();
     assert_eq!(

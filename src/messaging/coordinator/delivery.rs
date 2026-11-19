@@ -116,16 +116,25 @@ impl Worker {
         mut can_deliver: impl FnMut() -> bool,
         launch_prompts: bool,
     ) -> Result<(), String> {
-        let now = self.reply_waiter_now();
-        self.reply_waiters
-            .retain(|_, at| now.saturating_duration_since(*at) < std::time::Duration::from_secs(3));
-        let waited = self.reply_waiters.keys().copied().collect();
         let mut state = self.state.clone();
         let now_ms = super::io::now_ms();
         let mut changed = self.prepare_provider_retries(&mut state, now_ms);
-        changed |= state
-            .route_worker_replies(now_ms, &waited)
-            .map_err(|e| e.to_string())?;
+        {
+            let now = self.reply_waiter_now();
+            // Keep lease registration ordered with the in-memory routing decision.
+            // Release the lock before any storage or provider operations.
+            let mut waiters = self
+                .reply_waiters
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            waiters.retain(|_, at| {
+                now.saturating_duration_since(*at) < std::time::Duration::from_secs(3)
+            });
+            let waited = waiters.keys().copied().collect();
+            changed |= state
+                .route_worker_replies(now_ms, &waited)
+                .map_err(|error| error.to_string())?;
+        }
         changed |= self.prepare_orchestrator_inboxes(&mut state, now_ms);
         if changed {
             self.save(state)?;

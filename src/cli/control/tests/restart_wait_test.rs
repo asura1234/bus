@@ -69,7 +69,7 @@ fn send_async_survives_planned_restart_and_new_generation() {
             if reads == 1 {
                 return Ok(Response::success(
                     &request.id,
-                    status(vec![recipient(1, "delivered", false)]),
+                    json!({"message_id":19,"complete":false,"requests":[],"snapshot_pending":true}),
                 ));
             }
             if reads <= 7 {

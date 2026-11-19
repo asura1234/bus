@@ -417,6 +417,7 @@ fn overload_logs_the_endpoint_and_requests_holding_its_slots() {
         clients: vec![],
         poll_budget: None,
         last_overload_log: None,
+        follower_status: None,
     };
     let (tx, _rx) = mpsc::sync_channel(MAX_CLIENTS);
     let mut next = CONTROL_COMMAND_BIT;
@@ -998,7 +999,7 @@ fn failed_waiter_accept_keeps_the_interactive_endpoint_serving() {
     let (tx, rx) = mpsc::sync_channel(2);
     let stopped = Arc::new(AtomicBool::new(false));
     let stop = stopped.clone();
-    let thread = thread::spawn(move || serve([interactive, failed], tx, stop));
+    let thread = thread::spawn(move || serve([interactive, failed], tx, stop, None));
     let _server = Server {
         stopped,
         thread: Some(thread),

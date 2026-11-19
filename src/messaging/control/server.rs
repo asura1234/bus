@@ -7,6 +7,7 @@ use super::protocol::{
     RESPONSE_WRITE_TIMEOUT, SOCKET_NAME, WAIT_SOCKET_NAME,
 };
 pub(crate) use super::protocol::{ControlCall, Request, Response};
+use crate::messaging::coordinator::FollowerStatus;
 use crate::messaging::{coordinator::BusCommand, storage::io as storage_io};
 use crate::platform::ipc;
 use interprocess::local_socket::{traits::Listener as _, ListenerNonblockingMode};
@@ -56,9 +57,26 @@ impl Drop for Server {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn start(
     data_dir: &Path,
     commands: SyncSender<(u64, BusCommand)>,
+) -> Result<Server, String> {
+    start_inner(data_dir, commands, None)
+}
+
+pub(crate) fn start_with_follower_status(
+    data_dir: &Path,
+    commands: SyncSender<(u64, BusCommand)>,
+    follower_status: FollowerStatus,
+) -> Result<Server, String> {
+    start_inner(data_dir, commands, Some(follower_status))
+}
+
+fn start_inner(
+    data_dir: &Path,
+    commands: SyncSender<(u64, BusCommand)>,
+    follower_status: Option<FollowerStatus>,
 ) -> Result<Server, String> {
     storage_io::private_dir(data_dir).map_err(|e| e.to_string())?;
     ipc::validate_private_socket_directory(data_dir)
@@ -71,7 +89,7 @@ pub(crate) fn start(
     let stop = Arc::clone(&stopped);
     let thread = thread::Builder::new()
         .name("bus-control".into())
-        .spawn(move || serve([interactive, waiters], commands, stop))
+        .spawn(move || serve([interactive, waiters], commands, stop, follower_status))
         .map_err(|e| e.to_string())?;
     Ok(Server {
         stopped,
@@ -103,12 +121,14 @@ struct Endpoint {
     clients: Vec<Client>,
     poll_budget: Option<Arc<()>>,
     last_overload_log: Option<Instant>,
+    follower_status: Option<FollowerStatus>,
 }
 
 fn serve(
     listeners: [ipc::LocalListener; 2],
     commands: SyncSender<(u64, BusCommand)>,
     stopped: Arc<AtomicBool>,
+    follower_status: Option<FollowerStatus>,
 ) {
     crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Interactive);
     let mut endpoints = listeners
@@ -119,6 +139,7 @@ fn serve(
             clients: Vec::new(),
             poll_budget: (index == 1).then(|| Arc::new(())),
             last_overload_log: None,
+            follower_status: (index == 1).then(|| follower_status.clone()).flatten(),
         })
         .collect::<Vec<_>>();
     let mut next_id = CONTROL_COMMAND_BIT;
@@ -161,7 +182,11 @@ impl Endpoint {
                         }
                     }
                 }
-                Ok(stream) => self.clients.push(Client::new(stream)),
+                Ok(stream) => {
+                    let mut client = Client::new(stream);
+                    client.follower_status.clone_from(&self.follower_status);
+                    self.clients.push(client);
+                }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(_) => {
@@ -229,6 +254,7 @@ struct Client {
     /// Retained through writing/closing so slow reply readers are attributable.
     request: Option<(String, &'static str)>,
     async_send_follower: bool,
+    follower_status: Option<FollowerStatus>,
 }
 
 enum State {
@@ -257,6 +283,7 @@ impl Client {
             accepted: Instant::now(),
             request: None,
             async_send_follower: false,
+            follower_status: None,
         }
     }
 
@@ -509,15 +536,6 @@ impl Client {
                 "Method belongs to the other control endpoint",
             ));
         }
-        // A timed-out transport must not release a queued poll's capacity.
-        // At most MAX_CLIENTS polls can occupy the shared coordinator queue.
-        if poll_budget.is_some_and(|budget| Arc::strong_count(budget) > MAX_CLIENTS) {
-            return self.respond(Response::failure(
-                &request.id,
-                "server_busy",
-                "Status poll budget reached",
-            ));
-        }
         self.async_send_follower = request.method == "message.status"
             && matches!(
                 request
@@ -529,6 +547,23 @@ impl Client {
         let id = request.id.clone();
         let method = crate::messaging::perf::control_method_label(&request.method);
         self.request = Some((id.chars().take(128).collect(), method));
+        if let Some(response) = self
+            .follower_status
+            .as_ref()
+            .filter(|_| self.async_send_follower)
+            .and_then(|status| status.response(&request))
+        {
+            return self.respond(response);
+        }
+        // A timed-out transport must not release a queued poll's capacity.
+        // At most MAX_CLIENTS polls can occupy the shared coordinator queue.
+        if poll_budget.is_some_and(|budget| Arc::strong_count(budget) > MAX_CLIENTS) {
+            return self.respond(Response::failure(
+                &request.id,
+                "server_busy",
+                "Status poll budget reached",
+            ));
+        }
         let (reply, receiver) = mpsc::sync_channel(1);
         let command_id = *next_id;
         *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;

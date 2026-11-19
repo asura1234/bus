@@ -671,7 +671,7 @@ fn killed_outcome_waiter_expires_its_lease_without_losing_the_wake() {
     );
     f.worker.submit_ready().unwrap();
     assert!(f.notices().is_empty());
-    f.worker.reply_waiters.insert(
+    f.worker.reply_waiters.lock().unwrap().insert(
         message,
         std::time::Instant::now() - std::time::Duration::from_secs(4),
     );
