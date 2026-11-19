@@ -80,7 +80,10 @@ fn caption_png_callback_binds_its_frozen_turn_and_releases_the_follower() {
         let id = state.request(request).unwrap().prompt.id.0;
         let frozen = state.render_request_payload(request).unwrap();
         submit_request(&mut state, request, "caption-launch", 10);
-        let prompt = caption_prompt(&raw.replace("message 6", &format!("message {id}")));
+        let prompt = caption_prompt(&raw.replace(
+            "[Bus message 6 from you]",
+            &format!("[Bus message {id} from you (room {})]", room.0),
+        ));
         let start = ProviderCallback {
             callback_id: "caption-start".into(),
             sequence: 11,
@@ -158,7 +161,10 @@ fn caption_png_is_literal_for_every_provider_and_foreign_to_non_claude() {
         if matches!(provider, Provider::ClaudeCode | Provider::ClaudeDs) {
             continue;
         }
-        let prompt = caption_prompt(&raw.replace("message 6", &format!("message {id}")));
+        let prompt = caption_prompt(&raw.replace(
+            "[Bus message 6 from you]",
+            &format!("[Bus message {id} from you (room {})]", room.0),
+        ));
         assert_eq!(
             state.accept_callback(ProviderCallback {
                 callback_id: "caption-foreign-substitution".into(),

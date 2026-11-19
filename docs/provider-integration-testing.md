@@ -438,8 +438,8 @@ separate checks below.
     turn-end proof. A native final does not replace an explicit reply.
 
   Deliverable prompts carry a bare sender line `name:` in every room, then one short
-  `[Bus message N from NAME (room R)]` header (`from you`, with no room, when
-  the developer sent it). Blocked, No-reply, and idle-agent
+  `[Bus message N from NAME (room R)]` header (`from you (room R)` when
+  the developer sent it, using the request room). Blocked, No-reply, and idle-agent
   notices have no header. Match the native prompt on the task body. Do not
   require the old multi-line reply hint in the delivered text. That hint lives
   in the system prompt and `bus send --help`. Reply semantics are unchanged.
@@ -809,8 +809,8 @@ idle then deliver, and an approval card without `--yolo`.
 - **2026-10-31 — slim reply header:** Symptom: a long per-message reply hint
   inflated prompts and was repeated on notices that need no reply. Cause: the
   hint belongs in the system prompt and `bus send --help`. Test: a deliverable
-  message shows one `[Bus message N from NAME (room R)]` line (`from you` for the
-  developer); a Blocked, No-reply, or idle-agent notice has none. Rule: bind
+  message shows one `[Bus message N from NAME (room R)]` line (`from you (room R)` for the
+  developer, using the request room); a Blocked, No-reply, or idle-agent notice has none. Rule: bind
   the native prompt on the task body. Do not require the old hint in the
   delivered text. Reply semantics stay the foreground `--reply-to` check.
 - **2026-10-31 — Grok busy frame and ghost:** Symptom: `submission_unconfirmed`

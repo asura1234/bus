@@ -218,7 +218,7 @@ fn claude_unquoted_image_callback_binds_and_ends_only_its_frozen_request() {
         let id = state.request(request).unwrap().prompt.id.0;
         let frozen = state.render_request_payload(request).unwrap();
         submit_request(&mut state, request, "launch-claude", 10);
-        let mut remaining = format!("[Bus message {id} from you]\n{body}");
+        let mut remaining = format!("[Bus message {id} from you (room {})]\n{body}", room.0);
         if escaped_inline {
             remaining = remaining.replace("this /tmp/", "this\n/tmp/");
         }

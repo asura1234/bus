@@ -112,14 +112,18 @@ impl BusState {
                     )
                 } else {
                     // Older saves can omit the snapshot after an author is gone.
-                    // Its stable ID is known; do not invent a name or home room.
+                    // Its stable ID is known; use the request room without inventing a home room.
                     let label = self.agent_message_label(sender);
                     let header = format!("{label}:");
                     let first = text.lines().next().unwrap_or_default().trim();
                     let name = format!("agent {}", sender.0);
                     let replace = first.eq_ignore_ascii_case(&header)
                         || identity_only_line(first, &name, sender.0);
-                    (header, label, replace)
+                    (
+                        header,
+                        format!("{label} (room {})", request.room_id.0),
+                        replace,
+                    )
                 };
                 if replace_identity {
                     text = text
@@ -133,7 +137,10 @@ impl BusState {
                     format!("{header}\n{marker}\n{text}")
                 };
             } else {
-                let marker = format!("[Bus message {message_id} from you{recipients}]");
+                let marker = format!(
+                    "[Bus message {message_id} from you (room {}){recipients}]",
+                    request.room_id.0
+                );
                 text = if text.is_empty() {
                     marker
                 } else {

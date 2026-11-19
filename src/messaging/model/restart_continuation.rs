@@ -127,6 +127,7 @@ impl BusState {
                 .unwrap_or_else(|| self.agent_message_label(*agent)),
         };
         let message = request.prompt.id.0;
+        let room = request.room_id.0;
         let joined = self
             .group_members(id)
             .into_iter()
@@ -142,7 +143,7 @@ impl BusState {
             )
         };
         Some(format!(
-            "[Bus message {message} from {sender}]\nBus restarted or recovered your provider runtime while you were working on message {message} from {sender}; your previous turn was interrupted. Check what you already did, then continue and finish that task.{joined} Reply as usual to the original message IDs."
+            "[Bus message {message} from {sender} (room {room})]\nBus restarted or recovered your provider runtime while you were working on message {message} from {sender} (room {room}); your previous turn was interrupted. Check what you already did, then continue and finish that task.{joined} Reply as usual to the original message IDs."
         ))
     }
 

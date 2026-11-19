@@ -741,14 +741,19 @@ impl Delivery {
         };
         match author {
             crate::messaging::model::Author::Bus => body,
-            crate::messaging::model::Author::Developer => {
-                with_body(format!("[Bus message {id} from you]"))
-            }
+            crate::messaging::model::Author::Developer => with_body(format!(
+                "[Bus message {id} from you (room {})]",
+                request.room_id.0
+            )),
             crate::messaging::model::Author::Agent(sender) => {
                 let name = state.agent_message_label(sender);
+                let room = request
+                    .sender_identity
+                    .as_ref()
+                    .map_or(request.room_id, |(_, room)| *room);
                 format!(
                     "{name}:\n{}",
-                    with_body(format!("[Bus message {id} from {name}]"))
+                    with_body(format!("[Bus message {id} from {name} (room {})]", room.0))
                 )
             }
         }

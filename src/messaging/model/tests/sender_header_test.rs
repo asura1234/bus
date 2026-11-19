@@ -1,6 +1,6 @@
 //! The chat attribution stays a bare sender line — same room, cross-room or
 //! MASTER — while its `[Bus message N from …]` prefix names the sender's room.
-//! A sender with no room keeps the bare label; nothing invents one.
+//! Developer messages and legacy agents without a home room use the request room.
 use std::path::PathBuf;
 
 use super::*;
@@ -27,6 +27,28 @@ fn pair(room_name: &str) -> (BusState, RoomId, AgentId, AgentId) {
         )
         .unwrap();
     (state, room, author, peer)
+}
+
+fn master_peer(state: &mut BusState) -> AgentId {
+    let master = state.ensure_master_room();
+    state
+        .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
+        .unwrap()
+}
+
+fn developer_request(state: &mut BusState, room: RoomId, peer: AgentId, text: &str) -> RequestId {
+    state
+        .submit_message_from(
+            room,
+            Draft {
+                text: text.into(),
+                files: Vec::new(),
+                recipient_ids: [peer].into(),
+            },
+            Author::Developer,
+            10,
+        )
+        .unwrap()[0]
 }
 
 fn delivered(
@@ -182,7 +204,7 @@ fn numeric_and_renamed_senders_keep_the_id_and_the_prefix_keeps_the_room() {
 }
 
 #[test]
-fn a_sender_with_no_room_keeps_the_bare_label() {
+fn a_sender_with_no_home_room_uses_the_request_room() {
     let (mut state, room, author, peer) = pair("work");
     let request = state
         .submit_message_from(
@@ -212,18 +234,14 @@ fn a_sender_with_no_room_keeps_the_bare_label() {
     assert_eq!(
         payload,
         format!(
-            "agent {}:\n[Bus message {message} from agent {}]\nlegacy",
-            author.0, author.0
+            "agent {}:\n[Bus message {message} from agent {} (room {})]\nlegacy",
+            author.0, author.0, room.0
         )
-    );
-    assert!(
-        !payload.contains("(room"),
-        "a missing room must not be invented: {payload}"
     );
 }
 
 #[test]
-fn a_developer_message_has_no_room_to_name() {
+fn a_developer_message_names_the_work_room() {
     let (mut state, room, _author, peer) = pair("work");
     let request = state
         .submit_message_from(
@@ -241,6 +259,104 @@ fn a_developer_message_has_no_room_to_name() {
     let payload = state.render_request_payload(request).unwrap();
     assert_eq!(
         payload,
-        format!("[Bus message {message} from you]\nreview the change")
+        format!(
+            "[Bus message {message} from you (room {})]\nreview the change",
+            room.0
+        )
     );
+}
+
+#[test]
+fn a_developer_message_in_master_names_room_zero() {
+    let mut state = BusState::new();
+    let peer = master_peer(&mut state);
+    let master = state.ensure_master_room();
+    assert_eq!(master.0, 0);
+    let request = developer_request(&mut state, master, peer, "status");
+    let message = state.request(request).unwrap().prompt.id.0;
+    assert_eq!(
+        state.render_request_payload(request).unwrap(),
+        format!("[Bus message {message} from you (room 0)]\nstatus")
+    );
+}
+
+#[test]
+fn a_developer_multi_recipient_message_keeps_names_after_the_room() {
+    let (mut state, room, author, peer) = pair("work");
+    let requests = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "shared task".into(),
+                files: Vec::new(),
+                recipient_ids: [peer, author].into(),
+            },
+            Author::Developer,
+            10,
+        )
+        .unwrap();
+    let message = state.request(requests[0]).unwrap().prompt.id.0;
+    let expected = format!(
+        "[Bus message {message} from you (room {}) to reviewer, builder]\nshared task",
+        room.0
+    );
+    for request in requests {
+        assert_eq!(state.render_request_payload(request).unwrap(), expected);
+    }
+}
+
+fn check_restart_continuation_room(in_master: bool) {
+    let (mut state, work, author, peer) = pair("work");
+    let master = state.ensure_master_room();
+    let orch = master_peer(&mut state);
+    let (room, recipient) = if in_master {
+        (master, orch)
+    } else {
+        (work, peer)
+    };
+    for sender in [Author::Developer, Author::Bus, Author::Agent(author)] {
+        let name = match sender {
+            Author::Developer => "you",
+            Author::Bus => "bus",
+            Author::Agent(_) => "builder",
+        };
+        let request = state
+            .submit_message_from(
+                room,
+                Draft {
+                    text: "original task".into(),
+                    files: Vec::new(),
+                    recipient_ids: [recipient].into(),
+                },
+                sender,
+                10,
+            )
+            .unwrap()[0];
+        let message = state.request(request).unwrap().prompt.id.0;
+        let member = developer_request(&mut state, room, recipient, "joined task");
+        let member_message = state.request(member).unwrap().prompt.id.0;
+        state.requests.get_mut(&member).unwrap().group = Some(request);
+        state
+            .requests
+            .get_mut(&request)
+            .unwrap()
+            .restart_continuation = true;
+        assert_eq!(
+            state.render_request_payload(request).unwrap(),
+            format!(
+                "[Bus message {message} from {name} (room {})]\nBus restarted or recovered your provider runtime while you were working on message {message} from {name} (room {}); your previous turn was interrupted. Check what you already did, then continue and finish that task. Messages {member_message} are still part of this task. Reply as usual to the original message IDs.",
+                room.0, room.0
+            )
+        );
+    }
+}
+
+#[test]
+fn restart_continuation_names_master_room_zero() {
+    check_restart_continuation_room(true);
+}
+
+#[test]
+fn restart_continuation_names_the_work_room() {
+    check_restart_continuation_room(false);
 }
