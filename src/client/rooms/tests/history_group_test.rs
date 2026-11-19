@@ -2,6 +2,70 @@ use super::*;
 use crate::messaging::model::{Draft, Provider, RequestId};
 
 #[test]
+fn outgoing_history_updates_with_mixed_recipient_interrupt_outcomes() {
+    use crate::messaging::model::SendInterruptOutcome;
+
+    let mut state = BusState::default();
+    let room = state.create_room("work").unwrap();
+    let agents = ["first", "second", "third"].map(|name| {
+        state
+            .create_agent(room, name, Provider::Codex, "/project".into(), None)
+            .unwrap()
+    });
+    state.set_draft_recipients(room, agents).unwrap();
+    state.set_draft_text(room, "next message").unwrap();
+    let requests = state.submit_draft_queued(room, 1).unwrap();
+    let mut history = History::default();
+    let mut thumbnails = Thumbnails::default();
+    let mut render = |state: &BusState, revision| {
+        history
+            .lines(
+                state,
+                state.room(room).unwrap(),
+                100,
+                revision,
+                2,
+                &mut thumbnails,
+            )
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    for request in &requests {
+        state
+            .record_send_interrupt_progress(
+                *request,
+                false,
+                SendInterruptOutcome {
+                    outcome: "already_idle".into(),
+                    reason: None,
+                },
+            )
+            .unwrap();
+    }
+    assert!(render(&state, 1).contains("first, second, third"));
+    for (&request, outcome) in requests.iter().zip(["interrupting", "failed"]) {
+        state
+            .record_send_interrupt_progress(
+                request,
+                false,
+                SendInterruptOutcome {
+                    outcome: outcome.into(),
+                    reason: None,
+                },
+            )
+            .unwrap();
+    }
+    let rendered = render(&state, 2);
+    assert!(
+        rendered.contains("first [interrupting], second [stop failed], third [already idle]"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn delivered_history_shows_the_message_without_a_reply_lifecycle() {
     let mut state = BusState::default();
     let room = state.create_room("work").unwrap();

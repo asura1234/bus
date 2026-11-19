@@ -10,7 +10,9 @@
 //! and every full save folds them in.
 use serde::{Deserialize, Serialize};
 
-use crate::messaging::model::{BusState, Draft, ModelError, RequestId, RoomId};
+use crate::messaging::model::{
+    BusState, Draft, ModelError, RequestId, RoomId, SendInterrupt, SendInterruptOutcome,
+};
 
 const JOURNAL_VERSION: u64 = 1;
 
@@ -39,6 +41,18 @@ pub(crate) enum JournalOp {
         draft: Draft,
         queued: bool,
         now_ms: u64,
+    },
+    SubmitInterruptDraft {
+        room: RoomId,
+        draft: Draft,
+        now_ms: u64,
+        interrupts: Vec<(RequestId, SendInterrupt)>,
+    },
+    SendInterruptProgress {
+        room: RoomId,
+        request_id: RequestId,
+        claim: bool,
+        outcome: SendInterruptOutcome,
     },
     DeliveryTimestamps {
         room: RoomId,
@@ -84,6 +98,8 @@ impl JournalOp {
             Self::DraftText { room, .. }
             | Self::Submit { room, .. }
             | Self::SubmitDraft { room, .. }
+            | Self::SubmitInterruptDraft { room, .. }
+            | Self::SendInterruptProgress { room, .. }
             | Self::DeliveryTimestamps { room, .. }
             | Self::DeliveryTimestampCompletion { room, .. } => *room,
         }
@@ -110,6 +126,26 @@ impl JournalOp {
             } => state
                 .submit_draft_exact(*room, draft.clone(), *now_ms, *queued)
                 .map(drop),
+            Self::SubmitInterruptDraft {
+                room,
+                draft,
+                now_ms,
+                interrupts,
+            } => {
+                let requests = state.submit_draft_exact(*room, draft.clone(), *now_ms, true)?;
+                for (id, interrupt) in interrupts {
+                    if requests.contains(id) {
+                        state.stage_send_interrupt(*id, interrupt.clone())?;
+                    }
+                }
+                Ok(())
+            }
+            Self::SendInterruptProgress {
+                request_id,
+                claim,
+                outcome,
+                ..
+            } => state.record_send_interrupt_progress(*request_id, *claim, outcome.clone()),
             Self::DeliveryTimestampCompletion {
                 request_id,
                 phase,

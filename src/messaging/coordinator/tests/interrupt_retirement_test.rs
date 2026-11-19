@@ -822,3 +822,243 @@ fn claude_ds_original_exit_resolves_the_retirement_hold_on_poll() {
         Method::PaneClose(_) | Method::PaneCloseIfIdentity(_)
     )));
 }
+
+struct PressAliases(Arc<Mutex<Vec<Method>>>);
+
+impl Transport for PressAliases {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        let target = match &method {
+            Method::AgentObserve(params) => &params.target,
+            Method::AgentPress(params) => &params.target,
+            _ => return Native(self.0.clone()).request(method),
+        };
+        let (terminal, pane) = match target.as_str() {
+            "terminal" | "moved-pane" => ("terminal", "moved-pane"),
+            "replacement-pane" | "replacement-terminal" | "claude" | "claude-ds" => {
+                ("replacement-terminal", "replacement-pane")
+            }
+            "unrelated" => ("other-terminal", "other-pane"),
+            target if target.starts_with("bus-r") => ("replacement-terminal", "replacement-pane"),
+            _ => panic!("unexpected native target {target}"),
+        };
+        let ResponseResult::TerminalObserved { mut observation } = open_native_question(pane)
+        else {
+            unreachable!()
+        };
+        observation.terminal_id = terminal.into();
+        let result = match &method {
+            Method::AgentPress(params) => {
+                if target == "unrelated" {
+                    assert_eq!(params.expected_terminal_id.as_deref(), Some(terminal));
+                }
+                ResponseResult::TerminalPressed {
+                    press: schema::TerminalPressResult {
+                        observation,
+                        keys: params.keys.clone(),
+                        text_written: false,
+                        selection_pending: false,
+                    },
+                }
+            }
+            _ => ResponseResult::TerminalObserved { observation },
+        };
+        self.0.lock().unwrap().push(method);
+        Ok(result)
+    }
+}
+
+#[test]
+fn agent_press_refuses_held_terminal_by_id_or_moved_pane() {
+    for missing_origin in [false, true] {
+        let mut f = Fixture::new(Provider::ClaudeDs);
+        let lead = running(&mut f, "held work", "turn-1");
+        let mut state = f.worker.state.clone();
+        state.set_interrupt_retirement(f.agent, true).unwrap();
+        let mut replacement = state.agent(f.agent).unwrap().runtime_identity.clone();
+        replacement.terminal_id = Some("replacement-terminal".into());
+        replacement.pane_id = Some("replacement-pane".into());
+        state
+            .set_agent_runtime_identity(f.agent, replacement)
+            .unwrap();
+        if missing_origin {
+            let mut saved = serde_json::to_value(&state).unwrap();
+            let row = &mut saved["requests"][lead.0.to_string()];
+            row.as_object_mut()
+                .unwrap()
+                .remove("interrupt_retirement_identity");
+            row.as_object_mut()
+                .unwrap()
+                .remove("native_delivery_identity");
+            state = serde_json::from_value(saved).unwrap();
+        }
+        assert_eq!(
+            state.interrupt_retirement_origin(lead).is_none(),
+            missing_origin
+        );
+        f.worker.save(state).unwrap();
+        f.worker.transport = Box::new(PressAliases(f.native.clone()));
+
+        let observed = f.worker.control_response_with_events(
+            &crate::messaging::control::Request {
+                id: "observe-held".into(),
+                method: "agent.observe".into(),
+                params: json!({"agent":"moved-pane", "pane":true}),
+            },
+            None,
+        );
+        assert!(observed.ok);
+        assert_eq!(observed.result["terminal_id"], "terminal");
+        let managed = crate::messaging::identity::managed_name(f.room, f.agent);
+        let mut press = |target: &str, pane: bool, terminal: Option<&str>| {
+            let mut params = json!({"agent":target, "pane":pane, "keys":["enter"]});
+            if let Some(terminal) = terminal {
+                params["terminal_id"] = json!(terminal);
+            }
+            f.worker.control_response_with_events(
+                &crate::messaging::control::Request {
+                    id: format!("press-{target}"),
+                    method: "agent.press".into(),
+                    params,
+                },
+                None,
+            )
+        };
+        for (target, pane, terminal) in [
+            ("terminal", true, Some("terminal")),
+            ("moved-pane", true, None),
+            (managed.as_str(), true, None),
+            ("claude", true, None),
+            ("claude-ds", true, None),
+            ("builder", false, None),
+            ("replacement-terminal", true, None),
+        ] {
+            let response = press(target, pane, terminal);
+            assert!(!response.ok, "wrote through {target}");
+            assert!(
+                response.error.unwrap().message.contains("retirement"),
+                "{target}"
+            );
+        }
+        assert!(press("unrelated", true, None).ok);
+        assert_eq!(
+            f.native
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|call| matches!(call, Method::AgentPress(_)))
+                .count(),
+            1
+        );
+    }
+}
+
+struct AbsentOriginal(Arc<Mutex<Vec<Method>>>, Option<schema::AgentInfo>);
+
+impl Transport for AbsentOriginal {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(method, Method::AgentListWithDetectionContext(_)) {
+            self.0.lock().unwrap().push(method);
+            return Ok(ResponseResult::AgentList {
+                agents: self.1.clone().into_iter().collect(),
+            });
+        }
+        if let Method::TerminalRequireAbsent(params) = &method {
+            let terminal_id = params.terminal_id.clone();
+            self.0.lock().unwrap().push(method);
+            return Ok(ResponseResult::TerminalAbsent { terminal_id });
+        }
+        Native(self.0.clone()).request(method)
+    }
+}
+
+#[test]
+fn claude_ds_verified_absence_keeps_an_unbound_leads_spooled_answer() {
+    for case in ["matched", "different session", "ambiguous start"] {
+        let mut f = Fixture::new(Provider::ClaudeDs);
+        let lead = f.send("original unbound input", true);
+        let mut state = f.worker.state.clone();
+        let mut identity = state.agent(f.agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        state.set_agent_runtime_identity(f.agent, identity).unwrap();
+        state.begin_submission(lead, "launch", 0).unwrap();
+        state
+            .stamp_native_delivery_epoch(
+                lead,
+                crate::messaging::model::DeliveryEpoch {
+                    generation: 1,
+                    terminal_id: "terminal".into(),
+                    pane_id: "pane".into(),
+                },
+                Some(0),
+            )
+            .unwrap();
+        state
+            .record_submission(
+                lead,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: None,
+                    provider_turn_id: None,
+                },
+            )
+            .unwrap();
+        state.set_interrupt_retirement(f.agent, true).unwrap();
+        f.worker.save(state).unwrap();
+        let first = f.send("first follower", true);
+        let second = f.send("second follower", true);
+        f.started("turn-1", "original unbound input");
+        if case == "different session" {
+            f.record(json!({
+                "hook_event_name":"Stop", "session_id":"foreign-session", "prompt_id":"turn-1",
+                "last_assistant_message":"foreign answer", "background_tasks":[], "session_crons":[]
+            }));
+        } else {
+            if case == "ambiguous start" {
+                f.started("turn-2", "original unbound input");
+            }
+            f.stopped("turn-1", "captured original answer");
+        }
+        f.worker.transport = Box::new(AbsentOriginal(f.native.clone(), None));
+        assert!(recover_held_request(&mut f, lead).ok);
+        let expected = (case == "matched").then_some("captured original answer");
+        assert_eq!(f.reply(lead).as_deref(), expected, "{case}");
+        if expected.is_none() {
+            assert_eq!(
+                f.request(lead).failure_reason.as_deref(),
+                Some("interrupt_outcome_unknown")
+            );
+            assert!(!f.request(lead).trusted_start_bound);
+        }
+        assert_eq!(f.worker.state.queued_requests(f.agent), &[first, second]);
+    }
+}
+
+#[test]
+fn verified_original_absence_does_not_skip_the_replacement_poll() {
+    let mut f = Fixture::new(Provider::ClaudeDs);
+    running(&mut f, "original work", "turn-1");
+    let mut state = f.worker.state.clone();
+    state.set_interrupt_retirement(f.agent, true).unwrap();
+    let mut replacement = state.agent(f.agent).unwrap().runtime_identity.clone();
+    replacement.terminal_id = Some("replacement-terminal".into());
+    replacement.pane_id = Some("replacement-pane".into());
+    state
+        .set_agent_runtime_identity(f.agent, replacement)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let info = serde_json::from_value(json!({
+        "terminal_id":"replacement-terminal", "pane_id":"replacement-pane", "agent":"claude",
+        "name":crate::messaging::identity::managed_name(f.room, f.agent),
+        "native_ready":true, "interactive_ready":true, "agent_status":"idle",
+        "agent_session":{"source":"herdr:claude","agent":"claude","kind":"id","value":"session"},
+        "workspace_id":"w", "tab_id":"t", "focused":false, "revision":1
+    }))
+    .unwrap();
+    f.worker.transport = Box::new(AbsentOriginal(f.native.clone(), Some(info)));
+    f.worker.tick().unwrap();
+    let agent = f.worker.state.agent(f.agent).unwrap();
+    assert_eq!(
+        agent.runtime_identity.terminal_id.as_deref(),
+        Some("replacement-terminal")
+    );
+    assert_eq!(agent.status, RuntimeStatus::Idle);
+}

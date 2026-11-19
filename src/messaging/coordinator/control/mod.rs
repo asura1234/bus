@@ -3,7 +3,7 @@ mod agents;
 mod driver;
 mod feishu;
 mod inspect;
-mod messages;
+pub(super) mod messages;
 mod rooms;
 mod selectors;
 mod sender;

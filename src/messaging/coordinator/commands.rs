@@ -1,7 +1,7 @@
 //! Single-writer command dispatch.
 use super::{
-    mpsc, schema, AgentId, Author, BusCommand as C, BusEvent, BusState, Method, Provider,
-    ResponseResult, RoomId, Worker,
+    mpsc, schema, AgentId, BusCommand as C, BusEvent, BusState, Method, Provider, ResponseResult,
+    RoomId, Worker,
 };
 use crate::messaging::storage::state_store::JournalOp;
 
@@ -147,34 +147,26 @@ impl Worker {
             .collect::<Result<Vec<_>, _>>()?;
         let now = crate::messaging::storage::io::now_ms();
         let mut state = self.state.clone();
-        // The room composer is always the developer. Developer messages always
-        // interrupt the recipient's running turn and run as the next turn, so
-        // the Enter/Option+Enter choice cannot weaken delivery. The journal
-        // records the queued form so a replay keeps that own-turn boundary.
+        // Composer sends persist the independent next turn and its exact stop targets.
         let requests = state
             .submit_draft_exact(room, draft.clone(), now, true)
             .map_err(|e| e.to_string())?;
+        let interrupts =
+            super::control_dispatch::messages::stage_send_interrupts(&mut state, &requests)?;
         self.journal(
             state,
-            JournalOp::SubmitDraft {
+            JournalOp::SubmitInterruptDraft {
                 room,
                 draft,
-                queued: true,
                 now_ms: now,
+                interrupts,
             },
         )?;
-        self.clear_send_interrupt_intents(&requests)?;
-        if let Some(recipients) = requests
-            .first()
-            .and_then(|id| self.state.request(*id))
-            .map(|request| request.prompt.recipient_ids.clone())
-        {
-            let mut state = self.state.clone();
-            self.interrupt_queued_message(&mut state, room, &recipients, &Author::Developer, now);
-            // An idle stop leaves the journaled send unchanged. Folding it
-            // here would put a full-state rewrite on every composer Enter.
-            if state != self.state {
-                self.save(state)?;
+        for id in &requests {
+            if let Err(error) = self.dispatch_queued_send_interrupt(*id, now) {
+                // The draft was accepted. The storage pause and intent retain the stop work.
+                tracing::warn!(%error, request_id = id.0, "Queued send stop dispatch paused");
+                break;
             }
         }
         self.note_requests_queued(&requests);

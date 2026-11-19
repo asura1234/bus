@@ -84,9 +84,9 @@ pub(crate) use {
         Author, CallbackDisposition, CallbackEventKind, CallbackRejection, Compactions,
         DeliveryEpoch, DialogNoticeTo, Draft, ExitSnapshot, PendingFinal, Prompt, PromptId,
         Provider, ProviderCallback, Reply, Request, RequestId, RequestPhase, RestartResume, Room,
-        RoomHistoryFilters, RoomId, RoomKind, RuntimeStatus, StartupFailure, StartupRecovery,
-        SubmissionOutcome, AGENT_STARTUP_FAILED, BLOCKED_STALL_MS, BUS_SENDER,
-        CODEX_BOOTSTRAP_FAILED, DELIVERED_STALL_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS,
+        RoomHistoryFilters, RoomId, RoomKind, RuntimeStatus, SendInterrupt, SendInterruptOutcome,
+        StartupFailure, StartupRecovery, SubmissionOutcome, AGENT_STARTUP_FAILED, BLOCKED_STALL_MS,
+        BUS_SENDER, CODEX_BOOTSTRAP_FAILED, DELIVERED_STALL_MS, MASTER_ROOM_NAME, QUEUED_STALL_MS,
         TURN_SETTLE_MS, UNBOUND_SETTLE_MS,
     },
 };

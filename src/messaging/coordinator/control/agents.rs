@@ -1,8 +1,8 @@
 //! Agents development commands on the single coordinator.
 use super::{
-    launch, mpsc, optional_bool, optional_text, required, schema, AddAgent, AgentId,
-    AgentRecipients, Author, BusCommand, BusEvent, Draft, Method, Provider, ResponseResult, RoomId,
-    RuntimeStatus, Worker, MASTER_AGENT_NEEDS_ROOM,
+    launch, mpsc, optional_bool, optional_text, required, schema, AddAgent, AgentId, Author,
+    BusCommand, BusEvent, Draft, Method, Provider, ResponseResult, RoomId, RuntimeStatus, Worker,
+    MASTER_AGENT_NEEDS_ROOM,
 };
 use crate::messaging::orchestration::{self as orchestrator, OrchestratorSpec};
 use serde_json::{json, Value};
@@ -498,44 +498,35 @@ impl Worker {
         Ok(row)
     }
 
-    /// End each recipient's running turn for a message that is already
-    /// queued as its own next turn. The developer's sends always use this;
-    /// an orchestrator's explicit interrupt does too. Best-effort: a failed
-    /// stop key never loses the accepted message or fails the receipt.
-    pub(in crate::messaging::coordinator) fn interrupt_queued_message(
+    /// Best-effort stop for one recipient of an already durable queued send.
+    pub(super) fn interrupt_queued_recipient(
         &mut self,
         state: &mut crate::messaging::model::BusState,
         room: RoomId,
-        recipients: &AgentRecipients,
+        recipient: AgentId,
         interrupter: &crate::messaging::model::Author,
         now: u64,
-    ) -> Vec<Value> {
-        recipients
-            .iter()
-            .map(|recipient| {
-                // A second Esc opens Claude's rewind; a second Ctrl+C can quit
-                // Cursor or Grok. A previously started stop still owns the turn.
-                if state
-                    .agent(*recipient)
-                    .is_some_and(|agent| agent.interrupt_pending)
-                {
-                    return json!({"agent_id": recipient, "outcome": "interrupting"});
-                }
-                match self.interrupt_agent(state, *recipient, room, interrupter, now, false) {
-                    Ok(result) => result,
-                    Err(reason) => {
-                        tracing::warn!(
-                            event = "bus.send.interrupt_failed",
-                            agent_id = recipient.0,
-                            room_id = room.0,
-                            reason,
-                            "Interrupt-mode delivery could not stop the running turn"
-                        );
-                        json!({"agent_id": recipient, "outcome": "failed", "reason": reason})
-                    }
-                }
-            })
-            .collect()
+    ) -> Value {
+        if state
+            .agent(recipient)
+            .is_some_and(|agent| agent.interrupt_pending)
+        {
+            // A second key can exit the provider or open Claude's rewind.
+            return json!({"agent_id": recipient, "outcome": "interrupting"});
+        }
+        match self.interrupt_agent(state, recipient, room, interrupter, now, false) {
+            Ok(result) => result,
+            Err(reason) => {
+                tracing::warn!(
+                    event = "bus.send.interrupt_failed",
+                    agent_id = recipient.0,
+                    room_id = room.0,
+                    reason,
+                    "Interrupt-mode delivery could not stop the running turn"
+                );
+                json!({"agent_id": recipient, "outcome": "failed", "reason": reason})
+            }
+        }
     }
 
     /// `agent interrupt` posts "Interrupted AGENT." so waiters learn who
@@ -567,7 +558,7 @@ impl Worker {
     ) -> Result<(), String> {
         // The caller may journal only the follower send. A failed save leaves
         // the old hold and a retryable native receipt.
-        let callbacks = self.retirement_callback_evidence(&self.state, id)?;
+        let callbacks = self.retirement_callback_evidence(&self.state, id, false)?;
         let mut durable = self.state.clone();
         durable.reconcile_retirement_answers(id, &callbacks);
         durable

@@ -4,6 +4,8 @@ use super::{
     Draft, ModelError, PathBuf, PromptId, Request, RequestId, RequestPhase, Response, RoomId,
     RuntimeStatus, Worker,
 };
+use crate::messaging::model::{BusState, SendInterrupt, SendInterruptOutcome};
+use crate::messaging::storage::state_store::JournalOp;
 use serde_json::{json, Value};
 
 /// What `message.send` does with a recipient that is running a turn.
@@ -36,59 +38,114 @@ impl SendDelivery {
     }
 }
 
+pub(in crate::messaging::coordinator) fn stage_send_interrupts(
+    state: &mut BusState,
+    requests: &[RequestId],
+) -> Result<Vec<(RequestId, SendInterrupt)>, String> {
+    let mut interrupts = Vec::new();
+    for id in requests {
+        let request = state.request(*id).ok_or("Missing queued send")?;
+        if let Some(intent) = state.send_interrupt_target(request.agent_id) {
+            state
+                .stage_send_interrupt(*id, intent.clone())
+                .map_err(|error| error.to_string())?;
+            interrupts.push((*id, intent));
+        }
+    }
+    Ok(interrupts)
+}
+
 impl Worker {
     pub(in crate::messaging::coordinator) fn replay_queued_send_interrupts(
         &mut self,
         now: u64,
     ) -> Result<(), String> {
-        let sends: Vec<_> = self
+        let pending: Vec<_> = self
             .state
             .requests()
-            .filter(|request| request.phase == RequestPhase::Queued)
-            .filter_map(|request| {
-                Some((
-                    request.id,
-                    request.agent_id,
-                    request.room_id,
-                    request.prompt.author.clone(),
-                    request.send_interrupt.clone()?,
-                ))
+            .filter(|request| {
+                request.phase == RequestPhase::Queued && request.send_interrupt.is_some()
             })
+            .map(|request| request.id)
             .collect();
-        for (request, recipient, room, sender, interrupt) in sends {
-            let mut state = self.state.clone();
-            if !state.take_send_interrupt(request) {
-                continue;
-            }
-            let same_turn = state.agent(recipient).is_some_and(|agent| {
-                agent.current_request == Some(interrupt.target)
-                    && agent.runtime_identity == interrupt.identity
-            });
-            // Persist admission before the key. On an ambiguous process crash,
-            // do not replay a stop into whatever turn the pane now presents.
-            self.save(state)?;
-            if same_turn {
-                let mut state = self.state.clone();
-                self.interrupt_queued_message(&mut state, room, &[recipient].into(), &sender, now);
-                self.save(state)?;
-            }
+        for id in pending {
+            self.dispatch_queued_send_interrupt(id, now)?;
         }
         Ok(())
     }
 
-    pub(in crate::messaging::coordinator) fn clear_send_interrupt_intents(
+    pub(in crate::messaging::coordinator) fn dispatch_queued_send_interrupt(
         &mut self,
-        requests: &[RequestId],
-    ) -> Result<(), String> {
+        id: RequestId,
+        now: u64,
+    ) -> Result<Value, String> {
+        let request = self.state.request(id).ok_or("Missing queued send")?;
+        let (room, recipient) = (request.room_id, request.agent_id);
+        let sender = request.prompt.author.clone();
+        let current = self.state.send_interrupt_target(recipient);
+        let agent = self.state.agent(recipient).ok_or("Unknown agent")?;
+        let needs_stop = !agent.interrupt_pending && self.state.needs_interrupt_stop(agent);
         let mut state = self.state.clone();
-        let mut changed = false;
-        for request in requests {
-            changed |= state.take_send_interrupt(*request);
-        }
-        if changed {
+        let result = if !agent.interrupt_pending && request.send_interrupt != current {
+            json!({"agent_id": recipient, "outcome": "skipped",
+                "reason": "The original interrupt target changed"})
+        } else if needs_stop
+            && current
+                .as_ref()
+                .is_some_and(|intent| self.state.send_interrupt_already_claimed(intent))
+        {
+            json!({"agent_id": recipient, "outcome": "unknown",
+                "reason": "The prior stop may have reached the terminal"})
+        } else {
+            if needs_stop && current.is_some() {
+                // Commit only this recipient's claim before a possible native write.
+                self.journal_send_interrupt(
+                    room,
+                    id,
+                    true,
+                    SendInterruptOutcome {
+                        outcome: "unknown".into(),
+                        reason: None,
+                    },
+                )?;
+                state = self.state.clone();
+            }
+            self.interrupt_queued_recipient(&mut state, room, recipient, &sender, now)
+        };
+        let outcome = SendInterruptOutcome {
+            outcome: result["outcome"]
+                .as_str()
+                .ok_or("Missing stop outcome")?
+                .into(),
+            reason: result["reason"].as_str().map(str::to_owned),
+        };
+        if state != self.state {
+            state
+                .record_send_interrupt_progress(id, false, outcome)
+                .map_err(|error| error.to_string())?;
             self.save(state)?;
+        } else {
+            self.journal_send_interrupt(room, id, false, outcome)?;
         }
-        Ok(())
+        Ok(result)
+    }
+
+    fn journal_send_interrupt(
+        &mut self,
+        room: RoomId,
+        request_id: RequestId,
+        claim: bool,
+        outcome: SendInterruptOutcome,
+    ) -> Result<(), String> {
+        let op = JournalOp::SendInterruptProgress {
+            room,
+            request_id,
+            claim,
+            outcome,
+        };
+        let mut state = self.state.clone();
+        op.apply(&mut state).map_err(|error| error.to_string())?;
+        self.journal(state, op)
     }
 
     pub(super) fn execute_messages(
@@ -301,7 +358,7 @@ impl Worker {
             )
             .map_err(|e| e.to_string())?;
         if delivery == SendDelivery::Interrupt {
-            state.stage_send_interrupts(&ids);
+            stage_send_interrupts(&mut state, &ids)?;
         }
         let message = state
             .request(ids[0])
@@ -311,14 +368,11 @@ impl Worker {
         self.save(state)?;
         let mut receipt = json!({"message_id":message,"request_ids":ids,"stage":"queued"});
         if delivery == SendDelivery::Interrupt {
-            // Save the independent next turn before sending any native stop.
-            self.clear_send_interrupt_intents(&ids)?;
-            let mut state = self.state.clone();
-            let interrupter = author.map_or(Author::Developer, Author::Agent);
-            receipt["interrupts"] = self
-                .interrupt_queued_message(&mut state, room, &recipients, &interrupter, now)
-                .into();
-            self.save(state)?;
+            let interrupts = ids
+                .iter()
+                .map(|id| self.dispatch_queued_send_interrupt(*id, now))
+                .collect::<Result<Vec<_>, _>>()?;
+            receipt["interrupts"] = json!(interrupts);
         }
         self.note_requests_queued(&ids);
         for id in &ids {
@@ -719,7 +773,7 @@ impl Worker {
                 .or_else(|| r.manual_recovery.as_ref().and(r.submission_error.as_ref()))
                 .or_else(|| submission.manual_recovery.as_ref().and(submission.submission_error.as_ref()))
                 .or_else(|| submission.submission_notice().and(submission.submission_error.as_ref())));
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"reason":reason,"manual_recovery":r.manual_recovery,"status":agent.map(|a| if a.provider_retry.is_some() { RuntimeStatus::Working } else { a.status }),"delivery_error":(!matches!(r.phase, RequestPhase::Completed | RequestPhase::Abandoned)).then(|| agent.and_then(|a| a.delivery_error())).flatten(),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"latency":r.latency,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":r.reply()})
+            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"reason":reason,"manual_recovery":r.manual_recovery,"status":agent.map(|a| if a.provider_retry.is_some() { RuntimeStatus::Working } else { a.status }),"delivery_error":(!matches!(r.phase, RequestPhase::Completed | RequestPhase::Abandoned)).then(|| agent.and_then(|a| a.delivery_error())).flatten(),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"interrupt":r.send_interrupt_outcome,"latency":r.latency,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":r.reply()})
         }).collect::<Vec<_>>()}),
         )
     }

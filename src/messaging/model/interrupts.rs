@@ -3,7 +3,7 @@
 //! queued for the next one.
 use super::{
     AgentId, Author, BusState, ModelError, Prompt, PromptId, RequestId, RequestPhase, RoomId,
-    RuntimeStatus,
+    RuntimeStatus, SendInterrupt, SendInterruptOutcome,
 };
 
 /// The reason an interrupted request closed with, which `wait` reports as
@@ -11,26 +11,73 @@ use super::{
 pub(crate) const INTERRUPTED: &str = "interrupted";
 
 impl BusState {
-    pub(crate) fn stage_send_interrupts(&mut self, requests: &[RequestId]) {
-        for id in requests {
-            let interrupt = self.request(*id).and_then(|request| {
-                let owner = self.agent(request.agent_id)?;
-                Some(super::types::SendInterrupt {
-                    target: owner.current_request?,
-                    identity: owner.runtime_identity.clone(),
-                })
-            });
-            if let Some(request) = self.requests.get_mut(id) {
-                request.send_interrupt = interrupt;
-            }
+    pub(crate) fn send_interrupt_target(&self, recipient: AgentId) -> Option<SendInterrupt> {
+        let owner = self.agent(recipient)?;
+        // An in-flight stop already owns this turn. Do not leave a new marker
+        // that could recreate it when a restart clears the presentation wait.
+        if owner.interrupt_pending {
+            return None;
         }
+        let target = self.request(owner.current_request?)?;
+        Some(SendInterrupt {
+            target: target.id,
+            identity: owner.runtime_identity.clone(),
+            submission_boundary: target.submission_boundary,
+            submission_status_revision: target.submission_status_revision,
+            provider_turn_id: target.provider_turn_id.clone(),
+        })
     }
 
-    pub(crate) fn take_send_interrupt(&mut self, request: RequestId) -> bool {
+    pub(crate) fn stage_send_interrupt(
+        &mut self,
+        id: RequestId,
+        interrupt: SendInterrupt,
+    ) -> Result<(), ModelError> {
         self.requests
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownRequest(id))?
+            .send_interrupt = Some(interrupt);
+        Ok(())
+    }
+
+    pub(crate) fn record_send_interrupt_progress(
+        &mut self,
+        request: RequestId,
+        claim: bool,
+        outcome: SendInterruptOutcome,
+    ) -> Result<(), ModelError> {
+        let row = self
+            .requests
             .get_mut(&request)
-            .and_then(|request| request.send_interrupt.take())
-            .is_some()
+            .ok_or(ModelError::UnknownRequest(request))?;
+        let intent = row.send_interrupt.take();
+        row.send_interrupt_outcome = Some(outcome);
+        if let Some(intent) = intent.filter(|_| claim) {
+            if let Some(target) = self.requests.get_mut(&intent.target) {
+                target.send_interrupt_claim = Some(intent);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn send_interrupt_already_claimed(&self, intent: &SendInterrupt) -> bool {
+        self.request(intent.target)
+            .and_then(|row| row.send_interrupt_claim.as_ref())
+            .is_some_and(|claim| {
+                claim.submission_boundary == intent.submission_boundary
+                    && claim.submission_status_revision == intent.submission_status_revision
+                    && claim.identity.launch_id == intent.identity.launch_id
+                    && claim.identity.terminal_id == intent.identity.terminal_id
+                    && claim
+                        .identity
+                        .session_id
+                        .as_ref()
+                        .is_none_or(|session| intent.identity.session_id.as_ref() == Some(session))
+                    && claim
+                        .provider_turn_id
+                        .as_ref()
+                        .is_none_or(|turn| intent.provider_turn_id.as_ref() == Some(turn))
+            })
     }
 
     pub(crate) fn stamp_native_delivery_epoch(

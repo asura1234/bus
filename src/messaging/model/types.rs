@@ -543,6 +543,19 @@ pub(crate) enum RestartResume {
 pub(crate) struct SendInterrupt {
     pub(crate) target: RequestId,
     pub(crate) identity: AgentRuntimeIdentity,
+    #[serde(default)]
+    pub(crate) submission_boundary: Option<u64>,
+    #[serde(default)]
+    pub(crate) submission_status_revision: u64,
+    #[serde(default)]
+    pub(crate) provider_turn_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub(crate) struct SendInterruptOutcome {
+    pub(crate) outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -592,6 +605,11 @@ pub(crate) struct Request {
     /// An independently queued send must stop this specific still-current turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) send_interrupt: Option<SendInterrupt>,
+    /// A stop that may already have been written to this request's native turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) send_interrupt_claim: Option<SendInterrupt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) send_interrupt_outcome: Option<SendInterruptOutcome>,
     /// Native interrupt cannot settle until its restored Bus draft is retired.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupt_retirement_pending: bool,

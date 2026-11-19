@@ -55,10 +55,16 @@ impl Worker {
                 if !original_is_listed
                     && self.resolve_exited_claude_input(&mut state, agent.id, observed_at_ms)?
                 {
-                    // The old terminal stays open, with no Bus delivery route.
-                    continue;
+                    if state
+                        .agent(agent.id)
+                        .is_some_and(|current| current.runtime_identity.pane_id.is_none())
+                    {
+                        // The old terminal stays open, with no Bus delivery route.
+                        continue;
+                    }
                 }
-            } else {
+            }
+            if state.interrupt_retirement_owner(agent.id).is_none() {
                 let (missing, exit_evidence) =
                     self.observe_missing_binary(&mut state, agent, status, info)?;
                 if !missing {

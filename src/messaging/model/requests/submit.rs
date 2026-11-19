@@ -107,9 +107,6 @@ impl BusState {
                 .ok_or(ModelError::UnknownRoom(room))?
                 .draft = original;
         }
-        if let Ok(requests) = &result {
-            self.stage_send_interrupts(requests);
-        }
         result
     }
 
@@ -196,6 +193,8 @@ impl BusState {
                     trusted_start_bound: false,
                     uncertain_outcome: false,
                     send_interrupt: None,
+                    send_interrupt_claim: None,
+                    send_interrupt_outcome: None,
                     interrupt_retirement_pending: false,
                     interrupt_retirement_identity: None,
                     native_delivery_identity: None,

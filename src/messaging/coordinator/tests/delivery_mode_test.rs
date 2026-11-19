@@ -616,3 +616,200 @@ fn developer_send_keeps_interrupt_intent_and_reports_native_retirement_result() 
         Some("interrupted")
     );
 }
+
+fn second_running(f: &mut Fixture) -> AgentId {
+    let mut state = f.worker.state.clone();
+    let agent = state
+        .create_agent(f.room, "second", Provider::Codex, f.dir.clone(), None)
+        .unwrap();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("second-launch".into()),
+                terminal_id: Some("second-terminal".into()),
+                pane_id: Some("second-pane".into()),
+                session_id: Some("second-session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    let request = state
+        .submit_message_with(
+            f.room,
+            Draft {
+                text: "second agent's work".into(),
+                recipient_ids: [agent].into(),
+                ..Draft::default()
+            },
+            Author::Developer,
+            f.now,
+            true,
+        )
+        .unwrap()[0];
+    state.begin_submission(request, "second-launch", 0).unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("second-session".into()),
+                provider_turn_id: Some("turn-2".into()),
+            },
+        )
+        .unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Working, f.now)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    agent
+}
+
+struct FailAtFirstStop(Arc<Mutex<Vec<Method>>>);
+
+impl Transport for FailAtFirstStop {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(method, Method::AgentSendKeys(_)) {
+            self.0.lock().unwrap().push(method);
+            panic!("simulated coordinator loss after first stop dispatch");
+        }
+        Native(self.0.clone()).request(method)
+    }
+}
+
+fn reopen_after_interrupt(f: &mut Fixture) {
+    let scratch = Worker::open(f.dir.join("scratch"), Box::new(Native(f.native.clone()))).unwrap();
+    drop(std::mem::replace(&mut f.worker, scratch));
+    f.worker = Worker::open(f.dir.clone(), Box::new(Native(f.native.clone()))).unwrap();
+}
+
+#[test]
+fn multi_recipient_interrupt_replays_only_recipients_not_yet_dispatched() {
+    for composer in [false, true] {
+        let mut f = Fixture::new(Provider::Codex);
+        running(&mut f, "old work", "turn-1");
+        let second = second_running(&mut f);
+        f.worker.transport = Box::new(FailAtFirstStop(f.native.clone()));
+        let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if composer {
+                let draft = Draft {
+                    text: "new work".into(),
+                    recipient_ids: [f.agent, second].into(),
+                    ..Draft::default()
+                };
+                f.worker
+                    .command(BusCommand::Submit(f.room, draft), &mpsc::channel().0)
+                    .unwrap();
+            } else {
+                let params = json!({"room":f.room.0.to_string(),"to":["builder","second"],"text":"new work"});
+                assert!(send(&mut f, params).ok);
+            }
+        }));
+        assert!(crashed.is_err());
+        reopen_after_interrupt(&mut f);
+        // The normal tick refreshes runtime status before replay.
+        let mut polled = f.worker.state.clone();
+        for recipient in [f.agent, second] {
+            polled
+                .observe_status(recipient, RuntimeStatus::Working, f.now)
+                .unwrap();
+        }
+        f.worker.save(polled).unwrap();
+        f.worker.replay_queued_send_interrupts(f.now).unwrap();
+        // A fresh send only queues when the original turn has an ambiguous stop claim.
+        let params = json!({
+            "room": f.room.0.to_string(), "to": ["builder"], "text": "another send"
+        });
+        let response = send(&mut f, params);
+        assert!(response.ok, "{response:?}");
+        assert_eq!(response.result["interrupts"][0]["outcome"], "unknown");
+        let calls = f.native.lock().unwrap();
+        let panes: Vec<_> = calls
+            .iter()
+            .filter_map(|method| match method {
+                Method::AgentSendKeys(params) => Some(params.target.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(panes, ["pane", "second-pane"], "composer={composer}");
+    }
+}
+
+#[test]
+fn legacy_composer_journal_replays_the_send_without_issuing_a_second_stop() {
+    let mut f = Fixture::new(Provider::Codex);
+    running(&mut f, "old work", "turn-1");
+    let legacy = serde_json::from_value(json!({
+        "op":"submit_draft", "room":f.room, "draft":{
+            "text":"already interrupted", "recipient_ids":[f.agent], "files":[]
+        }, "queued":true, "now_ms":f.now
+    }))
+    .unwrap();
+    f.worker.store.journal(legacy).unwrap();
+    let durable = f.worker.store.load().unwrap().unwrap();
+    let follower = durable.queued_requests(f.agent)[0];
+    assert!(
+        durable.request(follower).unwrap().send_interrupt.is_none(),
+        "the old operation must not recreate a stop intent"
+    );
+    reopen_after_interrupt(&mut f);
+    f.worker.replay_queued_send_interrupts(f.now).unwrap();
+    assert_eq!(f.worker.state.queued_requests(f.agent).len(), 1);
+    assert!(
+        stop_keys(&f).is_empty(),
+        "a legacy record may already have stopped the turn"
+    );
+}
+
+#[test]
+fn room_composer_keeps_per_recipient_stop_outcomes_without_resubmitting() {
+    let mut f = Fixture::new(Provider::Codex);
+    running(&mut f, "old work", "turn-1");
+    let second = second_running(&mut f);
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(second, RuntimeStatus::Unavailable, f.now)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let draft = Draft {
+        text: "new work".into(),
+        recipient_ids: [f.agent, second].into(),
+        ..Draft::default()
+    };
+    f.worker
+        .command(BusCommand::Submit(f.room, draft), &mpsc::channel().0)
+        .unwrap();
+    let first = f.worker.state.queued_requests(f.agent)[0];
+    let prompt = f.request(first).prompt.id;
+    let status = f.worker.control_message(prompt).unwrap();
+    assert_eq!(
+        status["requests"][0]["interrupt"]["outcome"],
+        "interrupting"
+    );
+    assert_eq!(status["requests"][1]["interrupt"]["outcome"], "failed");
+    assert_eq!(f.worker.state.queued_requests(f.agent).len(), 1);
+    assert_eq!(f.worker.state.queued_requests(second).len(), 1);
+}
+
+#[test]
+fn composer_acknowledges_a_durable_send_when_its_stop_claim_write_fails() {
+    let mut f = Fixture::new(Provider::Codex);
+    running(&mut f, "old work", "turn-1");
+    f.worker.store.fail_once_at_after(
+        crate::messaging::storage::state_store::SaveStage::TempSync,
+        1,
+    );
+    let draft = Draft {
+        text: "new work".into(),
+        recipient_ids: [f.agent].into(),
+        ..Draft::default()
+    };
+    f.worker
+        .command(BusCommand::Submit(f.room, draft), &mpsc::channel().0)
+        .unwrap();
+    let durable = f.worker.store.load().unwrap().unwrap();
+    let [queued] = durable.queued_requests(f.agent) else {
+        panic!("expected one durable follower")
+    };
+    assert!(durable.request(*queued).unwrap().send_interrupt.is_some());
+    assert!(stop_keys(&f).is_empty());
+}

@@ -90,28 +90,43 @@ impl Worker {
                 .map(|observation| observation_json(observation, cells))
                 .map_err(|error| error.to_string());
         }
+        let explicit_terminal = optional_text(p, "terminal_id")?;
+        let observed = native_observe(&target, managed_terminal.as_deref(), None, &mut |method| {
+            self.transport.request(method)
+        })
+        .map_err(|error| error.message)?;
         if self.state.agents().any(|agent| {
-            self.state
-                .interrupt_retirement_owner(agent.id)
-                .is_some_and(|owner| {
-                    agent.runtime_identity.pane_id.as_deref() == Some(target.as_str())
-                        || self
-                            .state
-                            .interrupt_retirement_origin(owner)
-                            .and_then(|identity| identity.pane_id.as_deref())
-                            == Some(target.as_str())
-                })
+            let Some(owner) = self.state.interrupt_retirement_owner(agent.id) else {
+                return false;
+            };
+            let matches = |identity: &crate::messaging::model::AgentRuntimeIdentity| {
+                identity.terminal_id.as_ref() == Some(&observed.terminal_id)
+                    || identity.pane_id.as_ref() == Some(&observed.pane_id)
+            };
+            matches(&agent.runtime_identity)
+                || std::iter::once(owner)
+                    .chain(self.state.group_members(owner))
+                    .filter_map(|id| self.state.request(id))
+                    .filter(|request| request.id == owner || !request.settled())
+                    .any(|request| {
+                        [
+                            request.interrupt_retirement_identity.as_ref(),
+                            request.native_delivery_identity.as_ref(),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .any(matches)
+                            || request.delivery_epoch.as_ref().is_some_and(|epoch| {
+                                epoch.terminal_id == observed.terminal_id
+                                    || epoch.pane_id == observed.pane_id
+                            })
+                    })
         }) {
             return Err(
                 crate::messaging::model::ModelError::InterruptRetirementPending.to_string(),
             );
         }
-        let explicit_terminal = optional_text(p, "terminal_id")?;
-        if explicit_terminal.is_some_and(|expected| {
-            managed_terminal
-                .as_deref()
-                .is_some_and(|actual| actual != expected)
-        }) {
+        if explicit_terminal.is_some_and(|expected| expected != observed.terminal_id) {
             return Err("Agent terminal identity changed; observe it again".into());
         }
         let text = p
@@ -127,7 +142,7 @@ impl Worker {
             .unwrap_or_default();
         let params = schema::AgentPressParams {
             target,
-            expected_terminal_id: explicit_terminal.map(str::to_owned).or(managed_terminal),
+            expected_terminal_id: Some(observed.terminal_id),
             select: optional_text(p, "select")?.map(str::to_owned),
             text,
             keys,
@@ -188,7 +203,7 @@ fn press_terminal(
 }
 
 fn press_terminal_with_elapsed(
-    mut params: schema::AgentPressParams,
+    params: schema::AgentPressParams,
     call: &mut impl FnMut(Method) -> Result<ResponseResult, TransportError>,
     pause: &mut impl FnMut(),
     elapsed: &mut impl FnMut() -> Duration,
@@ -224,9 +239,6 @@ fn press_terminal_with_elapsed(
             };
             return press_result(press, keys, text_written, outcome, None);
         }
-        // Bind even an explicitly selected plain pane after its first native
-        // response, before following any redraw or continuing a selection.
-        params.expected_terminal_id = Some(press.observation.terminal_id.clone());
         let focus = match focus_identity(&press.observation) {
             Ok(focus) => focus,
             Err(error) => {

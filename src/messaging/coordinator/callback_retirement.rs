@@ -50,7 +50,7 @@ impl Worker {
         if !original_exited && !original_absent {
             return Ok(false);
         }
-        let callbacks = self.retirement_callback_evidence(state, agent)?;
+        let callbacks = self.retirement_callback_evidence(state, agent, original_absent)?;
         state.reconcile_retirement_answers(agent, &callbacks);
         state
             .resolve_exited_interrupt_terminal(request, &original, now_ms)
@@ -71,7 +71,7 @@ impl Worker {
             && state.interrupt_retirement_evidence_owner(id).is_some()
         {
             // Hooks may publish between the native reply and the settling poll.
-            let evidence = self.retirement_callback_evidence(state, id)?;
+            let evidence = self.retirement_callback_evidence(state, id, false)?;
             state.reconcile_retirement_answers(id, &evidence);
         }
         Ok(())
@@ -81,6 +81,7 @@ impl Worker {
         &self,
         state: &BusState,
         id: AgentId,
+        original_absent: bool,
     ) -> Result<Vec<ProviderCallback>, String> {
         let owner = state.agent(id).ok_or("Unknown callback agent")?;
         let Some(identity) = state
@@ -90,8 +91,12 @@ impl Worker {
         else {
             return Ok(Vec::new());
         };
-        let (Some(launch), Some(original_session)) = (&identity.launch_id, &identity.session_id)
-        else {
+        // An unbound witness can be reconciled without changing that witness
+        // only after positive absence has settled the native side.
+        if identity.session_id.is_none() && !original_absent {
+            return Ok(Vec::new());
+        }
+        let Some(launch) = &identity.launch_id else {
             return Ok(Vec::new());
         };
         let mut records = callbacks::records(&self.data_dir.join("callbacks").join(launch))
@@ -130,7 +135,10 @@ impl Worker {
                         }
                         _ => return None,
                     };
-                (&session == original_session)
+                identity
+                    .session_id
+                    .as_ref()
+                    .is_none_or(|original| original == &session)
                     .then(|| callback(record, id, session, turn, prompt, kind))
             })
             .collect())
