@@ -153,7 +153,10 @@ fn reply_diagnostics_delivered_messages_carry_a_short_header_only() {
     let message = f.request(lead).prompt.id;
     let payload = f.typed().last().unwrap().0.clone();
     assert!(
-        payload.contains(&format!("[Bus message {} from you]", message.0)),
+        payload.contains(&format!(
+            "[Bus message {} from you (room {})]",
+            message.0, f.room.0
+        )),
         "{payload}"
     );
     assert!(!payload.contains("answer with bus send"), "{payload}");
@@ -258,7 +261,10 @@ fn reply_diagnostics_short_header_and_first_answer_work_for_each_provider() {
         let agent = f.agent;
         let payload = f.typed().last().unwrap().0.clone();
         assert!(
-            payload.starts_with(&format!("[Bus message {} from you]\nverify", message.0)),
+            payload.starts_with(&format!(
+                "[Bus message {} from you (room {})]\nverify",
+                message.0, f.room.0
+            )),
             "{provider:?}: {payload}"
         );
         assert!(

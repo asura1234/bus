@@ -151,7 +151,7 @@ The `--reply-to` receipt reports `requester_turn_queued:false`: no requester tur
 was queued. If the requester must act, deliver the result with a fresh normal
 `bus send --room ROOM --as YOUR_AGENT_ID --to REQUESTER --text TEXT` instead.
 
-To settle a request before its turn ends, run `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text ANSWER` in the foreground and check `ok:true` and `stage:"replied"`. A deliverable message starts with `[Bus message N from NAME (room R)]` when the sender has a room (`from you` for the developer); that N is the message ID. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header.
+To settle a request before its turn ends, run `bus send --reply-to MESSAGE_ID --as YOUR_AGENT_ID --text ANSWER` in the foreground and check `ok:true` and `stage:"replied"`. A deliverable message starts with `[Bus message N from NAME (room R)]` when the sender has a room (`from you (room R)` for the developer, using the request room); that N is the message ID. Notices that need no reply (a final no-reply outcome, Blocked, idle, disk, compaction, restart) omit that header.
 
 **No message without new information.** This applies to the developer, the orchestrator, other agents, and the room. Send a message only when it carries a new fact: a verdict, a merge, an exact head, a `file:line`, a path, a blocker, or a question. A status update is that fact and the next action, as in "review round N finished: verdict, findings, author please fix", "fix done at HEAD, reviewer please verify", or "verified, e2e PASS, ready to merge".
 

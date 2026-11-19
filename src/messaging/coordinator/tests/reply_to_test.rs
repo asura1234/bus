@@ -301,7 +301,10 @@ fn reply_to_delivery_includes_each_batched_message_id_in_the_short_header() {
     for (id, text) in [(first, "first"), (second, "second")] {
         let message = f.request(id).prompt.id;
         assert!(
-            payload.contains(&format!("[Bus message {} from you]\n{text}", message.0)),
+            payload.contains(&format!(
+                "[Bus message {} from you (room {})]\n{text}",
+                message.0, f.room.0
+            )),
             "{payload}"
         );
     }
