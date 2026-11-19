@@ -64,6 +64,10 @@ fn claude_retirement_receipt_fences_the_exact_lead_and_joined_inputs() {
             .expect("Claude stop requires guarded retirement");
         assert_eq!(identity.expected_terminal_id, "terminal");
         assert_eq!(identity.expected_session_id, "session");
+        assert!(
+            identity.claude_turn.is_none(),
+            "joined receipts use exact clear only"
+        );
         assert_eq!(
             identity.expected_payloads, submitted,
             "{provider:?}: fence the actual typed inputs, including joined members"
@@ -1061,4 +1065,107 @@ fn verified_original_absence_does_not_skip_the_replacement_poll() {
         Some("replacement-terminal")
     );
     assert_eq!(agent.status, RuntimeStatus::Idle);
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_single_input_native_retirement_releases_exact_follower_on_verified_idle() {
+    use crate::agents::providers::claude_code::retirement::TranscriptAnchor;
+
+    let mut f = Fixture::new(Provider::ClaudeDs);
+    let lead = start_claude_retirement_anchor_fixture(&mut f);
+    let follower = f.send("queued follower", true);
+    assert!(interrupt(&mut f).ok);
+    let calls = f.native.lock().unwrap();
+    let identity = calls
+        .iter()
+        .find_map(|method| match method {
+            Method::AgentSendKeys(params) => params.native_interrupt.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(identity.retirement_request_id, Some(lead.0));
+    let turn = identity.claude_turn.as_ref().unwrap();
+    assert_eq!(turn.prompt_id, "turn-1");
+    assert_eq!(turn.launch_id, "launch");
+    let load = |launch, terminal, request| {
+        TranscriptAnchor::load(
+            &f.dir,
+            launch,
+            "session",
+            &turn.prompt_id,
+            terminal,
+            request,
+        )
+    };
+    assert!(load(&turn.launch_id, "terminal", lead.0).is_some());
+    assert!(load("old-launch", "terminal", lead.0).is_none());
+    assert!(load(&turn.launch_id, "replacement", lead.0).is_none());
+    assert!(load(&turn.launch_id, "terminal", follower.0).is_none());
+    drop(calls);
+    assert_eq!(f.request(follower).phase, RequestPhase::Queued);
+    retirement_idle_tick(&mut f);
+    assert_eq!(
+        f.request(lead).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+    f.deliver();
+    f.deliver();
+    assert_eq!(
+        f.typed_content()
+            .iter()
+            .filter(|(text, _)| text == "queued follower")
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+fn start_claude_retirement_anchor_fixture(f: &mut Fixture) -> RequestId {
+    let lead = f.send("original input", false);
+    f.deliver();
+    let path = f.dir.join("session.jsonl");
+    std::fs::write(&path, "").unwrap();
+    f.record(json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "session",
+        "prompt_id": "turn-1",
+        "prompt": "original input",
+        "transcript_path": path,
+    }));
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    lead
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_single_input_retirement_keeps_hold_until_proof_and_preserves_earlier_final() {
+    let mut f = Fixture::new(Provider::ClaudeDs);
+    let lead = start_claude_retirement_anchor_fixture(&mut f);
+    let follower = f.send("queued follower", true);
+    f.worker.transport = Box::new(UnconfirmedRetirement(f.native.clone()));
+    assert_eq!(interrupt(&mut f).result["agents"][0]["outcome"], "failed");
+    retirement_idle_tick(&mut f);
+    assert!(f.request(lead).interrupt_retirement_pending);
+    assert_eq!(f.request(follower).phase, RequestPhase::Queued);
+    assert_eq!(f.typed_content().len(), 1);
+
+    f.stopped("turn-1", "attributable answer");
+    f.consume();
+    assert_eq!(f.request(follower).phase, RequestPhase::Queued);
+    f.worker.transport = Box::new(Native(f.native.clone()));
+    assert_eq!(
+        interrupt(&mut f).result["agents"][0]["outcome"],
+        "interrupting"
+    );
+    retirement_idle_tick(&mut f);
+    assert_eq!(f.reply(lead).as_deref(), Some("attributable answer"));
+    assert_eq!(
+        f.typed_content()
+            .iter()
+            .filter(|(text, _)| text == "queued follower")
+            .count(),
+        1
+    );
 }

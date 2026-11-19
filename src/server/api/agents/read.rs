@@ -152,9 +152,24 @@ impl App {
                         .join(format!("{digest:x}"))
                 });
                 return Ok(Box::new(move || {
-                    match sender.retire_claude_interrupt_with_receipt(
-                    &expected.expected_session_id, &expected.expected_payloads, Bytes::from_static(b"\x1b"), completion_path.as_deref(),
-                ) {
+                    use crate::agents::providers::claude_code::retirement::TranscriptAnchor;
+                    let anchor = expected.claude_turn.as_ref().and_then(|turn| {
+                        TranscriptAnchor::load(
+                            &crate::utils::paths::data_dir(),
+                            &turn.launch_id,
+                            &expected.expected_session_id,
+                            &turn.prompt_id,
+                            &expected.expected_terminal_id,
+                            expected.retirement_request_id?,
+                        )
+                    });
+                    match sender.retire_claude_interrupt_with_anchor(
+                        &expected.expected_session_id,
+                        &expected.expected_payloads,
+                        Bytes::from_static(b"\x1b"),
+                        completion_path.as_deref(),
+                        anchor.as_ref(),
+                    ) {
                     Ok(()) => encode_success(id, ResponseResult::Ok {}),
                     Err(error) => encode_error(id, "agent_interrupt_unconfirmed", format!("Claude draft retirement is unconfirmed; request remains tracked: {error}")),
                 }

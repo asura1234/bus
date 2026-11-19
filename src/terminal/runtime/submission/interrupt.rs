@@ -1,9 +1,16 @@
 //! A Bus stop retires only its exact, confirmed Claude draft before settlement.
 use super::{ClearOutcome, InputObservation, ObservedSubmission, SubmissionHandle};
+use crate::agents::providers::claude_code::retirement::{CancelWatermark, TranscriptAnchor};
 use crate::terminal::runtime::draft_input::{ConfirmedPaste, DraftInput, DraftInputLease};
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
-use std::{cell::Cell, io, path::Path, sync::atomic::Ordering, time::Duration};
+use std::{
+    cell::Cell,
+    io,
+    path::Path,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 impl SubmissionHandle {
     #[cfg(test)]
@@ -16,6 +23,7 @@ impl SubmissionHandle {
         self.retire_claude_interrupt_with_receipt(session, payloads, stop, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn retire_claude_interrupt_with_receipt(
         &self,
         session: &str,
@@ -23,19 +31,24 @@ impl SubmissionHandle {
         stop: Bytes,
         completion_path: Option<&Path>,
     ) -> io::Result<()> {
+        self.retire_claude_interrupt_with_anchor(session, payloads, stop, completion_path, None)
+    }
+
+    pub(crate) fn retire_claude_interrupt_with_anchor(
+        &self,
+        session: &str,
+        payloads: &[String],
+        stop: Bytes,
+        completion_path: Option<&Path>,
+        anchor: Option<&TranscriptAnchor>,
+    ) -> io::Result<()> {
         // An autonomous turn has no Bus request whose draft can be abandoned.
         if payloads.is_empty() {
             return self.try_send_developer_bytes(stop);
         }
         let lease = DraftInput::acquire(&self.draft_input, &self.io)?;
         lease.restored();
-        let key = match completion_path {
-            Some(path) => path.to_string_lossy().into_owned(),
-            None => {
-                let encoded = serde_json::to_vec(&(session, payloads)).map_err(io::Error::other)?;
-                format!("{:x}", Sha256::digest(encoded))
-            }
-        };
+        let key = retirement_key(session, payloads, completion_path)?;
         if completion_path.is_some_and(confirmed_on_disk) || lease.completed_retirement(&key) {
             return write_completion(completion_path);
         }
@@ -51,41 +64,29 @@ impl SubmissionHandle {
                 })
                 .max()
                 .expect("nonempty guarded payloads");
-        let mut submission = ObservedSubmission {
-            terminal: self.terminal.clone(),
-            content_seq: self.content_seq.clone(),
-            enter_content_seq: std::cell::Cell::new(0),
-            io: self.io.clone(),
-            scope: self.io.input_scope(),
-            content_lock: self.content_write_lock.clone(),
-            inspect: receipt.paste.inspect,
-            enter: Bytes::new(),
-            clear: receipt.paste.clear,
-            deadline: std::cell::Cell::new(deadline),
-            hard_deadline: deadline,
-            withdraw_grace: receipt.paste.withdraw_grace,
+        let mut submission = self.interrupt_observation(
+            receipt.paste.inspect,
+            receipt.paste.clear,
+            receipt.paste.withdraw_grace,
+            deadline,
             clock,
-            diagnostics: Default::default(),
-            startup_suggestion_open: self.startup_suggestion_open.clone(),
-        };
+        );
         let allow_joined_witness = !receipt.cleanup_started;
+        let anchor = anchor.filter(|_| {
+            payloads.len() == 1
+                && receipts.is_empty()
+                && !submission.inspect.retains_joined_claude_receipts()
+                && allow_joined_witness
+        });
         let result = (|| {
-            if !receipt.stopped {
-                let completion = lease.with_unedited(|| {
-                    submission.io.queue_input_write_scoped(
-                        stop,
-                        Bytes::new(),
-                        Duration::ZERO,
-                        Some(deadline),
-                        &submission.scope,
-                    )
-                })?;
-                // Even a lost receipt may have pressed Esc: never send it again.
-                receipt.stopped = true;
-                completion
-                    .recv_timeout(submission.clock.remaining(deadline))
-                    .map_err(io::Error::other)??;
-            }
+            let mut no_restoration = press_claude_stop(
+                &submission,
+                &lease,
+                stop,
+                &mut receipt.stopped,
+                anchor,
+                session,
+            )?;
             loop {
                 let generation = submission.clock.generation();
                 if lease.edited() {
@@ -97,6 +98,7 @@ impl SubmissionHandle {
                     .content_lock
                     .lock()
                     .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+                let mut verified_empty = false;
                 if let Some(screen) = submission.terminal.active_ansi_if_complete() {
                     let cursor = submission.terminal.cursor_state().map(|c| (c.x, c.y));
                     let body = submission.inspect.interrupted_input(&screen, cursor);
@@ -154,15 +156,31 @@ impl SubmissionHandle {
                             )),
                         };
                     }
+                    let later_output = no_restoration.as_mut().is_some_and(|proof| {
+                        proof.has_later_frame(submission.terminal.pty_output_revision())
+                    });
+                    verified_empty = later_output
+                        && available
+                        && body.as_deref() == Some("")
+                        && submission
+                            .inspect
+                            .claude_empty_editable_composer(&screen, cursor);
                     if body.is_some_and(|body| !body.is_empty()) {
                         return Err(io::Error::other(
                             "Changed or foreign Claude draft preserved",
                         ));
                     }
                 }
+                if no_restoration.as_mut().is_some_and(|proof| {
+                    proof.observe(verified_empty, submission.clock.now(), deadline)
+                }) && lease.session().as_deref() == Some(session)
+                    && !lease.edited()
+                {
+                    return Ok(());
+                }
                 submission.check_deadline()?;
                 drop(guard);
-                // Empty/working is not proof against a delayed restoration.
+                // Keep looking for actual restoration through the entire budget.
                 submission
                     .clock
                     .sleep(Duration::from_millis(20), generation);
@@ -180,6 +198,107 @@ impl SubmissionHandle {
         }
         lease.retain_confirmed(receipt, true);
         result
+    }
+
+    fn interrupt_observation(
+        &self,
+        inspect: Box<dyn super::SubmissionInspector>,
+        clear: Vec<Bytes>,
+        withdraw_grace: Duration,
+        deadline: Instant,
+        clock: super::super::submission_clock::SubmissionClock,
+    ) -> ObservedSubmission {
+        ObservedSubmission {
+            terminal: self.terminal.clone(),
+            content_seq: self.content_seq.clone(),
+            enter_content_seq: std::cell::Cell::new(0),
+            io: self.io.clone(),
+            scope: self.io.input_scope(),
+            content_lock: self.content_write_lock.clone(),
+            inspect,
+            enter: Bytes::new(),
+            clear,
+            deadline: std::cell::Cell::new(deadline),
+            hard_deadline: deadline,
+            withdraw_grace,
+            clock,
+            diagnostics: Default::default(),
+            startup_suggestion_open: self.startup_suggestion_open.clone(),
+        }
+    }
+}
+
+fn press_claude_stop<'a>(
+    submission: &ObservedSubmission,
+    lease: &DraftInputLease,
+    stop: Bytes,
+    stopped: &mut bool,
+    anchor: Option<&'a TranscriptAnchor>,
+    session: &str,
+) -> io::Result<Option<NoRestoration<'a>>> {
+    if *stopped {
+        return Ok(None);
+    }
+    let deadline = submission.hard_deadline;
+    let completion = lease.with_unedited(|| {
+        submission.io.queue_input_write_scoped(
+            stop,
+            Bytes::new(),
+            Duration::ZERO,
+            Some(deadline),
+            &submission.scope,
+        )
+    })?;
+    // Even a lost receipt may have pressed Esc: never send it again.
+    *stopped = true;
+    completion
+        .recv_timeout(submission.clock.remaining(deadline))
+        .map_err(io::Error::other)??;
+    // Only the first delivered Esc can open a proof window. If the
+    // transcript or frame advanced before this boundary, require new evidence.
+    let proof = anchor
+        .and_then(|anchor| anchor.watermark(session))
+        .map(|watermark| NoRestoration {
+            watermark,
+            after_stop: settled_pty_revision(submission),
+            empty_since: None,
+        });
+    #[cfg(test)]
+    submission
+        .clock
+        .submission_checked(submission.clock.generation());
+    Ok(proof)
+}
+
+fn settled_pty_revision(submission: &ObservedSubmission) -> Option<u64> {
+    let _guard = submission.content_lock.try_lock().ok()?;
+    (!submission.terminal.synchronized_output_active())
+        .then(|| submission.terminal.pty_output_revision())
+}
+
+struct NoRestoration<'a> {
+    watermark: CancelWatermark<'a>,
+    after_stop: Option<u64>,
+    empty_since: Option<Instant>,
+}
+
+impl NoRestoration<'_> {
+    fn has_later_frame(&mut self, revision: u64) -> bool {
+        // An open frame at the stop boundary may finish after Esc. Its first
+        // complete observation only establishes the baseline.
+        *self.after_stop.get_or_insert(revision) != revision
+    }
+
+    fn observe(&mut self, empty: bool, now: Instant, deadline: Instant) -> bool {
+        if !empty || !self.watermark.has_cancellation() {
+            self.empty_since = None;
+            return false;
+        }
+        let since = *self.empty_since.get_or_insert(now);
+        // Re-read the linked cancellation at the last complete composer sample.
+        now >= deadline
+            && now - since >= Duration::from_millis(150)
+            && self.watermark.cancellation().is_some()
     }
 }
 
@@ -232,6 +351,18 @@ fn take_joined_witness(
             && candidate.attempt.is_none()
     })?;
     Some(receipts.remove(index))
+}
+
+fn retirement_key(
+    session: &str,
+    payloads: &[String],
+    completion_path: Option<&Path>,
+) -> io::Result<String> {
+    if let Some(path) = completion_path {
+        return Ok(path.to_string_lossy().into_owned());
+    }
+    let encoded = serde_json::to_vec(&(session, payloads)).map_err(io::Error::other)?;
+    Ok(format!("{:x}", Sha256::digest(encoded)))
 }
 
 fn confirmed_on_disk(path: &Path) -> bool {

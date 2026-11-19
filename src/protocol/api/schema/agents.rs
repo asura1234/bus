@@ -76,8 +76,18 @@ pub struct NativeInterruptIdentity {
     /// Stable coordinator request identity for idempotent Claude retirement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retirement_request_id: Option<u64>,
+    /// Accepted Claude submit-hook identity for transcript-backed retirement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_turn: Option<ClaudeRetirementTurn>,
     pub expected_terminal_id: String,
     pub expected_session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeRetirementTurn {
+    pub launch_id: String,
+    pub prompt_id: String,
 }
 
 /// Provider-independent observation, including terminals with no agent.

@@ -109,11 +109,20 @@ impl TerminalRuntime {
     }
 
     pub(crate) fn test_process_pty_bytes(&self, bytes: &[u8]) {
+        self.test_process_pty_bytes_with_hook(bytes, || {});
+    }
+
+    pub(crate) fn test_process_pty_bytes_with_hook(
+        &self,
+        bytes: &[u8],
+        after_begin: impl FnOnce(),
+    ) {
         let _content_write_guard = match self.content_write_lock.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         self.content_seq.fetch_add(1, Ordering::AcqRel);
+        after_begin();
         let (tx, _rx) = mpsc::channel(1);
         let _ = self
             .terminal

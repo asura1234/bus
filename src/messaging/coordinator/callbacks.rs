@@ -5,10 +5,11 @@ use super::{
     ResponseResult, RoomId, RuntimeStatus, Worker,
 };
 
-use self::provider_turns::{callback, order_records};
+use self::provider_turns::{callback, order_records, reporting_processes};
 #[cfg(test)]
 use super::{AgentRuntimeIdentity, Draft, Transport};
 use crate::agents::providers::{spool as callbacks, spool::Parsed, ProviderKind};
+pub(super) use provider_turns::claude_retirement_turn;
 use std::ops::ControlFlow;
 
 type CallbackRecordResult = ControlFlow<(), (BusState, Option<ProviderCallback>, Vec<PathBuf>)>;
@@ -144,9 +145,9 @@ impl Worker {
         id: AgentId,
         state: &mut BusState,
         callback: ProviderCallback,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<CallbackDisposition>, String> {
         if state.defer_during_interrupt_retirement(&callback) {
-            return Ok(false);
+            return Ok(None);
         }
         let _binding = binding::span(state, &callback).entered();
         let report = reports::pending_report(state, &callback);
@@ -176,7 +177,7 @@ impl Worker {
                 reason = "trusted_start_missing",
                 "Stop retained until matching submit hook arrives"
             );
-            return Ok(false);
+            return Ok(None);
         }
         let started = matches!(callback.kind, CallbackEventKind::PromptStarted);
         if started && Self::is_inherited_shell_wake(state, id, &callback) {
@@ -238,7 +239,7 @@ impl Worker {
         {
             state.set_agent_error(id,Some("Unbound provider callback: verify trusted submit/stop hooks. The active request will not be retried.".into())).map_err(|e|e.to_string())?;
         }
-        Ok(true)
+        Ok(Some(disposition))
     }
 
     fn cursor_final_callback(
@@ -773,8 +774,12 @@ impl Worker {
             if !Self::mark_scheduled_turn(&mut state, &callback, record) {
                 return Ok(CallbackFlow::Stop);
             }
-            if !self.apply_request_callback(id, &mut state, callback)? {
+            let disposition = self.apply_request_callback(id, &mut state, callback)?;
+            let Some(disposition) = disposition else {
                 return Ok(CallbackFlow::Next);
+            };
+            if disposition == CallbackDisposition::AcceptedBinding {
+                self.save_claude_retirement_anchor(&state, id, record);
             }
         }
         self.save_callback_state(state)?;
@@ -790,16 +795,3 @@ impl Worker {
 #[cfg(test)]
 #[path = "tests/callbacks_test.rs"]
 mod tests;
-
-/// The hook's process chain, so the server can refuse a report from an agent
-/// process it saw exit.
-fn reporting_processes(record: &callbacks::Record) -> Vec<schema::ReportingProcess> {
-    record
-        .reporter
-        .iter()
-        .map(|process| schema::ReportingProcess {
-            pid: process.pid,
-            birth: process.birth,
-        })
-        .collect()
-}

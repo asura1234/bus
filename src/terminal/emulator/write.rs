@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -38,8 +39,17 @@ impl PaneTerminal {
         response_writer: &mpsc::Sender<Bytes>,
         foreground_job: impl Fn(u32) -> Option<crate::platform::ForegroundJob>,
     ) -> ProcessBytesResult {
-        self.ghostty
-            .process_pty_bytes(pane_id, shell_pid, bytes, response_writer, foreground_job)
+        let result = self.ghostty.process_pty_bytes(
+            pane_id,
+            shell_pid,
+            bytes,
+            response_writer,
+            foreground_job,
+        );
+        if !bytes.is_empty() && result.request_render {
+            self.pty_output_revision.fetch_add(1, Ordering::Release);
+        }
+        result
     }
 
     pub fn resize(

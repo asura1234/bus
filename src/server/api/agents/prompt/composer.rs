@@ -549,6 +549,28 @@ fn cursor_input_line(kind: AgentKind, line: &str) -> &str {
     line
 }
 
+fn claude_empty_editable_composer(screen: &str, cursor: Option<(u16, u16)>) -> bool {
+    let Some((2, y)) = cursor else { return false };
+    let Some(above) = usize::from(y).checked_sub(1) else {
+        return false;
+    };
+    let mut rows = screen.lines().skip(above).map(|row| {
+        styled_chars(row)
+            .iter()
+            .map(|cell| cell.character)
+            .collect::<String>()
+    });
+    let rail = |row: String| {
+        let row = row.trim_end_matches(' ');
+        row.chars().count() >= 12 && row.chars().all(|cell| cell == '─')
+    };
+    rows.next().is_some_and(rail)
+        && rows
+            .next()
+            .is_some_and(|row| row.trim_end_matches(' ') == "❯")
+        && rows.next().is_some_and(rail)
+}
+
 fn plain_rule(line: &str) -> bool {
     styled_chars(line)
         .iter()

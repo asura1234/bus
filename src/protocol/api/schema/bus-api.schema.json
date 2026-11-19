@@ -1545,6 +1545,22 @@
           ],
           "type": "object"
         },
+        "ClaudeRetirementTurn": {
+          "additionalProperties": false,
+          "properties": {
+            "launch_id": {
+              "type": "string"
+            },
+            "prompt_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "prompt_id"
+          ],
+          "type": "object"
+        },
         "ClientShellSurfaceSetParams": {
           "description": "Updates whether the requesting client shell receives and controls pane presentation.",
           "properties": {
@@ -1993,6 +2009,17 @@
         },
         "NativeInterruptIdentity": {
           "properties": {
+            "claude_turn": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/ClaudeRetirementTurn"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Accepted Claude submit-hook identity for transcript-backed retirement."
+            },
             "expected_payloads": {
               "description": "Exact current Bus inputs eligible for Claude restored-draft retirement.",
               "items": {
