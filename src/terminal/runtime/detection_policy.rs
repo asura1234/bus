@@ -646,6 +646,83 @@ mod tests {
     }
 
     #[test]
+    fn agy_background_task_tray_stays_working() {
+        let screen =
+            include_str!("../../../tests/fixtures/agy-activity/working-with-background-task.txt");
+        let manifest =
+            crate::agents::detect_agent_with_osc(Some(AgentKind::Antigravity), screen, "", "");
+        assert_eq!(manifest.state, AgentState::Working, "{screen}");
+        assert!(manifest.visible_working);
+        let result = apply_driver_controls(screen, manifest, false);
+        assert_eq!(result.state, AgentState::Working, "{screen}");
+        assert!(result.visible_working);
+        assert!(!result.visible_blocker);
+        assert!(crate::terminal::driver::blocker_from_text(screen, true).is_none());
+    }
+
+    #[test]
+    fn agy_spinner_and_task_footer_each_keep_the_turn_working() {
+        let screen =
+            include_str!("../../../tests/fixtures/agy-activity/working-with-background-task.txt");
+        let (spinner, _) = screen.rsplit_once("\nesc to cancel").unwrap();
+        let (_, footer) = screen
+            .split_once("└ Tip: Use /help to see all commands.\n")
+            .unwrap();
+        let padded_footer = footer.replacen("\n>\n", "\n\n>\n", 1);
+        for screen in [spinner, padded_footer.as_str()] {
+            let result = published(AgentKind::Antigravity, screen, "");
+            assert_eq!(result.state, AgentState::Working, "{screen}");
+            assert!(result.visible_working);
+            assert!(!result.visible_blocker);
+        }
+    }
+
+    #[test]
+    fn agy_input_control_on_the_task_footer_stays_blocked() {
+        let screen =
+            include_str!("../../../tests/fixtures/agy-activity/working-with-background-task.txt");
+        let with_control = format!("{} · [n/y]\n", screen.trim_end());
+        let result = published(AgentKind::Antigravity, &with_control, "");
+        assert_eq!(result.state, AgentState::Blocked);
+        assert!(result.visible_blocker);
+        assert!(!result.visible_working);
+    }
+
+    #[test]
+    fn agy_permission_and_folder_trust_stay_blocked() {
+        for screen in [
+            include_str!("../../../tests/fixtures/agy-activity/command-permission.txt"),
+            include_str!("../../../tests/fixtures/agy-activity/folder-trust.txt"),
+        ] {
+            let result = published(AgentKind::Antigravity, screen, "");
+            assert_eq!(result.state, AgentState::Blocked, "{screen}");
+            assert!(result.visible_blocker);
+            assert!(!result.visible_working);
+        }
+    }
+
+    #[test]
+    fn codex_permission_and_claude_question_stay_blocked() {
+        for (agent, screen) in [
+            (
+                AgentKind::Codex,
+                include_str!(
+                    "../../server/api/agents/tests/fixtures/codex_soft_wrapped_permission.txt"
+                ),
+            ),
+            (
+                AgentKind::Claude,
+                include_str!("../../../tests/fixtures/claude-question/multi-select.txt"),
+            ),
+        ] {
+            let result = published(agent, screen, "");
+            assert_eq!(result.state, AgentState::Blocked, "{screen}");
+            assert!(result.visible_blocker);
+            assert!(!result.visible_working);
+        }
+    }
+
+    #[test]
     fn action_required_title_does_not_block_a_live_working_screen() {
         // Captured from codex worker 12114 while Bus had posted false Blocked
         // notices and `bus state` showed working with dialog=false. The working
