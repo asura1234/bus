@@ -54,14 +54,12 @@ impl Worker {
                     .is_some_and(|terminal| infos.iter().any(|info| info.terminal_id == terminal));
                 if !original_is_listed
                     && self.resolve_exited_claude_input(&mut state, agent.id, observed_at_ms)?
-                {
-                    if state
+                    && state
                         .agent(agent.id)
                         .is_some_and(|current| current.runtime_identity.pane_id.is_none())
-                    {
-                        // The old terminal stays open, with no Bus delivery route.
-                        continue;
-                    }
+                {
+                    // The old terminal stays open, with no Bus delivery route.
+                    continue;
                 }
             }
             if state.interrupt_retirement_owner(agent.id).is_none() {
@@ -86,6 +84,23 @@ impl Worker {
                     .observe_status(agent.id, status, observed_at_ms)
                     .map_err(|e| e.to_string())?;
             }
+            let activity = info
+                .filter(|info| {
+                    info.native_ready
+                        && !info.screen_detection_skipped
+                        && info.generation != 0
+                        && info.state_change_seq != 0
+                        && agent.runtime_identity.terminal_id.as_ref() == Some(&info.terminal_id)
+                        && agent.runtime_identity.pane_id.as_ref() == Some(&info.pane_id)
+                        && agent.runtime_identity.session_id.as_deref()
+                            == info
+                                .agent_session
+                                .as_ref()
+                                .map(|session| session.value.as_str())
+                        && matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked)
+                })
+                .map(|info| (info.generation, info.state_change_seq));
+            state.observe_stop_activity(agent.id, activity);
             Self::observe_grok_banner(&mut state, agent, info, observed_at_ms)?;
             let dialog_id = info.and_then(|info| info.dialog_id.clone());
             if info.is_some_and(|info| !info.screen_detection_skipped) {

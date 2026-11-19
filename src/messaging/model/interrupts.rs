@@ -2,30 +2,147 @@
 //! closes instead of running on. A message that never joined that turn stays
 //! queued for the next one.
 use super::{
-    AgentId, Author, BusState, ModelError, Prompt, PromptId, RequestId, RequestPhase, RoomId,
-    RuntimeStatus, SendInterrupt, SendInterruptOutcome,
+    AgentId, AgentRuntimeIdentity, Author, BusState, ModelError, Prompt, PromptId, RequestId,
+    RequestPhase, RoomId, RuntimeStatus,
 };
+use serde::{Deserialize, Serialize};
 
 /// The reason an interrupted request closed with, which `wait` reports as
 /// `message_interrupted`.
 pub(crate) const INTERRUPTED: &str = "interrupted";
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct SendInterrupt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) target: Option<RequestId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) activity: Option<(u64, u64)>,
+    pub(crate) identity: AgentRuntimeIdentity,
+    #[serde(default)]
+    pub(crate) submission_boundary: Option<u64>,
+    #[serde(default)]
+    pub(crate) submission_status_revision: u64,
+    #[serde(default)]
+    pub(crate) provider_turn_id: Option<String>,
+}
+
+/// Durable autonomous activity and any stop that may already have been written.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct AutonomousStopState {
+    pub(super) provider_turn_id: Option<String>,
+    pub(super) activity: Option<(u64, u64)>,
+    #[serde(default)]
+    pub(super) turn_activity: Option<(u64, u64)>,
+    pub(super) claim: Option<SendInterrupt>,
+}
+
+impl AutonomousStopState {
+    pub(super) fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub(crate) struct SendInterruptOutcome {
+    pub(crate) outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+}
+
+impl SendInterrupt {
+    pub(crate) fn replayable(&self) -> bool {
+        self.target.is_some()
+            || (self.activity.is_some()
+                && self.identity.session_id.is_some()
+                && self.provider_turn_id.is_some())
+    }
+
+    pub(crate) fn same_turn(&self, observed: &Self) -> bool {
+        self.target == observed.target
+            && self.submission_boundary == observed.submission_boundary
+            && self.submission_status_revision == observed.submission_status_revision
+            && self.identity.launch_id == observed.identity.launch_id
+            && self.identity.terminal_id == observed.identity.terminal_id
+            && self
+                .identity
+                .session_id
+                .as_ref()
+                .is_none_or(|session| observed.identity.session_id.as_ref() == Some(session))
+            && self
+                .provider_turn_id
+                .as_ref()
+                .is_none_or(|turn| observed.provider_turn_id.as_ref() == Some(turn))
+    }
+}
+
 impl BusState {
     pub(crate) fn send_interrupt_target(&self, recipient: AgentId) -> Option<SendInterrupt> {
         let owner = self.agent(recipient)?;
-        // An in-flight stop already owns this turn. Do not leave a new marker
-        // that could recreate it when a restart clears the presentation wait.
         if owner.interrupt_pending {
             return None;
         }
-        let target = self.request(owner.current_request?)?;
+        let target = owner.current_request.and_then(|id| self.request(id));
+        if target.is_none() && !self.needs_interrupt_stop(owner) {
+            return None;
+        }
         Some(SendInterrupt {
-            target: target.id,
+            target: target.map(|request| request.id),
+            activity: owner.autonomous_stop.activity.filter(|activity| {
+                target.is_none() && owner.autonomous_stop.turn_activity.as_ref() == Some(activity)
+            }),
             identity: owner.runtime_identity.clone(),
-            submission_boundary: target.submission_boundary,
-            submission_status_revision: target.submission_status_revision,
-            provider_turn_id: target.provider_turn_id.clone(),
+            submission_boundary: target.and_then(|row| row.submission_boundary),
+            submission_status_revision: target.map_or(0, |row| row.submission_status_revision),
+            provider_turn_id: target.map_or_else(
+                || owner.autonomous_stop.provider_turn_id.clone(),
+                |row| row.provider_turn_id.clone(),
+            ),
         })
+    }
+
+    pub(crate) fn observe_stop_activity(&mut self, id: AgentId, activity: Option<(u64, u64)>) {
+        if let Some(owner) = self.agents.get_mut(&id) {
+            owner.autonomous_stop.activity = activity;
+        }
+    }
+
+    pub(crate) fn autonomous_callback_turn(
+        &self,
+        callback: &super::ProviderCallback,
+    ) -> Option<String> {
+        let owner = self.agent(callback.agent_id)?;
+        if owner.current_request.is_some()
+            || owner.runtime_identity.launch_id.as_deref() != Some(&callback.launch_id)
+            || owner.runtime_identity.session_id.is_none()
+            || owner.runtime_identity.session_id != callback.provider_session_id
+        {
+            return None;
+        }
+        callback
+            .provider_turn_id
+            .clone()
+            .filter(|turn| !turn.is_empty())
+    }
+
+    pub(crate) fn observe_autonomous_turn(&mut self, id: AgentId, turn: String, started: bool) {
+        if let Some(owner) = self.agents.get_mut(&id) {
+            let activity = &mut owner.autonomous_stop;
+            if started {
+                activity.provider_turn_id = Some(turn);
+                activity.turn_activity = activity.activity;
+            } else if activity.provider_turn_id.as_ref() == Some(&turn) {
+                activity.provider_turn_id = None;
+                activity.turn_activity = None;
+                if activity.claim.as_ref().is_some_and(|claim| {
+                    claim
+                        .provider_turn_id
+                        .as_ref()
+                        .is_none_or(|claimed| claimed == &turn)
+                }) {
+                    activity.claim = None;
+                }
+            }
+        }
     }
 
     pub(crate) fn stage_send_interrupt(
@@ -50,34 +167,61 @@ impl BusState {
             .requests
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
+        let recipient = row.agent_id;
         let intent = row.send_interrupt.take();
         row.send_interrupt_outcome = Some(outcome);
         if let Some(intent) = intent.filter(|_| claim) {
-            if let Some(target) = self.requests.get_mut(&intent.target) {
-                target.send_interrupt_claim = Some(intent);
+            if let Some(slot) = self.send_interrupt_claim_mut(recipient, intent.target) {
+                *slot = Some(intent);
             }
         }
         Ok(())
     }
 
-    pub(crate) fn send_interrupt_already_claimed(&self, intent: &SendInterrupt) -> bool {
-        self.request(intent.target)
-            .and_then(|row| row.send_interrupt_claim.as_ref())
-            .is_some_and(|claim| {
-                claim.submission_boundary == intent.submission_boundary
-                    && claim.submission_status_revision == intent.submission_status_revision
-                    && claim.identity.launch_id == intent.identity.launch_id
-                    && claim.identity.terminal_id == intent.identity.terminal_id
-                    && claim
-                        .identity
-                        .session_id
-                        .as_ref()
-                        .is_none_or(|session| intent.identity.session_id.as_ref() == Some(session))
-                    && claim
-                        .provider_turn_id
-                        .as_ref()
-                        .is_none_or(|turn| intent.provider_turn_id.as_ref() == Some(turn))
-            })
+    pub(crate) fn send_interrupt_already_claimed(
+        &self,
+        recipient: AgentId,
+        intent: &SendInterrupt,
+    ) -> bool {
+        let claim = match intent.target {
+            Some(id) => self
+                .request(id)
+                .and_then(|row| row.send_interrupt_claim.as_ref()),
+            None => self
+                .agent(recipient)
+                .and_then(|agent| agent.autonomous_stop.claim.as_ref()),
+        };
+        claim.is_some_and(|claim| claim.same_turn(intent))
+    }
+
+    pub(crate) fn release_send_interrupt_claim(
+        &mut self,
+        recipient: AgentId,
+        intent: &SendInterrupt,
+    ) {
+        if let Some(slot) = self
+            .send_interrupt_claim_mut(recipient, intent.target)
+            .filter(|slot| slot.as_ref() == Some(intent))
+        {
+            *slot = None;
+        }
+    }
+
+    fn send_interrupt_claim_mut(
+        &mut self,
+        recipient: AgentId,
+        target: Option<RequestId>,
+    ) -> Option<&mut Option<SendInterrupt>> {
+        match target {
+            Some(id) => self
+                .requests
+                .get_mut(&id)
+                .map(|row| &mut row.send_interrupt_claim),
+            None => self
+                .agents
+                .get_mut(&recipient)
+                .map(|agent| &mut agent.autonomous_stop.claim),
+        }
     }
 
     pub(crate) fn stamp_native_delivery_epoch(

@@ -3,9 +3,10 @@ mod agents;
 mod driver;
 mod feishu;
 mod inspect;
-pub(super) mod messages;
+mod messages;
 mod rooms;
 mod selectors;
+mod send_interrupt;
 mod sender;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod ui_hits;
@@ -23,6 +24,7 @@ use super::{
 use crate::messaging::control::{Request as ControlRequest, Response};
 #[cfg(test)]
 use crate::messaging::model::MASTER_ROOM_NAME;
+pub(super) use send_interrupt::stage_send_interrupts;
 use serde_json::{json, Value};
 
 /// Receipts younger than this are never evicted, so a retry within it replays.

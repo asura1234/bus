@@ -3,7 +3,9 @@
 use super::payload::payload_matches;
 pub(crate) use super::stall::{BLOCKED_STALL_MS, DELIVERED_STALL_MS, QUEUED_STALL_MS};
 use super::{
-    payload::payload_matches_for_provider, DeliveryLatency, DialogNoticeDelivery, QueuedRejection,
+    interrupts::{AutonomousStopState, SendInterrupt, SendInterruptOutcome},
+    payload::payload_matches_for_provider,
+    DeliveryLatency, DialogNoticeDelivery, QueuedRejection,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -401,6 +403,8 @@ pub(crate) struct RoomAgent {
     /// never joined that turn, stay queued for the next one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupt_pending: bool,
+    #[serde(default, skip_serializing_if = "AutonomousStopState::is_empty")]
+    pub(crate) autonomous_stop: AutonomousStopState,
     /// When the agent entered its current `status`, or its visible dialog
     /// last closed while Idle. Recovery deadlines counts usable idle time.
     #[serde(default)]
@@ -537,25 +541,6 @@ pub(crate) struct BoundTurnActivity {
 pub(crate) enum RestartResume {
     Awaiting,
     Failed,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct SendInterrupt {
-    pub(crate) target: RequestId,
-    pub(crate) identity: AgentRuntimeIdentity,
-    #[serde(default)]
-    pub(crate) submission_boundary: Option<u64>,
-    #[serde(default)]
-    pub(crate) submission_status_revision: u64,
-    #[serde(default)]
-    pub(crate) provider_turn_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub(crate) struct SendInterruptOutcome {
-    pub(crate) outcome: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

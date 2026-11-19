@@ -72,6 +72,32 @@ fn feishu_ingest_acknowledges_only_the_durable_queue_and_deduplication_commit() 
 }
 
 #[test]
+fn feishu_ingest_keeps_the_receipt_when_stop_persistence_fails() {
+    let (mut worker, root, _) = mapped_worker();
+    worker.store.fail_once_at_after(SaveStage::TempSync, 1);
+    let first = call(&mut worker, "accepted", "feishu.ingest", params());
+    assert!(first.ok, "{first:?}");
+    let saved = worker.store.load().unwrap().unwrap();
+    assert_eq!(saved.requests().count(), 1);
+    assert_eq!(saved.feishu.inbox.len(), 1);
+    assert!(saved
+        .requests()
+        .next()
+        .unwrap()
+        .latency
+        .queued_at_ms
+        .is_some());
+    drop(worker);
+    let mut reopened = Worker::open(root.clone(), Box::new(NoTransport)).unwrap();
+    reopened.settings_path = Some(root.join("settings.json"));
+    let replay = call(&mut reopened, "replay", "feishu.ingest", params());
+    assert_eq!(replay.result, first.result);
+    assert_eq!(reopened.state.requests().count(), 1);
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn feishu_ingest_cannot_acknowledge_an_uncommitted_batch() {
     let (mut worker, root, _) = mapped_worker();
     worker.begin_batch();

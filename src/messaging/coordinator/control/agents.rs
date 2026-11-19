@@ -434,7 +434,16 @@ impl Worker {
         let mut state = self.state.clone();
         let mut rows = Vec::new();
         for id in targets {
-            rows.push(self.interrupt_agent(&mut state, id, room, &interrupter, now, true)?);
+            rows.push(self.interrupt_agent(
+                &mut state,
+                id,
+                room,
+                &interrupter,
+                now,
+                true,
+                None,
+                None,
+            )?);
         }
         self.save(state)?;
         Ok(
@@ -444,7 +453,7 @@ impl Worker {
 
     /// One agent's part of an interrupt, as its result row: the stop key for
     /// a working or blocked agent, the held turn closed for an idle one.
-    fn interrupt_agent(
+    pub(super) fn interrupt_agent(
         &mut self,
         state: &mut crate::messaging::model::BusState,
         id: AgentId,
@@ -452,6 +461,8 @@ impl Worker {
         interrupter: &crate::messaging::model::Author,
         now: u64,
         announce: bool,
+        may_have_written: Option<&mut bool>,
+        staged: Option<&crate::messaging::model::SendInterrupt>,
     ) -> Result<Value, String> {
         let agent = state.agent(id).ok_or("Unknown agent")?;
         let mut row = json!({"agent_id": id, "name": agent.name});
@@ -484,7 +495,16 @@ impl Worker {
                 row["outcome"] = json!("already_idle");
             }
             RuntimeStatus::Idle | RuntimeStatus::Working | RuntimeStatus::Blocked => {
-                return self.interrupt_running_agent(state, id, room, interrupter, now, announce);
+                return self.interrupt_running_agent(
+                    state,
+                    id,
+                    room,
+                    interrupter,
+                    now,
+                    announce,
+                    may_have_written,
+                    staged,
+                );
             }
             other => {
                 row["outcome"] = json!("failed");
@@ -496,37 +516,6 @@ impl Worker {
             }
         }
         Ok(row)
-    }
-
-    /// Best-effort stop for one recipient of an already durable queued send.
-    pub(super) fn interrupt_queued_recipient(
-        &mut self,
-        state: &mut crate::messaging::model::BusState,
-        room: RoomId,
-        recipient: AgentId,
-        interrupter: &crate::messaging::model::Author,
-        now: u64,
-    ) -> Value {
-        if state
-            .agent(recipient)
-            .is_some_and(|agent| agent.interrupt_pending)
-        {
-            // A second key can exit the provider or open Claude's rewind.
-            return json!({"agent_id": recipient, "outcome": "interrupting"});
-        }
-        match self.interrupt_agent(state, recipient, room, interrupter, now, false) {
-            Ok(result) => result,
-            Err(reason) => {
-                tracing::warn!(
-                    event = "bus.send.interrupt_failed",
-                    agent_id = recipient.0,
-                    room_id = room.0,
-                    reason,
-                    "Interrupt-mode delivery could not stop the running turn"
-                );
-                json!({"agent_id": recipient, "outcome": "failed", "reason": reason})
-            }
-        }
     }
 
     /// `agent interrupt` posts "Interrupted AGENT." so waiters learn who
@@ -612,6 +601,8 @@ impl Worker {
         interrupter: &crate::messaging::model::Author,
         now: u64,
         announce: bool,
+        may_have_written: Option<&mut bool>,
+        staged: Option<&crate::messaging::model::SendInterrupt>,
     ) -> Result<Value, String> {
         let agent = state.agent(id).ok_or("Unknown agent")?;
         let mut row = json!({"agent_id":id,"name":agent.name});
@@ -648,20 +639,26 @@ impl Worker {
         // One press only: a second Esc opens Claude's rewind or
         // Codex's edit-previous-message, and a second Ctrl+C quits
         // Cursor or escalates Grok's cancel toward quit.
-        let sent = self
-            .transport
-            .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
-                target: pane,
-                keys: vec![key.into()],
-                native_interrupt: native_interrupt.map(
-                    |(expected_terminal_id, expected_session_id)| schema::NativeInterruptIdentity {
-                        expected_terminal_id,
-                        expected_session_id,
-                        expected_payloads,
-                        retirement_request_id: current.filter(|_| claude).map(|id| id.0),
-                    },
-                ),
-            }));
+        let sent = self.send_stop_keys(
+            pane,
+            key,
+            runtime.terminal_id,
+            staged,
+            native_interrupt.map(|(expected_terminal_id, expected_session_id)| {
+                schema::NativeInterruptIdentity {
+                    expected_terminal_id,
+                    expected_session_id,
+                    expected_payloads,
+                    retirement_request_id: current.filter(|_| claude).map(|id| id.0),
+                }
+            }),
+        );
+        if let Some(written) = may_have_written {
+            *written = sent.as_ref().err().is_none_or(|error| {
+                !error.definitely_rejected
+                    || error.code.as_deref() == Some("agent_interrupt_unconfirmed")
+            });
+        }
         if claude {
             let retired = matches!(&sent, Ok(ResponseResult::Ok {}));
             if retired && current.is_some() {

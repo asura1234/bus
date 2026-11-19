@@ -813,3 +813,230 @@ fn composer_acknowledges_a_durable_send_when_its_stop_claim_write_fails() {
     assert!(durable.request(*queued).unwrap().send_interrupt.is_some());
     assert!(stop_keys(&f).is_empty());
 }
+
+#[test]
+fn queued_cli_receipt_survives_stop_storage_errors() {
+    use crate::messaging::storage::state_store::SaveStage;
+
+    for (skip, expected_keys, outcome) in [(1, 0, "pending"), (2, 1, "unknown")] {
+        let mut f = Fixture::new(Provider::Codex);
+        running(&mut f, "old work", "turn-1");
+        f.worker.store.fail_once_at_after(SaveStage::TempSync, skip);
+        let params = send_params(&f, "only one follower");
+        let response = send(&mut f, params);
+        assert!(response.ok, "{response:?}");
+        let request = sent_request(&response);
+        assert_eq!(response.result["stage"], "queued");
+        assert_eq!(response.result["interrupts"][0]["agent_id"], json!(f.agent));
+        assert_eq!(response.result["interrupts"][0]["outcome"], outcome);
+        let saved = f.worker.store.load().unwrap().unwrap();
+        assert_eq!(saved.queued_requests(f.agent), &[request]);
+        let row = saved.request(request).unwrap();
+        assert_eq!(response.result["message_id"], json!(row.prompt.id));
+        assert!(row.latency.queued_at_ms.is_some());
+        assert_eq!(stop_keys(&f).len(), expected_keys);
+    }
+}
+
+#[test]
+fn queued_stop_replays_after_the_original_turn_binds() {
+    let mut f = Fixture::new(Provider::Codex);
+    let lead = f.send("original input", true);
+    f.deliver();
+    f.status(RuntimeStatus::Working);
+    let follower = f.send("queued next", true);
+    let mut state = f.worker.state.clone();
+    let intent = state.send_interrupt_target(f.agent).unwrap();
+    assert_eq!(intent.target, Some(lead));
+    assert!(intent.provider_turn_id.is_none());
+    state.stage_send_interrupt(follower, intent).unwrap();
+    f.worker.save(state).unwrap();
+
+    reopen_after_interrupt(&mut f);
+    f.status(RuntimeStatus::Working);
+    f.started("turn-1", "original input");
+    f.consume();
+    assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("turn-1"));
+    f.worker.replay_queued_send_interrupts(f.now).unwrap();
+    assert_eq!(stop_keys(&f), [vec!["esc".to_string()]]);
+}
+
+#[test]
+fn definite_claude_prewrite_refusal_releases_the_queued_stop_claim() {
+    let mut f = Fixture::new(Provider::ClaudeDs);
+    let lead = running(&mut f, "old work", "turn-1");
+    let mut state = f.worker.state.clone();
+    let bound = state.agent(f.agent).unwrap().runtime_identity.clone();
+    let mut unbound = bound.clone();
+    unbound.session_id = None;
+    state.set_agent_runtime_identity(f.agent, unbound).unwrap();
+    f.worker.save(state).unwrap();
+    let params = send_params(&f, "first follower");
+    let response = send(&mut f, params);
+    assert!(response.ok, "{response:?}");
+    assert_eq!(response.result["interrupts"][0]["outcome"], "failed");
+    assert!(stop_keys(&f).is_empty());
+    let saved = f.worker.store.load().unwrap().unwrap();
+    assert!(saved.request(lead).unwrap().send_interrupt_claim.is_none());
+
+    let mut state = f.worker.state.clone();
+    state.set_agent_runtime_identity(f.agent, bound).unwrap();
+    f.worker.save(state).unwrap();
+    let params = send_params(&f, "second follower");
+    assert!(send(&mut f, params).ok);
+    assert_eq!(stop_keys(&f), [vec!["esc".to_string()]]);
+}
+
+fn autonomous_started(f: &mut Fixture, agent: AgentId, turn: &str) {
+    let provider = f.worker.state.agent(agent).unwrap().provider;
+    let directory = f.dir.join("callbacks/autonomous-launch");
+    callbacks::initialize(
+        &directory,
+        &callbacks::Manifest {
+            routing_key: callbacks::RoutingKey(agent.0),
+            provider,
+            launch_id: "autonomous-launch".into(),
+        },
+    )
+    .unwrap();
+    callbacks::append(
+        &directory,
+        "autonomous-launch",
+        provider,
+        json!({
+            "hook_event_name": "beforeSubmitPrompt", "conversation_id": "autonomous-session",
+            "generation_id": turn, "prompt": "native work"
+        }),
+        &[],
+        false,
+    )
+    .unwrap();
+    f.worker.consume_callbacks(agent, &directory).unwrap();
+}
+
+fn add_autonomous(f: &mut Fixture) -> AgentId {
+    let mut state = f.worker.state.clone();
+    let id = state
+        .create_agent(f.room, "autonomous", Provider::Cursor, f.dir.clone(), None)
+        .unwrap();
+    state
+        .set_agent_runtime_identity(
+            id,
+            AgentRuntimeIdentity {
+                launch_id: Some("autonomous-launch".into()),
+                terminal_id: Some("autonomous-terminal".into()),
+                pane_id: Some("autonomous-pane".into()),
+                session_id: Some("autonomous-session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(id).unwrap();
+    state
+        .observe_status(id, RuntimeStatus::Working, f.now)
+        .unwrap();
+    state.observe_stop_activity(id, Some((4, 10)));
+    f.worker.save(state).unwrap();
+    autonomous_started(f, id, "autonomous-turn");
+    id
+}
+
+#[test]
+fn autonomous_follower_has_a_durable_stop_intent_before_earlier_recipient_dispatch() {
+    for (scenario, activity, new_turn, stale_at_admission) in [
+        ("same", Some((4, 10)), false, false),
+        ("new server", Some((5, 10)), false, false),
+        ("new state", Some((4, 11)), false, false),
+        ("new turn", Some((4, 10)), true, false),
+        ("missing evidence", None, false, false),
+        ("stale at admission", Some((4, 11)), false, true),
+    ] {
+        let mut f = Fixture::new(Provider::Codex);
+        running(&mut f, "old work", "turn-1");
+        let autonomous = add_autonomous(&mut f);
+        if stale_at_admission {
+            let mut state = f.worker.state.clone();
+            state.observe_stop_activity(autonomous, activity);
+            f.worker.save(state).unwrap();
+        }
+        f.worker.transport = Box::new(FailAtFirstStop(f.native.clone()));
+        let params =
+            json!({"room":f.room.0.to_string(),"to":["builder","autonomous"],"text":"next"});
+        let crashed =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send(&mut f, params)));
+        assert!(crashed.is_err());
+        let saved = f.worker.store.load().unwrap().unwrap();
+        let follower = saved.queued_requests(autonomous)[0];
+        let intent = saved
+            .request(follower)
+            .unwrap()
+            .send_interrupt
+            .as_ref()
+            .unwrap();
+        assert!(intent.target.is_none());
+        assert_eq!(intent.provider_turn_id.as_deref(), Some("autonomous-turn"));
+        assert_eq!(intent.activity, (!stale_at_admission).then_some((4, 10)));
+
+        reopen_after_interrupt(&mut f);
+        let mut state = f.worker.state.clone();
+        state
+            .observe_status(autonomous, RuntimeStatus::Working, f.now)
+            .unwrap();
+        state.observe_stop_activity(autonomous, activity);
+        f.worker.save(state).unwrap();
+        if new_turn {
+            autonomous_started(&mut f, autonomous, "new-autonomous-turn");
+        }
+        f.worker.replay_queued_send_interrupts(f.now).unwrap();
+        f.worker.replay_queued_send_interrupts(f.now).unwrap();
+        let native = f.native.lock().unwrap();
+        let stops: Vec<_> = native
+            .iter()
+            .filter_map(|method| match method {
+                Method::AgentSendKeys(params) if params.target == "autonomous-pane" => Some(params),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stops.len(), usize::from(scenario == "same"), "{scenario}");
+        if let Some(stop) = stops.first() {
+            assert_eq!(
+                stop.expected_terminal_id.as_deref(),
+                Some("autonomous-terminal")
+            );
+            assert_eq!(stop.expected_activity.unwrap().state_change_seq, 10);
+        }
+        if scenario == "missing evidence" || stale_at_admission {
+            let outcome = f.request(follower).send_interrupt_outcome.as_ref().unwrap();
+            assert_eq!(
+                outcome.reason.as_deref(),
+                Some("The autonomous turn cannot be revalidated")
+            );
+        }
+        assert_eq!(f.worker.state.queued_requests(autonomous), &[follower]);
+    }
+}
+
+#[test]
+fn autonomous_ambiguous_stop_claim_survives_coordinator_reopen() {
+    let mut f = Fixture::new(Provider::Codex);
+    let autonomous = add_autonomous(&mut f);
+    f.worker.transport = Box::new(FailAtFirstStop(f.native.clone()));
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"first"});
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send(&mut f, params)));
+    assert!(crashed.is_err());
+    assert_eq!(stop_keys(&f).len(), 1);
+
+    reopen_after_interrupt(&mut f);
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(autonomous, RuntimeStatus::Working, f.now)
+        .unwrap();
+    state.observe_stop_activity(autonomous, Some((4, 10)));
+    f.worker.save(state).unwrap();
+    f.worker.replay_queued_send_interrupts(f.now).unwrap();
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"second"});
+    let result = send(&mut f, params);
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["interrupts"][0]["outcome"], "unknown");
+    assert_eq!(stop_keys(&f).len(), 1);
+    assert_eq!(f.worker.state.queued_requests(autonomous).len(), 2);
+}

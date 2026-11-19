@@ -1063,6 +1063,25 @@
           ],
           "type": "object"
         },
+        "AgentKeyActivity": {
+          "properties": {
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state_change_seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "generation",
+            "state_change_seq"
+          ],
+          "type": "object"
+        },
         "AgentObserveParams": {
           "additionalProperties": false,
           "description": "Provider-independent observation, including terminals with no agent.",
@@ -1304,6 +1323,24 @@
         },
         "AgentSendKeysParams": {
           "properties": {
+            "expected_activity": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/AgentKeyActivity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Native server generation and state-change sequence of an autonomous stop."
+            },
+            "expected_terminal_id": {
+              "description": "Refuse input if the pane now contains a different terminal.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "keys": {
               "items": {
                 "type": "string"

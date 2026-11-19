@@ -64,11 +64,10 @@ impl Worker {
             })
             .map(|request| request.id)
             .collect();
-        super::messages::stage_send_interrupts(&mut state, &created)?;
+        super::stage_send_interrupts(&mut state, &created)?;
         self.save(state)?;
-        for id in created {
-            self.dispatch_queued_send_interrupt(id, now)?;
-        }
+        self.dispatch_committed_send_interrupts(&created, now);
+        self.note_requests_queued(&created);
         serde_json::to_value(outcome).map_err(|error| error.to_string())
     }
 }

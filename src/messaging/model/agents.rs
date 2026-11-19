@@ -89,6 +89,7 @@ impl BusState {
                 session_reset_pending: false,
                 superseded_session_id: None,
                 interrupt_pending: false,
+                autonomous_stop: Default::default(),
                 status_since_ms: 0,
                 sitting_idle_since_ms: None,
                 idle_duration_notice_since_ms: None,
@@ -248,6 +249,14 @@ impl BusState {
             || agent.runtime_identity.session_id != identity.session_id
         {
             agent.claude_shells = None;
+        }
+        if agent.runtime_identity.launch_id != identity.launch_id
+            || agent.runtime_identity.terminal_id != identity.terminal_id
+            || agent.runtime_identity.session_id != identity.session_id
+        {
+            agent.autonomous_stop.provider_turn_id = None;
+            agent.autonomous_stop.activity = None;
+            agent.autonomous_stop.turn_activity = None;
         }
         agent.runtime_identity = identity;
         Ok(())

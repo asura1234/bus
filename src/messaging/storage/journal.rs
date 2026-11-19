@@ -53,6 +53,8 @@ pub(crate) enum JournalOp {
         request_id: RequestId,
         claim: bool,
         outcome: SendInterruptOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        release: Option<SendInterrupt>,
     },
     DeliveryTimestamps {
         room: RoomId,
@@ -144,8 +146,19 @@ impl JournalOp {
                 request_id,
                 claim,
                 outcome,
+                release,
                 ..
-            } => state.record_send_interrupt_progress(*request_id, *claim, outcome.clone()),
+            } => {
+                state.record_send_interrupt_progress(*request_id, *claim, outcome.clone())?;
+                if let Some(intent) = release {
+                    let recipient = state
+                        .request(*request_id)
+                        .ok_or(ModelError::UnknownRequest(*request_id))?
+                        .agent_id;
+                    state.release_send_interrupt_claim(recipient, intent);
+                }
+                Ok(())
+            }
             Self::DeliveryTimestampCompletion {
                 request_id,
                 phase,

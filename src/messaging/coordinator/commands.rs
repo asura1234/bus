@@ -151,8 +151,7 @@ impl Worker {
         let requests = state
             .submit_draft_exact(room, draft.clone(), now, true)
             .map_err(|e| e.to_string())?;
-        let interrupts =
-            super::control_dispatch::messages::stage_send_interrupts(&mut state, &requests)?;
+        let interrupts = super::control_dispatch::stage_send_interrupts(&mut state, &requests)?;
         self.journal(
             state,
             JournalOp::SubmitInterruptDraft {
@@ -162,13 +161,7 @@ impl Worker {
                 interrupts,
             },
         )?;
-        for id in &requests {
-            if let Err(error) = self.dispatch_queued_send_interrupt(*id, now) {
-                // The draft was accepted. The storage pause and intent retain the stop work.
-                tracing::warn!(%error, request_id = id.0, "Queued send stop dispatch paused");
-                break;
-            }
-        }
+        self.dispatch_committed_send_interrupts(&requests, now);
         self.note_requests_queued(&requests);
         for id in requests {
             super::super::diagnostics::request(&self.state, id, "bus.message.queued", "persisted");

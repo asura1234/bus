@@ -126,7 +126,7 @@ fn automatic_press(
     screen.driver_presses.push(params);
     if screen.press_uncertain {
         return Err(TransportError {
-                timestamps: Default::default(),
+            timestamps: Default::default(),
             code: None,
             message: "input acknowledgement lost".into(),
             definitely_rejected: false,
@@ -171,8 +171,9 @@ fn latency_notice_selects_keep_waiting_for_claude_and_codex_without_paging() {
             assert!(!press.submit);
         }
         assert_eq!(
-            native.driver_observations, 1,
-            "use the redraw-aware press route"
+            native.driver_observations,
+            [Some(KEEP_WAITING.into())],
+            "only observe the redraw between Down and Enter"
         );
         assert_eq!(
             native.native_gets, 1,

@@ -1,7 +1,7 @@
 //! Preserve independently answered joined inputs before releasing a retirement hold.
 use super::{
     check_callback_identity, provider_turn_key, AgentId, BusState, CallbackEventKind, PendingFinal,
-    ProviderCallback, RequestPhase,
+    ProviderCallback, RequestId, RequestPhase,
 };
 use crate::messaging::model::types::CompletedReply;
 use std::collections::BTreeMap;
@@ -67,10 +67,6 @@ impl BusState {
                 claims.entry(member).or_default().push(start);
             }
         }
-        let same_turn = |a: &ProviderCallback, b: &ProviderCallback| {
-            a.provider_session_id == b.provider_session_id
-                && a.provider_turn_id == b.provider_turn_id
-        };
         let unique_turn = |id: &_, starts: &[ProviderCallback]| {
             let start = starts.first()?;
             if starts.iter().any(|other| !same_turn(start, other))
@@ -137,65 +133,27 @@ impl BusState {
             {
                 continue;
             }
-            let Some(member) = self.requests.get_mut(member_id) else {
-                continue;
-            };
-            let Some(final_event) = evidence.iter().find(|event| {
-                same_turn(start, event)
-                    && matches!(event.kind, CallbackEventKind::Final { .. })
-                    && member
-                        .native_delivery_callback_boundary
-                        .is_some_and(|boundary| event.sequence > boundary)
-                    && check_callback_identity(member, event).is_ok()
-            }) else {
-                continue;
-            };
-            let CallbackEventKind::Final { text } = &final_event.kind else {
-                continue;
-            };
-            member.provider_session_id = start.provider_session_id.clone();
-            member.provider_turn_id = start.provider_turn_id.clone();
-            member.provider_prompt_id = start.provider_prompt_id.clone();
-            member.trusted_start_bound = true;
-            member.awaiting_background = false;
-            member.pending_final = None;
-            member.phase = RequestPhase::Completed;
-            member.uncertain_outcome = false;
-            member.submission_error = None;
-            member.failure_reason = None;
-            member.completed_at_ms = Some(final_event.occurred_at_ms);
-            member.turn_ended_at_ms = Some(final_event.occurred_at_ms);
-            member
-                .latency
-                .provider_started_at_ms
-                .get_or_insert(start.occurred_at_ms);
-            member
-                .latency
-                .reply_captured_at_ms
-                .get_or_insert(final_event.occurred_at_ms);
-            member
-                .completed_reply
-                .get_or_insert_with(|| CompletedReply {
-                    content: PendingFinal {
-                        callback_id: final_event.callback_id.clone(),
-                        text: text.clone(),
-                        received_at_ms: final_event.occurred_at_ms,
-                        provider_session_id: final_event.provider_session_id.clone(),
-                        provider_turn_id: final_event.provider_turn_id.clone(),
-                    },
-                    group: Some(*member_id),
-                });
-            self.consumed_provider_turns.insert(turn_key);
-            for start in starts {
-                self.record_reported_final(start.callback_id.clone(), start.launch_id.clone());
-            }
-            self.record_reported_final(
-                final_event.callback_id.clone(),
-                final_event.launch_id.clone(),
-            );
+            self.settle_joined_retirement_answer(*member_id, starts, start, turn_key, evidence);
         }
         // Already-answered members can no longer be settled with the lead's
         // reply. It is now safe to apply an original-turn Stop still on disk.
+        self.settle_retirement_lead(
+            id,
+            lead_answer,
+            lead_session.as_deref(),
+            lead_turn.as_deref(),
+            evidence,
+        );
+    }
+
+    fn settle_retirement_lead(
+        &mut self,
+        id: RequestId,
+        lead_answer: Option<(&ProviderCallback, &ProviderCallback)>,
+        lead_session: Option<&str>,
+        lead_turn: Option<&str>,
+        evidence: &[ProviderCallback],
+    ) {
         if let Some((start, final_event)) = lead_answer {
             let lead = self.requests.get_mut(&id).expect("retirement owner");
             // Keep the admitted terminal witness unchanged until absence settles the hold.
@@ -212,8 +170,8 @@ impl BusState {
             lead.trusted_start_bound && !lead.settled() && lead.pending_final.is_none()
         }) {
             if let Some(final_event) = evidence.iter().find(|event| {
-                event.provider_session_id == lead_session
-                    && event.provider_turn_id == lead_turn
+                event.provider_session_id.as_deref() == lead_session
+                    && event.provider_turn_id.as_deref() == lead_turn
                     && matches!(event.kind, CallbackEventKind::Final { .. })
                     && check_callback_identity(lead, event).is_ok()
             }) {
@@ -221,4 +179,74 @@ impl BusState {
             }
         }
     }
+
+    fn settle_joined_retirement_answer(
+        &mut self,
+        member_id: RequestId,
+        starts: &[ProviderCallback],
+        start: &ProviderCallback,
+        turn_key: String,
+        evidence: &[ProviderCallback],
+    ) {
+        let Some(member) = self.requests.get_mut(&member_id) else {
+            return;
+        };
+        let Some(final_event) = evidence.iter().find(|event| {
+            same_turn(start, event)
+                && matches!(event.kind, CallbackEventKind::Final { .. })
+                && member
+                    .native_delivery_callback_boundary
+                    .is_some_and(|boundary| event.sequence > boundary)
+                && check_callback_identity(member, event).is_ok()
+        }) else {
+            return;
+        };
+        let CallbackEventKind::Final { text } = &final_event.kind else {
+            return;
+        };
+        member.provider_session_id = start.provider_session_id.clone();
+        member.provider_turn_id = start.provider_turn_id.clone();
+        member.provider_prompt_id = start.provider_prompt_id.clone();
+        member.trusted_start_bound = true;
+        member.awaiting_background = false;
+        member.pending_final = None;
+        member.phase = RequestPhase::Completed;
+        member.uncertain_outcome = false;
+        member.submission_error = None;
+        member.failure_reason = None;
+        member.completed_at_ms = Some(final_event.occurred_at_ms);
+        member.turn_ended_at_ms = Some(final_event.occurred_at_ms);
+        member
+            .latency
+            .provider_started_at_ms
+            .get_or_insert(start.occurred_at_ms);
+        member
+            .latency
+            .reply_captured_at_ms
+            .get_or_insert(final_event.occurred_at_ms);
+        member
+            .completed_reply
+            .get_or_insert_with(|| CompletedReply {
+                content: PendingFinal {
+                    callback_id: final_event.callback_id.clone(),
+                    text: text.clone(),
+                    received_at_ms: final_event.occurred_at_ms,
+                    provider_session_id: final_event.provider_session_id.clone(),
+                    provider_turn_id: final_event.provider_turn_id.clone(),
+                },
+                group: Some(member_id),
+            });
+        self.consumed_provider_turns.insert(turn_key);
+        for start in starts {
+            self.record_reported_final(start.callback_id.clone(), start.launch_id.clone());
+        }
+        self.record_reported_final(
+            final_event.callback_id.clone(),
+            final_event.launch_id.clone(),
+        );
+    }
+}
+
+fn same_turn(a: &ProviderCallback, b: &ProviderCallback) -> bool {
+    a.provider_session_id == b.provider_session_id && a.provider_turn_id == b.provider_turn_id
 }
