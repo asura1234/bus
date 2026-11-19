@@ -1,5 +1,39 @@
 use super::*;
 
+fn assert_binary_key_form(screen: &str, expected: bool) {
+    assert_eq!(has_input_controls(screen), expected, "{screen:?}");
+    assert_eq!(
+        blocker_from_text(screen, false).is_some(),
+        expected,
+        "{screen:?}"
+    );
+}
+
+#[test]
+fn driver_binary_key_rejects_one_nbsp_gap() {
+    assert_binary_key_form("Yes\u{a0}y\nNo!\u{a0}n", false);
+}
+
+#[test]
+fn driver_binary_key_rejects_one_em_space_gap() {
+    assert_binary_key_form("Yes\u{2003}y\nNo!\u{2003}n", false);
+}
+
+#[test]
+fn driver_binary_key_accepts_two_ascii_spaces() {
+    assert_binary_key_form("Yes  y\nNo!  n", true);
+}
+
+#[test]
+fn driver_binary_key_rejects_one_ascii_space() {
+    assert_binary_key_form("Yes y\nNo! n", false);
+}
+
+#[test]
+fn driver_binary_key_accepts_cjk_labels_with_two_ascii_spaces() {
+    assert_binary_key_form("允许  y\n拒绝  n", true);
+}
+
 fn captured_grid(screen: &str) -> Grid {
     let (runtime, _) = crate::terminal::TerminalRuntime::test_with_channel(180, 64);
     runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
