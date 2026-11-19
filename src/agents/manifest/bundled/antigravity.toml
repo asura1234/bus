@@ -1,21 +1,68 @@
 id = "agy"
-version = "2026.06.24.1"
-min_engine_version = 1
-updated_at = "2026-06-24T00:00:00Z"
+version = "2026.11.18.2"
+min_engine_version = 2
+updated_at = "2026-11-18T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
+
+[[rules]]
+id = "workspace_trust_or_permission_blocked"
+state = "blocked"
+priority = 1050
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+any = [
+  { contains = ["do you trust the contents of this project?"] },
+  { contains = ["grant requested permission?"] },
+  { contains = ["↑/↓ navigate · enter confirm"] },
+  { contains = ["↑/↓ navigate · enter select"] },
+]
+not = [
+  { contains = ["? for shortcuts"] },
+]
+
+[[rules]]
+id = "interactive_overlay_menu"
+state = "unknown"
+priority = 1000
+region = "bottom_non_empty_lines(12)"
+skip_state_update = true
+any = [
+  { contains = ["select model", "esc to close"] },
+  { contains = ["settings", "esc to close"] },
+]
+not = [
+  { contains = ["do you trust the contents of this project?"] },
+  { contains = ["grant requested permission?"] },
+]
+
+[[rules]]
+id = "live_turn_footer_working"
+state = "working"
+priority = 980
+region = "after_last_horizontal_rule"
+visible_working = true
+line_regex = ['^\s*esc to cancel(?:\s|$)']
 
 [[rules]]
 id = "spinner_working"
 state = "working"
-priority = 100
-region = "whole_recent"
+priority = 970
+region = "above_prompt_box"
 visible_working = true
 line_regex = ['^\s*[\u2800-\u28FF]+\s+\p{Alphabetic}+\w*ing\b']
 
 [[rules]]
 id = "background_tasks_working"
 state = "working"
-priority = 90
+priority = 960
 region = "bottom_non_empty_lines(5)"
 visible_working = true
 line_regex = ['(?i)·\s*[1-9][0-9]*\s+task']
+
+[[rules]]
+id = "live_prompt_box"
+state = "idle"
+priority = 950
+region = "prompt_box_body"
+visible_idle = true
+line_regex = ['^\s*>']

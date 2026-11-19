@@ -10,7 +10,13 @@ use std::{
     path::{Component, Path},
 };
 
-pub(super) struct Dir {
+#[derive(Clone, Copy, PartialEq)]
+pub(in crate::agents::providers) enum ReplaceStage {
+    BeforeRename,
+    AfterRename,
+}
+
+pub(in crate::agents::providers) struct Dir {
     file: File,
     created: Option<(File, CString)>,
 }
@@ -52,7 +58,7 @@ fn opened(fd: libc::c_int) -> Result<File, String> {
 }
 
 impl Dir {
-    pub(super) fn open(path: &Path) -> Result<Self, String> {
+    pub(in crate::agents::providers) fn open(path: &Path) -> Result<Self, String> {
         let mut dir = Self {
             file: File::open("/").map_err(|e| e.to_string())?,
             created: None,
@@ -67,7 +73,11 @@ impl Dir {
         Ok(dir)
     }
 
-    pub(super) fn open_at(&self, component: &OsStr, flags: libc::c_int) -> Result<File, String> {
+    pub(in crate::agents::providers) fn open_at(
+        &self,
+        component: &OsStr,
+        flags: libc::c_int,
+    ) -> Result<File, String> {
         let component = name(component)?;
         // SAFETY: live directory descriptor, NUL-terminated single component,
         // and mode supplied for O_CREAT. Returned descriptor is uniquely owned.
@@ -81,7 +91,11 @@ impl Dir {
         })
     }
 
-    pub(super) fn child(&self, component: impl AsRef<OsStr>, create: bool) -> Result<Self, String> {
+    pub(in crate::agents::providers) fn child(
+        &self,
+        component: impl AsRef<OsStr>,
+        create: bool,
+    ) -> Result<Self, String> {
         let component = component.as_ref();
         let mut created = false;
         if create {
@@ -108,12 +122,12 @@ impl Dir {
         })
     }
 
-    pub(super) fn keep(&mut self) {
+    pub(in crate::agents::providers) fn keep(&mut self) {
         self.created = None;
     }
 
     // Containment is an identity relation, including APFS firmlink spellings.
-    pub(super) fn within(&self, root: &Self) -> Result<bool, String> {
+    pub(in crate::agents::providers) fn within(&self, root: &Self) -> Result<bool, String> {
         let mut current = Self {
             file: self.file.try_clone().map_err(|e| e.to_string())?,
             created: None,
@@ -130,11 +144,11 @@ impl Dir {
         }
     }
 
-    pub(super) fn same(&self, other: &Self) -> Result<bool, String> {
+    pub(in crate::agents::providers) fn same(&self, other: &Self) -> Result<bool, String> {
         same(&self.file, &other.file)
     }
 
-    pub(super) fn lock(&self) -> Result<File, String> {
+    pub(in crate::agents::providers) fn lock(&self) -> Result<File, String> {
         let file = self.open_at(
             OsStr::new(".bus-hooks.lock"),
             libc::O_RDWR | libc::O_CREAT | libc::O_NONBLOCK,
@@ -150,8 +164,8 @@ impl Dir {
         Ok(file)
     }
 
-    pub(super) fn leaf(&self) -> Result<Option<File>, String> {
-        let component = name(OsStr::new("bus.json"))?;
+    pub(in crate::agents::providers) fn leaf(&self, leaf: &str) -> Result<Option<File>, String> {
+        let component = name(OsStr::new(leaf))?;
         // SAFETY: live directory descriptor and static single-component name.
         let fd = unsafe {
             libc::openat(
@@ -170,8 +184,11 @@ impl Dir {
         Ok(Some(file))
     }
 
-    pub(super) fn read(&self) -> Result<Option<(File, Vec<u8>)>, String> {
-        let Some(mut file) = self.leaf()? else {
+    pub(in crate::agents::providers) fn read(
+        &self,
+        leaf: &str,
+    ) -> Result<Option<(File, Vec<u8>)>, String> {
+        let Some(mut file) = self.leaf(leaf)? else {
             return Ok(None);
         };
         let mut bytes = Vec::new();
@@ -185,10 +202,11 @@ impl Dir {
         Ok(Some((file, bytes)))
     }
 
-    pub(super) fn replace(
+    pub(in crate::agents::providers) fn replace(
         &self,
+        leaf: &str,
         bytes: &[u8],
-        mut checkpoint: impl FnMut(super::Stage),
+        mut checkpoint: impl FnMut(ReplaceStage),
     ) -> Result<File, String> {
         static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let serial = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -198,12 +216,12 @@ impl Dir {
             libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
         )?;
         let source = name(OsStr::new(&temp))?;
-        let target = name(OsStr::new("bus.json"))?;
+        let target = name(OsStr::new(leaf))?;
         let result = (|| {
             file.write_all(bytes)
                 .and_then(|_| file.sync_all())
                 .map_err(|e| e.to_string())?;
-            checkpoint(super::Stage::BeforeRename);
+            checkpoint(ReplaceStage::BeforeRename);
             // SAFETY: both names are relative to the pinned hooks directory.
             // renameat replaces the directory entry, never follows a leaf link.
             if unsafe {
@@ -217,7 +235,7 @@ impl Dir {
             {
                 return Err(std::io::Error::last_os_error().to_string());
             }
-            checkpoint(super::Stage::AfterRename);
+            checkpoint(ReplaceStage::AfterRename);
             self.file.sync_all().map_err(|e| e.to_string())?;
             Ok(())
         })();
@@ -231,7 +249,7 @@ impl Dir {
     }
 }
 
-pub(super) fn same(left: &File, right: &File) -> Result<bool, String> {
+pub(in crate::agents::providers) fn same(left: &File, right: &File) -> Result<bool, String> {
     let left = left.metadata().map_err(|e| e.to_string())?;
     let right = right.metadata().map_err(|e| e.to_string())?;
     Ok(left.dev() == right.dev() && left.ino() == right.ino())

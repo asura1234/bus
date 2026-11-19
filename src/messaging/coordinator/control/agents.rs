@@ -175,6 +175,7 @@ impl Worker {
                     "cursor" => Provider::Cursor,
                     "grok" => Provider::Grok,
                     "kimi" => Provider::Kimi,
+                    "agy" => Provider::Agy,
                     #[cfg(feature = "dev-tools")]
                     "fake"
                         if crate::agents::providers::launch::native_provider("fake").is_some() =>
@@ -182,7 +183,7 @@ impl Worker {
                         Provider::Fake
                     }
                     _ => return Err(
-                        "Provider must be claude, claude-ds, codex, cursor, grok, kimi, or fake"
+                        "Provider must be claude, claude-ds, codex, cursor, grok, kimi, agy, or fake"
                             .into(),
                     ),
                 };
@@ -268,8 +269,8 @@ impl Worker {
                     expected_turn_id: None,
                 })
             }
-            // Codex starts its provider session with the first turn.
-            None if agent.provider == Provider::Codex => {
+            // Codex and AGY start their provider session with the first turn.
+            None if matches!(agent.provider, Provider::Codex | Provider::Agy) => {
                 Method::AgentPromptIfUnboundAtGeneration(schema::AgentPromptIfUnboundParams {
                     target: pane.clone(),
                     text: text.clone(),
@@ -689,7 +690,11 @@ fn needs_stop(
 /// Ctrl+C clears `[stop]`. A second Ctrl+C paints `Ctrl+c:press again to quit`.
 fn interrupt_key(provider: Provider) -> &'static str {
     match provider {
-        Provider::ClaudeCode | Provider::ClaudeDs | Provider::Codex | Provider::Kimi => "esc",
+        Provider::ClaudeCode
+        | Provider::ClaudeDs
+        | Provider::Codex
+        | Provider::Kimi
+        | Provider::Agy => "esc",
         Provider::Cursor | Provider::Grok => "ctrl+c",
         #[cfg(feature = "dev-tools")]
         Provider::Fake => "esc",
@@ -702,8 +707,7 @@ fn clear_command(provider: Provider) -> &'static str {
     match provider {
         Provider::ClaudeCode | Provider::ClaudeDs | Provider::Codex => "/clear",
         Provider::Cursor => "/new-chat",
-        Provider::Grok => "/new",
-        Provider::Kimi => "/new",
+        Provider::Grok | Provider::Kimi | Provider::Agy => "/new",
         #[cfg(feature = "dev-tools")]
         Provider::Fake => "/clear",
     }

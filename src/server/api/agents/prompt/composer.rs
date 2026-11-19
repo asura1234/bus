@@ -135,6 +135,9 @@ pub(super) fn observe_since_launch(
     if kind == AgentKind::Kimi {
         return super::kimi::observe(screen, expected);
     }
+    if kind == AgentKind::Antigravity {
+        return super::agy::observe(screen, expected, cursor);
+    }
     let plain = super::plain_screen(screen);
     let detection = crate::agents::manifest::detect_with_osc(
         kind,
@@ -280,7 +283,7 @@ fn image_chips(body: &str) -> (usize, &str) {
     }
 }
 
-fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
+pub(super) fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
     // Large bracketed pastes are represented as one atomic composer element.
     if let Some(count) = body
         .strip_prefix("[Pasted Content ")
@@ -288,6 +291,20 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
     {
         return kind == AgentKind::Codex
             && count.parse::<usize>().ok() == Some(expected.chars().count());
+    }
+    if kind == AgentKind::Antigravity {
+        if let Some(label) = body
+            .strip_prefix("[Pasted text #")
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            if let Some((id, chars_part)) = label.split_once(' ') {
+                if id.parse::<usize>().ok().is_some_and(|n| n > 0) {
+                    if let Some(count_str) = chars_part.strip_suffix(" chars") {
+                        return count_str.parse::<usize>().ok() == Some(expected.chars().count());
+                    }
+                }
+            }
+        }
     }
     let Some(count) = pasted_text_count(body) else {
         return false;
@@ -299,12 +316,12 @@ fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
         .replace('\r', "\n")
         .matches('\n')
         .count();
-    let expected_lines = match kind {
-        AgentKind::Claude => newlines,
-        AgentKind::Cursor => newlines + 1,
-        _ => return false,
-    };
-    count == expected_lines
+    match kind {
+        AgentKind::Claude => count == newlines,
+        AgentKind::Cursor => count == newlines + 1,
+        AgentKind::Antigravity => count == newlines || count == newlines + 1,
+        _ => false,
+    }
 }
 
 fn pasted_text_count(body: &str) -> Option<usize> {
@@ -335,6 +352,9 @@ fn input_since_launch(
     }
     if kind == AgentKind::Kimi {
         return super::kimi::input(screen);
+    }
+    if kind == AgentKind::Antigravity {
+        return super::agy::input(screen, cursor);
     }
     let styled: Vec<_> = screen.lines().map(styled_chars).collect();
     let lines: Vec<String> = styled

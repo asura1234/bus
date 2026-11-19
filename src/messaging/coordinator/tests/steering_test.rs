@@ -305,6 +305,10 @@ impl Fixture {
             Provider::Cursor => {
                 json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":turn,"prompt":prompt})
             }
+            Provider::Agy => {
+                let step = turn.parse::<u64>().unwrap_or(0);
+                json!({"hookEventName":"PreInvocation","conversationId":"session","invocationNum":0,"initialNumSteps":step + 1,"lastUserInput":prompt})
+            }
             #[cfg(feature = "dev-tools")]
             Provider::Fake => {
                 json!({"event":"started","session":"session","turn":turn,"prompt":prompt})
@@ -316,6 +320,47 @@ impl Fixture {
     fn stopped(&self, turn: &str, text: &str) {
         match self.provider {
             crate::agents::providers::ProviderKind::Grok | crate::agents::providers::ProviderKind::Kimi => panic!("This fixture covers the original providers; use dedicated Grok provider tests"),
+            Provider::Agy => {
+                let step = turn.parse::<u64>().unwrap_or(0);
+                let logs = self.dir.join("agy-brain/session/.system_generated/logs");
+                std::fs::create_dir_all(&logs).unwrap();
+                let transcript = logs.join("transcript_full.jsonl");
+                let mut rows = Vec::new();
+                let mut state_clone = self.worker.state.clone();
+                if let Some(lead) = state_clone.agent(self.agent).and_then(|a| a.current_request) {
+                    for (offset, id) in state_clone.group_members(lead).into_iter().enumerate() {
+                        if let Some(payload) = state_clone.render_request_payload(id) {
+                            rows.push(json!({
+                                "step_index": step + offset as u64,
+                                "source": "USER_EXPLICIT",
+                                "type": "USER_INPUT",
+                                "status": "DONE",
+                                "content": format!("<USER_REQUEST>\n{payload}\n</USER_REQUEST>"),
+                            }));
+                        }
+                    }
+                }
+                let reply_step = step + rows.len().max(1) as u64;
+                rows.push(json!({
+                    "step_index": reply_step,
+                    "source": "MODEL",
+                    "type": "PLANNER_RESPONSE",
+                    "status": "DONE",
+                    "content": text,
+                }));
+                std::fs::write(
+                    &transcript,
+                    rows.iter().map(|row| format!("{row}\n")).collect::<String>(),
+                )
+                .unwrap();
+                self.record(json!({
+                    "hookEventName": "Stop",
+                    "conversationId": "session",
+                    "terminationReason": "NO_TOOL_CALL",
+                    "fullyIdle": true,
+                    "transcriptPath": transcript,
+                }));
+            }
             Provider::ClaudeCode | Provider::ClaudeDs => self.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":[],"session_crons":[]})),
             Provider::Codex => self.record(json!({"hook_event_name":"Stop","session_id":"session","turn_id":turn,"last_assistant_message":text,"transcript_path":"/tmp/rollout.jsonl"})),
             Provider::Cursor => {
@@ -330,6 +375,9 @@ impl Fixture {
     fn record(&self, mut value: Value) {
         if let Some(prompt) = value.get("prompt").and_then(Value::as_str) {
             value["prompt"] = json!(delivered_test_prompt(&self.worker.state, prompt));
+        }
+        if let Some(prompt) = value.get("lastUserInput").and_then(Value::as_str) {
+            value["lastUserInput"] = json!(delivered_test_prompt(&self.worker.state, prompt));
         }
         callbacks::append(
             &self.dir.join("callbacks/launch"),
@@ -1480,4 +1528,259 @@ fn codex_idle_background_steering_preserves_expected_turn_identity() {
         steering.expected_generation,
         Some(fixture.worker.serving_generation)
     );
+}
+
+#[test]
+fn agy_unbound_onboarding_turn_stays_queued_while_bound_turn_steers() {
+    let mut fixture = Fixture::new(Provider::Agy);
+    fixture.status(RuntimeStatus::Working);
+
+    let queued = fixture.send("wait until onboarding turn finishes", false);
+    fixture.deliver();
+    assert!(
+        fixture.typed().is_empty(),
+        "AGY unbound onboarding turn must not receive steered room input before a bound turn exists"
+    );
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+
+    fixture.status(RuntimeStatus::Idle);
+    fixture.deliver();
+    let typed = fixture.typed();
+    assert_eq!(typed.len(), 1);
+    assert!(
+        !typed[0].1,
+        "first post-onboarding turn is normal idle delivery"
+    );
+    fixture.started("1", "wait until onboarding turn finishes");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+
+    let steered = fixture.send("join the bound AGY turn", false);
+    fixture.deliver();
+    let typed = fixture.typed();
+    assert_eq!(typed.len(), 2);
+    assert!(typed[1].1, "bound AGY turn supports mid-turn steering");
+    fixture.stopped("1", "completed both");
+    fixture.consume();
+    for id in [queued, steered] {
+        assert_eq!(fixture.request(id).phase, RequestPhase::Completed);
+        assert!(fixture.request(id).trusted_start_bound);
+        assert_eq!(fixture.request(id).provider_turn_id.as_deref(), Some("1"));
+        assert!(fixture.request(id).failure_reason.is_none());
+    }
+    assert_eq!(fixture.request(steered).group, Some(queued));
+    assert_eq!(fixture.error(), None);
+}
+
+#[test]
+fn agy_corrupt_completed_transcript_fails_closed_and_preexisting_error_keeps_pending_retries() {
+    // Part 1: Corrupt completed UTF-8 record fails the turn closed and retains actionable_error.
+    let mut corrupt = Fixture::new(Provider::Agy);
+    let req = corrupt.send("trigger corrupt transcript", false);
+    corrupt.deliver();
+    corrupt.started("1", "trigger corrupt transcript");
+    corrupt.consume();
+    corrupt.status(RuntimeStatus::Working);
+
+    let logs = corrupt.dir.join("agy-brain/session/.system_generated/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let transcript = logs.join("transcript_full.jsonl");
+    let payload = corrupt.worker.state.render_request_payload(req).unwrap();
+    let mut raw = format!(
+        "{{\"step_index\":1,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":{}}}\n",
+        json!(format!("<USER_REQUEST>\n{payload}\n</USER_REQUEST>"))
+    )
+    .into_bytes();
+    raw.extend_from_slice(
+        b"{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"content\":\"bad \xff\xfe\"}\n",
+    );
+    std::fs::write(&transcript, raw).unwrap();
+    corrupt.record(json!({
+        "hookEventName": "Stop",
+        "conversationId": "session",
+        "terminationReason": "NO_TOOL_CALL",
+        "fullyIdle": true,
+        "transcriptPath": transcript,
+    }));
+    corrupt.status(RuntimeStatus::Idle);
+    corrupt.consume();
+    assert_eq!(corrupt.request(req).phase, RequestPhase::Abandoned);
+    assert!(corrupt.request(req).failure_reason.is_some());
+    assert!(
+        corrupt.error().is_some(),
+        "corrupt AGY transcript must retain actionable_error after idle settlement"
+    );
+
+    // Part 2: A pre-existing actionable_error must not abort Pending Stop retries.
+    let mut pending = Fixture::new(Provider::Agy);
+    let lead = pending.send("lead prompt", false);
+    pending.deliver();
+    pending.started("1", "lead prompt");
+    pending.consume();
+    pending.status(RuntimeStatus::Working);
+
+    let steered = pending.send("steered prompt", false);
+    pending.deliver();
+
+    let logs2 = pending.dir.join("agy-brain/session/.system_generated/logs");
+    std::fs::create_dir_all(&logs2).unwrap();
+    let transcript2 = logs2.join("transcript_full.jsonl");
+    let p1 = pending.worker.state.render_request_payload(lead).unwrap();
+    let p2 = pending
+        .worker
+        .state
+        .render_request_payload(steered)
+        .unwrap();
+    let partial_rows = format!(
+        "{}\n{}\n",
+        json!({"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":format!("<USER_REQUEST>\n{p1}\n</USER_REQUEST>")}),
+        json!({"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":format!("<USER_REQUEST>\n{p2}\n</USER_REQUEST>")}),
+    );
+    std::fs::write(&transcript2, &partial_rows).unwrap();
+
+    // Inject a pre-existing actionable_error before Stop arrives while transcript is still Pending.
+    let mut st = pending.worker.state.clone();
+    st.set_agent_error(pending.agent, Some("prior non-fatal hook warning".into()))
+        .unwrap();
+    pending.worker.save(st).unwrap();
+
+    pending.record(json!({
+        "hookEventName": "Stop",
+        "conversationId": "session",
+        "terminationReason": "NO_TOOL_CALL",
+        "fullyIdle": true,
+        "transcriptPath": transcript2,
+    }));
+    pending.consume();
+    // Stop must still be retained in the spool (not dropped on attempt 0!).
+    assert_eq!(pending.request(lead).phase, RequestPhase::Active);
+
+    // Now flush the terminal response and advance past the 1s retry delay.
+    let full_rows = format!(
+        "{partial_rows}{}\n",
+        json!({"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"settled after retry"})
+    );
+    std::fs::write(&transcript2, full_rows).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+    pending.consume();
+    assert_eq!(pending.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(pending.request(steered).phase, RequestPhase::Completed);
+    assert!(pending.request(steered).trusted_start_bound);
+}
+
+fn agy_pending_stop_fixture(working: bool) -> (Fixture, RequestId, PathBuf, PathBuf) {
+    let mut fixture = Fixture::new(Provider::Agy);
+    let lead = fixture.send("lead prompt", false);
+    fixture.deliver();
+    fixture.started("1", "lead prompt");
+    fixture.consume();
+    if working {
+        fixture.status(RuntimeStatus::Working);
+    }
+
+    // The transcript has the owned prompt but never a terminal MODEL row.
+    let logs = fixture.dir.join("agy-brain/session/.system_generated/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let transcript = logs.join("transcript_full.jsonl");
+    let payload = fixture.worker.state.render_request_payload(lead).unwrap();
+    std::fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            json!({
+                "step_index": 1,
+                "source": "USER_EXPLICIT",
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "content": format!("<USER_REQUEST>\n{payload}\n</USER_REQUEST>"),
+            })
+        ),
+    )
+    .unwrap();
+    fixture.record(json!({
+        "hookEventName": "Stop",
+        "conversationId": "session",
+        "terminationReason": "NO_TOOL_CALL",
+        "fullyIdle": true,
+        "transcriptPath": transcript,
+    }));
+
+    fixture.consume();
+    let marker = std::fs::read_dir(fixture.dir.join("callbacks/launch"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|e| e.to_str()) == Some("agy-retry"))
+        .expect("pending Stop must persist its retry marker");
+    (fixture, lead, transcript, marker)
+}
+
+#[test]
+fn agy_exhausted_stop_retries_do_not_leave_the_turn_active() {
+    let (mut fixture, lead, _, marker) = agy_pending_stop_fixture(true);
+    let queued = fixture.send("next turn", true);
+    std::fs::write(&marker, br#"{"attempts":16,"next_at":0}"#).unwrap();
+    fixture.consume();
+    assert_ne!(
+        fixture.request(lead).phase,
+        RequestPhase::Active,
+        "an exhausted AGY Stop budget must not leave the request Active forever"
+    );
+    assert!(
+        fixture.error().is_some(),
+        "an exhausted AGY Stop budget must surface an actionable error"
+    );
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Abandoned);
+    assert!(fixture
+        .request(lead)
+        .failure_reason
+        .as_ref()
+        .unwrap()
+        .contains("retry budget expired"));
+    assert!(fixture.request(lead).completed_reply.is_none());
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    assert!(fixture
+        .worker
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .current_request
+        .is_none());
+    assert!(!marker.exists());
+}
+
+#[test]
+fn agy_pending_stop_survives_idle_settlement_window() {
+    for working in [false, true] {
+        let (mut fixture, lead, transcript, marker) = agy_pending_stop_fixture(working);
+        fixture.status(RuntimeStatus::Idle);
+        let mut state = fixture.worker.state.clone();
+        for elapsed in [6000, 31000] {
+            state
+                .observe_status(fixture.agent, RuntimeStatus::Idle, fixture.now + elapsed)
+                .unwrap();
+            state.settle_ended_request(fixture.agent, fixture.now + elapsed, |_| None);
+            assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Active,
+                "an idle screen must not silently retire an AGY turn whose Stop still awaits its transcript");
+        }
+        fixture.worker.save(state).unwrap();
+        let final_row = json!({"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"late owned final"});
+        let mut bytes = std::fs::read_to_string(&transcript).unwrap();
+        bytes.push_str(&format!("{final_row}\n"));
+        std::fs::write(&transcript, bytes).unwrap();
+        std::fs::write(&marker, br#"{"attempts":1,"next_at":0}"#).unwrap();
+        fixture.consume();
+        assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture
+                .request(lead)
+                .completed_reply
+                .as_ref()
+                .unwrap()
+                .content
+                .text,
+            "late owned final"
+        );
+        assert!(!marker.exists());
+    }
 }

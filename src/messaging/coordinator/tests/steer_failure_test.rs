@@ -46,7 +46,7 @@ fn fail(f: &mut Fixture) -> String {
             f.status(RuntimeStatus::Idle);
             "Invalid model (invalid_request)"
         }
-        Provider::Grok | Provider::Kimi => {
+        Provider::Grok | Provider::Kimi | Provider::Agy => {
             panic!("this fixture covers providers with committed final evidence")
         }
         #[cfg(feature = "dev-tools")]

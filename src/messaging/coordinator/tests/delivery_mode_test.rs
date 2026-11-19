@@ -95,7 +95,7 @@ fn peer(fixture: &mut Fixture) -> AgentId {
 
 /// Providers whose stop key this fixture can model. Kimi needs its saved home.
 fn providers() -> Vec<Provider> {
-    let mut providers = vec![Provider::ClaudeCode, Provider::Codex];
+    let mut providers = vec![Provider::ClaudeCode, Provider::Codex, Provider::Agy];
     #[cfg(unix)]
     providers.push(Provider::Kimi);
     providers

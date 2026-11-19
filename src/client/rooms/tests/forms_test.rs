@@ -1352,6 +1352,7 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         Provider::Cursor,
         Provider::Grok,
         Provider::Kimi,
+        Provider::Agy,
     ] {
         let rect = ui
             .view
@@ -1363,6 +1364,43 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         assert!(!model.intersects(rect), "{provider:?} covers Model");
         assert!(!pwd.intersects(rect), "{provider:?} covers PWD");
     }
+}
+
+#[test]
+fn agy_appears_in_worker_form_and_is_omitted_from_master_orchestrator_form() {
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let room = state.create_room("work").unwrap();
+    let mut ui = BusUi::new(Arc::new(BusSnapshot {
+        state,
+        revision: 0,
+        last_command_id: 0,
+        error: None,
+    }));
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Field(1));
+    form_rows(&mut ui, 100, 30);
+    assert!(
+        !ui.view
+            .hits
+            .iter()
+            .any(|hit| hit.action == render::Action::Provider(Provider::Agy)),
+        "MASTER orchestrator form must not offer AGY"
+    );
+
+    ui.action(render::Action::Cancel);
+    ui.open_room(room);
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Field(1));
+    form_rows(&mut ui, 100, 30);
+    assert!(
+        ui.view
+            .hits
+            .iter()
+            .any(|hit| hit.action == render::Action::Provider(Provider::Agy)),
+        "Work-room worker form must offer AGY"
+    );
 }
 
 #[test]

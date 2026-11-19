@@ -1,5 +1,6 @@
 """The run wrapper installs and removes this checkout's skills without Bus."""
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "tools" / "install_skills.py"
-PROVIDERS = (".claude", ".agents", ".cursor", ".grok", ".kimi-code")
+PROVIDERS = (".claude", ".agents", ".cursor", ".grok", ".kimi-code", ".gemini")
 
 
 def scrubbed_env(**updates):
@@ -65,12 +66,13 @@ def test_install_skills_does_not_build_bus_and_prints_each_provider(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     lines = dict(line.split(": ", 1) for line in result.stdout.splitlines())
-    for provider in ("claude", "codex", "cursor", "grok", "kimi"):
+    for provider in ("claude", "codex", "cursor", "grok", "kimi", "agy"):
         assert lines[provider].startswith("installed "), lines
         assert "skills to " in lines[provider]
     assert (home / ".cursor/skills/pr/SKILL.md").read_bytes() == (ROOT / "skills/pr/SKILL.md").read_bytes()
     assert (home / ".grok/skills/review-pr/SKILL.md").is_file()
     assert (home / ".kimi-code/skills/pr/SKILL.md").is_file()
+    assert (home / ".gemini/config/skills/pr/SKILL.md").is_file()
     assert not (home / ".local/share/bus").exists()
     assert (home / ".config/bus-skills/manifest.json").is_file()
 
@@ -118,6 +120,7 @@ def test_install_then_remove_restores_provider_dirs_and_keeps_user_skills(tmp_pa
     assert after[".agents"] is None
     assert after[".grok"] is None
     assert after[".kimi-code"] is None
+    assert after[".gemini"] is None
     assert after[".cursor"] == before[".cursor"]
 
 
@@ -131,3 +134,22 @@ def test_remove_leaves_an_edited_owned_skill(tmp_path):
     assert removed.returncode == 0, removed.stderr
     assert edited.read_text() == "my edited copy\n"
     assert not (home / ".agents/skills/review-pr").exists()
+
+
+def test_nested_gemini_config_preserves_sibling_cli_settings_and_user_skill(tmp_path):
+    home = tmp_path / "home"
+    cli = home / ".gemini" / "antigravity-cli"
+    cli.mkdir(parents=True)
+    (cli / "settings.json").write_text("{}")
+    user_skill = home / ".gemini" / "config" / "skills" / "pr"
+    user_skill.mkdir(parents=True)
+    (user_skill / "SKILL.md").write_text("mine")
+
+    assert run_tool(home, "install-skills", "--yes").returncode == 0
+    manifest = json.loads((home / ".config/bus-skills/manifest.json").read_text())
+    assert ".gemini" not in manifest["created_dirs"]
+    assert (user_skill / "SKILL.md").read_text() == "mine"
+
+    assert run_tool(home, "remove-skills", "--yes").returncode == 0
+    assert (cli / "settings.json").read_text() == "{}"
+    assert (user_skill / "SKILL.md").read_text() == "mine"

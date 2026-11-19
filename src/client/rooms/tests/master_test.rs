@@ -1106,7 +1106,8 @@ fn master_and_work_room_forms_offer_codex_and_submit_its_role() {
             Provider::ClaudeDs,
             Provider::Cursor,
             Provider::Grok,
-            Provider::Kimi
+            Provider::Kimi,
+            Provider::Agy
         ]
     );
     ui.action(render::Action::Provider(Provider::Codex));

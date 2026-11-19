@@ -44,6 +44,14 @@ impl Worker {
             {
                 self.apply_request_callback(id, state, callback)?;
             }
+        } else if record.manifest.provider == ProviderKind::Agy
+            && state
+                .agent(id)
+                .and_then(|agent| agent.current_request)
+                .and_then(|request| state.request(request))
+                .is_some_and(|request| request.provider_turn_id.as_deref() != Some(&turn))
+        {
+            self.settle_prior_agy_turn_before_start(id, state, record, &session)?;
         }
         Ok(started)
     }
@@ -88,7 +96,7 @@ impl Worker {
     }
 
     pub(super) fn completion_callback(
-        &self,
+        &mut self,
         id: AgentId,
         mut state: BusState,
         path: &Path,
@@ -107,6 +115,9 @@ impl Worker {
                 callback,
                 vec![path.to_path_buf()],
             )));
+        }
+        if record.manifest.provider == ProviderKind::Agy {
+            return self.agy_completion_callback(id, state, path, record, session);
         }
         self.grok_completion_callback(id, state, path, record, session, candidate_turn)
     }

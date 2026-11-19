@@ -19,8 +19,12 @@ enum CallbackFlow {
     Stop,
 }
 
+#[path = "agy_callbacks.rs"]
+mod agy_callbacks;
 #[path = "callback_binding.rs"]
 mod binding;
+#[path = "callback_observations.rs"]
+mod callback_observations;
 #[path = "callback_completion.rs"]
 mod completion;
 #[path = "grok_callbacks.rs"]
@@ -128,6 +132,7 @@ impl Worker {
         }
         if let Some(agent) = self.state.agent(id) {
             self.usage.refresh_claude(agent, dir);
+            self.usage.refresh_agy(agent, dir);
         }
         Ok(())
     }
@@ -466,9 +471,9 @@ impl Worker {
         mut state: BusState,
     ) -> Result<CallbackFlow, String> {
         // Clear starts a fresh context; Cursor reports it on its first turn.
-        let source = if record.manifest.provider == Provider::Kimi {
-            // Kimi 2.4 reports /new as "startup". This path is entered only
-            // after Bus recorded a reset and the session actually changed.
+        let source = if matches!(record.manifest.provider, Provider::Kimi | Provider::Agy) {
+            // Kimi 2.4 and AGY report /new as "startup". This path is entered
+            // only after Bus recorded a reset and the session actually changed.
             Some("new".to_owned())
         } else {
             match parsed {
@@ -571,12 +576,29 @@ impl Worker {
                     .rebind_callback_session(id, session, parsed, record, pane, path, dir, state)
                     .map(ControlFlow::Break);
             }
-            if agent
+            if let Some(known) = agent
                 .runtime_identity
                 .session_id
                 .as_ref()
-                .is_some_and(|known| known != session)
+                .filter(|known| *known != session)
             {
+                if record.manifest.provider == ProviderKind::Agy
+                    && crate::agents::providers::agy::hooks::is_descendant_subagent(
+                        known,
+                        session,
+                        &record.value,
+                    )
+                {
+                    tracing::debug!(
+                        event = "bus.callback.ignored",
+                        reason = "agy_subagent_callback",
+                        parent_session_id = %known,
+                        subagent_session_id = %session,
+                        "Ignoring AGY child subagent callback"
+                    );
+                    self.acknowledge_spool(dir, vec![path.to_path_buf()])?;
+                    return Ok(ControlFlow::Break(CallbackFlow::Next));
+                }
                 tracing::warn!(
                     event = "bus.callback.rejected",
                     reason = "session_mismatch",

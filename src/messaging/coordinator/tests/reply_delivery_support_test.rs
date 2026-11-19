@@ -29,7 +29,8 @@ fn screen(provider: Provider, draft: &str) -> String {
 fn kind(provider: Provider) -> AgentKind {
     match provider {
         crate::agents::providers::ProviderKind::Grok
-        | crate::agents::providers::ProviderKind::Kimi => {
+        | crate::agents::providers::ProviderKind::Kimi
+        | crate::agents::providers::ProviderKind::Agy => {
             panic!("This fixture covers the original providers; use dedicated Grok provider tests")
         }
         Provider::ClaudeCode | Provider::ClaudeDs => AgentKind::Claude,
@@ -633,7 +634,8 @@ impl Delivery {
         let provider = server.terminals[&agent].provider;
         let kind = match provider {
             crate::agents::providers::ProviderKind::Grok
-            | crate::agents::providers::ProviderKind::Kimi => {
+            | crate::agents::providers::ProviderKind::Kimi
+            | crate::agents::providers::ProviderKind::Agy => {
                 panic!(
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )

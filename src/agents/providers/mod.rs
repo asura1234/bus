@@ -2,17 +2,23 @@
 //!
 //! Dispatch uses explicit matches between the concrete harnesses.
 
+pub(crate) mod agy;
 pub(crate) mod callback_entry;
 pub(crate) mod claude_code;
 pub(crate) mod codex;
 pub(crate) mod cursor;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod fake;
+#[cfg(unix)]
+mod git_exclude;
 pub(crate) mod grok;
+#[cfg(unix)]
+mod hook_directory;
 pub(crate) mod hook_json;
 pub(crate) mod kimi;
 pub(crate) mod launch;
 pub(crate) mod spool;
+pub(crate) mod statusline_tap;
 pub(crate) mod suggest;
 pub(crate) mod usage;
 
@@ -31,6 +37,7 @@ pub(crate) enum ProviderKind {
     Cursor,
     Grok,
     Kimi,
+    Agy,
     #[cfg(feature = "dev-tools")]
     Fake,
 }
@@ -46,6 +53,7 @@ impl ProviderKind {
             Self::Cursor => "cursor",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
+            Self::Agy => "agy",
             #[cfg(feature = "dev-tools")]
             Self::Fake => "fake",
         }
@@ -60,6 +68,7 @@ impl ProviderKind {
             Self::Cursor => "cursor-agent",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
+            Self::Agy => "agy",
             #[cfg(feature = "dev-tools")]
             Self::Fake => "bus-fake-agent",
         }
@@ -88,6 +97,7 @@ pub(crate) fn parse(
         ProviderKind::Cursor => cursor::hooks::parse(value),
         ProviderKind::Grok => grok::hooks::parse(value),
         ProviderKind::Kimi => kimi::hooks::parse(value),
+        ProviderKind::Agy => agy::hooks::parse(value),
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => fake::parse(value),
     }
@@ -108,3 +118,7 @@ mod kimi_registration_tests;
 #[cfg(test)]
 #[path = "tests/claude_ds_registration_test.rs"]
 mod claude_ds_registration_tests;
+
+#[cfg(test)]
+#[path = "tests/agy_registration_test.rs"]
+mod agy_registration_tests;

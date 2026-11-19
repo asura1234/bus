@@ -142,3 +142,64 @@ fn master_guard_worker_can_send_in_own_and_other_work_rooms() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn master_guard_rejects_agy_as_orchestrator_or_master_agent() {
+    use crate::messaging::coordinator::{AddAgent, BusCommand};
+    use crate::messaging::orchestration::OrchestratorSpec;
+    let (mut worker, home, _, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+
+    let via_control = call(
+        &mut worker,
+        "agy-orch-control",
+        "agent.add",
+        json!({
+            "room": master.0.to_string(),
+            "name": "agy-lead",
+            "provider": "agy",
+            "cwd": dir.to_string_lossy(),
+            "orchestrates": home.0.to_string(),
+            "consent_project_hooks": true,
+        }),
+    );
+    assert!(!via_control.ok, "{via_control:?}");
+    assert!(via_control
+        .error
+        .unwrap()
+        .message
+        .contains("work-room worker only"));
+
+    let via_master_command = worker.control_command(BusCommand::AddAgent(AddAgent {
+        room: master,
+        name: "agy-master".into(),
+        provider: Provider::Agy,
+        cwd: dir.to_string_lossy().into_owned(),
+        extra_args: String::new(),
+        consent_project_hooks: true,
+    }));
+    assert!(via_master_command
+        .unwrap_err()
+        .contains("work-room worker only"));
+
+    let via_orch_command = worker.control_command(BusCommand::AddOrchestrator(
+        AddAgent {
+            room: home,
+            name: "agy-orch".into(),
+            provider: Provider::Agy,
+            cwd: dir.to_string_lossy().into_owned(),
+            extra_args: String::new(),
+            consent_project_hooks: true,
+        },
+        OrchestratorSpec {
+            room: home,
+            system_prompt: None,
+        },
+    ));
+    assert!(via_orch_command
+        .unwrap_err()
+        .contains("work-room worker only"));
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

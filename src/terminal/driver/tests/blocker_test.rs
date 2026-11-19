@@ -871,3 +871,17 @@ async fn a_control_sharing_the_closing_chrome_row_stays_visible() {
         "closing chrome blanked a control on that row: {missed:?}"
     );
 }
+
+#[tokio::test]
+async fn agy_working_composer_status_bar_esc_to_cancel_with_model_summary_is_not_a_blocker() {
+    let screen = "⣻  I'm deciding how the correctness and fresh-eyes...\n─────────────────────────────────────────────────────\n>\n─────────────────────────────────────────────────────\nesc to cancel           auto · Claude Opus 5.5 · high\n";
+    let grid = captured_grid(screen);
+    assert!(
+        !has_input_controls(&grid.text()),
+        "AGY working composer status bar became an input control:\n{screen}"
+    );
+    assert!(
+        blocker(&grid, true).is_none(),
+        "AGY working composer status bar became a dialog blocker:\n{screen}"
+    );
+}

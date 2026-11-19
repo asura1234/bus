@@ -1,22 +1,15 @@
 use super::Mode;
+use crate::agents::providers::hook_directory::{self as dirs, ReplaceStage as Stage};
 use crate::agents::providers::{hook_json, launch::project_root};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-#[path = "dirs.rs"]
-mod dirs;
 #[path = "exclude.rs"]
 mod exclude;
 #[path = "roots.rs"]
 mod roots;
 
 pub(super) fn ensure_exclude(root: &Path, home: &Path) -> Result<(), String> {
-    exclude::ensure(root, home)
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Stage {
-    BeforeRename,
-    AfterRename,
+    exclude::ensure(root, home, &exclude::GROK_ENTRIES)
 }
 
 struct Target {
@@ -143,7 +136,7 @@ fn transact_with_home<T>(
     let mut target = root.target(mode)?;
     let _lease = target.hooks.lock()?;
     target.verify()?;
-    let previous = target.hooks.read()?;
+    let previous = target.hooks.read("bus.json")?;
     let document: Value = match previous.as_ref() {
         Some((_, bytes)) => {
             serde_json::from_slice(bytes).map_err(|_| "Invalid project hook JSON")?
@@ -171,7 +164,7 @@ fn transact_with_home<T>(
         return Ok((target.path, false, validated, target.home));
     }
     let bytes = serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?;
-    let current = target.hooks.read()?;
+    let current = target.hooks.read("bus.json")?;
     let unchanged = match (&previous, &current) {
         (Some((old, bytes)), Some((now, current))) => dirs::same(old, now)? && bytes == current,
         (None, None) => true,
@@ -181,13 +174,13 @@ fn transact_with_home<T>(
         return Err("Project hook file changed during setup; retry confirmation".into());
     }
     target.verify()?;
-    let written = target.hooks.replace(&bytes, checkpoint)?;
+    let written = target.hooks.replace("bus.json", &bytes, checkpoint)?;
     // No caller may initialize capture until both the directory chain and the
     // committed leaf are the ones checked/written through our pinned handles.
     target.verify()?;
     let (current, contents) = target
         .hooks
-        .read()?
+        .read("bus.json")?
         .ok_or("Project hook disappeared after write")?;
     if !dirs::same(&written, &current)? || contents != bytes {
         return Err("Project hook identity changed after write; no capture authorized".into());

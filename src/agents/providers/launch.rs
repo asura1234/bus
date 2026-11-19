@@ -1,7 +1,7 @@
 //! Room-free inputs and outputs shared by provider launch adapters.
 
 use super::{
-    claude_code, codex, cursor, grok,
+    agy, claude_code, codex, cursor, grok,
     hook_json::{self, HookContext, HookContract},
     kimi, ProviderKind,
 };
@@ -58,7 +58,7 @@ pub(crate) fn hook_notice_message(callback: &str) -> String {
 mod tokens;
 pub(crate) use tokens::{parse_path_tokens, PathParseError};
 mod arguments;
-pub(crate) use arguments::{argument_positions, resumable_options};
+pub(crate) use arguments::{argument_positions, resumable_options, unstarted_options};
 
 pub(crate) const fn provider_kind(provider: ProviderKind) -> &'static str {
     provider.label()
@@ -108,7 +108,7 @@ pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
         ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => claude_code::launch::runtime_args(),
         ProviderKind::Cursor => cursor::launch::runtime_args(),
         ProviderKind::Grok => grok::launch::runtime_args(),
-        ProviderKind::Kimi => Vec::new(),
+        ProviderKind::Kimi | ProviderKind::Agy => Vec::new(),
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => Vec::new(),
     }
@@ -121,6 +121,7 @@ pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
         "claude-ds" => Some(ProviderKind::ClaudeDs),
         "cursor" => Some(ProviderKind::Cursor),
         "kimi" => Some(ProviderKind::Kimi),
+        "agy" => Some(ProviderKind::Agy),
         #[cfg(feature = "dev-tools")]
         "fake"
             if std::env::var_os("BUS_TUI_FAKE_AGENT").is_some()
@@ -140,6 +141,7 @@ pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
             "DISABLE_AUTOUPDATER".into(),
             std::env::var("DISABLE_AUTOUPDATER").unwrap_or_else(|_| "1".into()),
         )],
+        ProviderKind::Agy => agy::launch::runtime_env(),
         ProviderKind::Codex | ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::Kimi => {
             Vec::new()
         }
@@ -163,7 +165,7 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
         arguments::remove_codex_approval_options(args);
     }
     let (flag, aliases): (&str, &[&str]) = match provider {
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => (
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::Agy => (
             "--dangerously-skip-permissions",
             &["--dangerously-skip-permissions"],
         ),
@@ -196,6 +198,7 @@ pub(crate) fn take_adopted_session(
         ProviderKind::Cursor => cursor::launch::take_adopted_session(args),
         ProviderKind::Grok => grok::launch::take_adopted_session(args),
         ProviderKind::Kimi => kimi::launch::take_adopted_session(args),
+        ProviderKind::Agy => agy::launch::take_adopted_session(args),
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => Ok(take_resume_option(provider, args)),
     }
@@ -210,6 +213,7 @@ fn resume_args(provider: ProviderKind, session: &str) -> Vec<String> {
         ProviderKind::Cursor => cursor::launch::resume_args(session),
         ProviderKind::Grok => grok::launch::resume_args(session),
         ProviderKind::Kimi => kimi::launch::resume_args(session),
+        ProviderKind::Agy => agy::launch::resume_args(session),
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => vec!["--resume".into(), session.into()],
     }
@@ -302,8 +306,7 @@ pub(crate) fn extend_generated_args(
         ProviderKind::Codex => Some("--no-daemon"),
         ProviderKind::Cursor => Some("--disable-auto-update"),
         ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => None,
-        ProviderKind::Grok => None,
-        ProviderKind::Kimi => None,
+        ProviderKind::Grok | ProviderKind::Kimi | ProviderKind::Agy => None,
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => None,
     };
@@ -338,6 +341,9 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
     if provider == ProviderKind::Kimi {
         return kimi::launch::validate_args(args);
     }
+    if provider == ProviderKind::Agy {
+        return agy::launch::validate_args(args);
+    }
     if args.iter().any(|arg| arg.contains('\0')) {
         return Err("Launch arguments cannot contain NUL".into());
     }
@@ -352,6 +358,7 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
             ProviderKind::Cursor => matches!(arg, "-p" | "--print"),
             ProviderKind::Grok => unreachable!("Grok validates its own arguments"),
             ProviderKind::Kimi => unreachable!("Kimi validates its own arguments"),
+            ProviderKind::Agy => unreachable!("AGY validates its own arguments"),
             #[cfg(feature = "dev-tools")]
             ProviderKind::Fake => false,
         };
@@ -452,6 +459,7 @@ pub(crate) fn setup_notice(
         ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => None,
         ProviderKind::Cursor => Some(cursor::launch::setup_notice(&root)),
         ProviderKind::Grok => Some(grok::launch::setup_notice(&root)),
+        ProviderKind::Agy => Some(agy::launch::setup_notice(&root)),
         ProviderKind::Kimi => None,
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => None,
@@ -471,6 +479,9 @@ pub(crate) fn prepare(
     }
     if spec.provider == ProviderKind::Kimi {
         return kimi::launch::prepare(spec, initialize);
+    }
+    if spec.provider == ProviderKind::Agy {
+        return agy::launch::prepare(spec, initialize);
     }
     let cwd = canonical_directory(&spec.cwd)?;
     let project = effective_project_directory(spec.provider, &cwd, &spec.extra_args)?;
@@ -530,6 +541,7 @@ pub(crate) fn prepare(
         }),
         ProviderKind::Grok => unreachable!("Grok prepares its own launch"),
         ProviderKind::Kimi => unreachable!("Kimi prepares its own launch"),
+        ProviderKind::Agy => unreachable!("AGY prepares its own launch"),
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => Ok(PreparedLaunch {
             cwd,

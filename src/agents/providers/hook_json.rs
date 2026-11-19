@@ -37,7 +37,9 @@ impl HookContext {
 pub(crate) enum HookEntryShape {
     /// Claude and Codex: an event entry containing one command hook.
     NestedCommands,
-    /// Cursor: an event entry containing the command directly.
+    /// AGY: a flat command handler object with an explicit timeout.
+    TimedCommand,
+    /// Cursor and Kimi: an event entry containing the command directly.
     Command,
 }
 
@@ -46,9 +48,12 @@ pub(crate) enum HookEntryShape {
 pub(crate) struct HookContract {
     pub(crate) adapter: &'static str,
     pub(crate) events: &'static [&'static str],
+    pub(crate) container_key: &'static str,
     pub(crate) entry_shape: HookEntryShape,
     /// Cursor supplies version 1 only when the document has no version.
     pub(crate) default_version: Option<u64>,
+    /// AGY named hook blocks support `"enabled": false`, which disables hooks.
+    pub(crate) reject_disabled_container: bool,
 }
 
 impl HookContract {
@@ -65,27 +70,43 @@ impl HookContract {
                     "StopFailure",
                     "Interrupt",
                 ],
+                container_key: "hooks",
                 entry_shape: HookEntryShape::Command,
                 default_version: None,
+                reject_disabled_container: false,
+            },
+            ProviderKind::Agy => Self {
+                adapter: "agy-hook",
+                events: &super::agy::project_hooks::HOOK_EVENTS,
+                container_key: "bus",
+                entry_shape: HookEntryShape::TimedCommand,
+                default_version: None,
+                reject_disabled_container: true,
             },
             ProviderKind::Codex => Self {
                 adapter: "codex-hook",
                 events: &["SessionStart", "UserPromptSubmit", "Stop"],
+                container_key: "hooks",
                 entry_shape: HookEntryShape::NestedCommands,
                 default_version: None,
+                reject_disabled_container: false,
             },
             ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => Self {
                 adapter: "claude-hook",
                 events: &["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"],
+                container_key: "hooks",
                 entry_shape: HookEntryShape::NestedCommands,
                 default_version: None,
+                reject_disabled_container: false,
             },
             #[cfg(feature = "dev-tools")]
             ProviderKind::Fake => Self {
                 adapter: "fake-hook",
                 events: &[],
+                container_key: "hooks",
                 entry_shape: HookEntryShape::NestedCommands,
                 default_version: None,
+                reject_disabled_container: false,
             },
             ProviderKind::Cursor => Self {
                 adapter: "cursor-hook",
@@ -95,8 +116,10 @@ impl HookContract {
                     "afterAgentResponse",
                     "stop",
                 ],
+                container_key: "hooks",
                 entry_shape: HookEntryShape::Command,
                 default_version: Some(1),
+                reject_disabled_container: false,
             },
         }
     }
@@ -114,6 +137,9 @@ impl HookContract {
         match self.entry_shape {
             HookEntryShape::NestedCommands => {
                 json!({"hooks":[{"type":"command","command":command,"timeout":5}]})
+            }
+            HookEntryShape::TimedCommand => {
+                json!({"type":"command","command":command,"timeout":5})
             }
             HookEntryShape::Command => json!({"command":command}),
         }
@@ -179,10 +205,9 @@ fn hook_entries(contract: HookContract, binary: &Path) -> Vec<(&'static str, Val
 }
 
 fn is_owned_entry(entry: &Value, contract: HookContract) -> bool {
-    let command = if contract.entry_shape == HookEntryShape::Command {
-        &entry["command"]
-    } else {
-        &entry["hooks"][0]["command"]
+    let command = match contract.entry_shape {
+        HookEntryShape::Command | HookEntryShape::TimedCommand => &entry["command"],
+        HookEntryShape::NestedCommands => &entry["hooks"][0]["command"],
     };
     let Some(command) = command.as_str() else {
         return false;
@@ -215,10 +240,18 @@ pub(crate) fn merge_hooks(
         root.entry("version").or_insert(json!(version));
     }
     let hooks = root
-        .entry("hooks")
+        .entry(contract.container_key)
         .or_insert(json!({}))
         .as_object_mut()
-        .ok_or("hooks must be a JSON object")?;
+        .ok_or_else(|| format!("{} must be a JSON object", contract.container_key))?;
+    if contract.reject_disabled_container
+        && hooks.get("enabled").and_then(Value::as_bool) == Some(false)
+    {
+        return Err(format!(
+            "'{}' hook group is explicitly disabled; enable or remove it before setup",
+            contract.container_key
+        ));
+    }
     for (event, owned) in hook_entries(contract, binary) {
         let group = hooks
             .entry(event)
@@ -259,7 +292,8 @@ pub(crate) fn hooks_are_current(path: &Path, contract: HookContract, binary: &Pa
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };
-    let Ok(document) = serde_json::from_slice::<Value>(&bytes) else {
+    let trimmed = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+    let Ok(document) = serde_json::from_slice::<Value>(trimmed) else {
         return false;
     };
     merge_hooks(document.clone(), contract, binary).is_ok_and(|merged| merged == document)
@@ -270,21 +304,41 @@ pub(crate) fn rebind_owned_hooks(
     contract: HookContract,
     binary: &Path,
 ) -> Result<(), String> {
-    let document: Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    if !has_owned_hooks(&document, contract) {
-        return Err("Bus hooks are missing; existing configuration was kept".into());
-    }
-    install_hooks(path, contract, binary)
+    rebind_hooks_with_status(path, contract, binary).map(|_| ())
+}
+
+pub(super) fn rebind_hooks_with_status(
+    path: &Path,
+    contract: HookContract,
+    binary: &Path,
+) -> Result<bool, String> {
+    update_hooks(path, contract, binary, true).map(|update| update.changed)
 }
 
 /// Require an exact Bus-owned entry for every event before a resume rebind.
 pub(crate) fn has_owned_hooks(document: &Value, contract: HookContract) -> bool {
+    let Some(container) = document
+        .get(contract.container_key)
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    if contract.reject_disabled_container
+        && container.get("enabled").and_then(Value::as_bool) == Some(false)
+    {
+        return false;
+    }
     contract.events.iter().all(|event| {
-        document["hooks"][*event]
-            .as_array()
+        container
+            .get(*event)
+            .and_then(Value::as_array)
             .is_some_and(|group| group.iter().any(|entry| is_owned_entry(entry, contract)))
     })
+}
+
+pub(super) struct HookUpdate {
+    pub(super) created: bool,
+    pub(super) changed: bool,
 }
 
 pub(crate) fn install_hooks(
@@ -292,40 +346,68 @@ pub(crate) fn install_hooks(
     contract: HookContract,
     binary: &Path,
 ) -> Result<(), String> {
+    install_hooks_with_status(path, contract, binary).map(|_| ())
+}
+
+pub(super) fn install_hooks_with_status(
+    path: &Path,
+    contract: HookContract,
+    binary: &Path,
+) -> Result<HookUpdate, String> {
+    update_hooks(path, contract, binary, false)
+}
+
+fn update_hooks(
+    path: &Path,
+    contract: HookContract,
+    binary: &Path,
+    require_owned: bool,
+) -> Result<HookUpdate, String> {
     let parent = path.parent().ok_or("Missing hook config parent")?;
-    // A test binary written into a real project's hooks silently captures the
-    // callbacks of every live agent there; tests must use a temporary project.
     #[cfg(test)]
     assert!(
         is_temporary(path),
         "tests must not install hooks outside the temp directory: {}",
         path.display()
     );
-    files::private_dir(parent).map_err(|e| e.to_string())?;
+    if require_owned {
+        if !parent.is_dir() {
+            return Err("Bus resume hooks are missing; existing configuration was kept".into());
+        }
+    } else {
+        files::private_dir(parent).map_err(|e| e.to_string())?;
+    }
     let _lease = files::lock(&parent.join(".bus-hooks.lock")).map_err(|e| e.to_string())?;
-    let previous = match std::fs::read(path) {
-        Ok(bytes) => Some(bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.to_string()),
-    };
-    let document = match previous.as_ref() {
-        Some(bytes) => serde_json::from_slice(bytes).map_err(|e| e.to_string())?,
+    let previous = hook_snapshot(path, require_owned)?;
+    let document = match previous.as_deref() {
+        Some(bytes) => parse_hook_document(bytes)?,
         None => json!({}),
     };
-    let merged = merge_hooks(document, contract, binary)?;
-    let current = match std::fs::read(path) {
-        Ok(bytes) => Some(bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.to_string()),
-    };
+    if require_owned && !has_owned_hooks(&document, contract) {
+        return Err("Bus hooks are missing; existing configuration was kept".into());
+    }
+    let merged = merge_hooks(document.clone(), contract, binary)?;
+    let current = hook_snapshot(path, require_owned)?;
     if current != previous {
         return Err("Hook config changed during setup; retry confirmation".into());
     }
-    atomic_write(
-        path,
-        &serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+    let changed = previous.is_none() || merged != document;
+    if changed {
+        atomic_write(
+            path,
+            &serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(HookUpdate {
+        created: previous.is_none(),
+        changed,
+    })
+}
+
+fn parse_hook_document(bytes: &[u8]) -> Result<Value, String> {
+    serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes))
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -337,7 +419,23 @@ fn is_temporary(path: &Path) -> bool {
         || crate::utils::test_temp::is_fixture_path(path)
 }
 
+fn hook_snapshot(path: &Path, require_owned: bool) -> Result<Option<Vec<u8>>, String> {
+    if require_owned {
+        return read_resume_bytes(path).map(Some);
+    }
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 pub(crate) fn read_resume_json(path: &Path) -> Result<Value, String> {
+    parse_hook_document(&read_resume_bytes(path)?)
+        .map_err(|_| "Bus resume capture configuration is invalid".into())
+}
+
+fn read_resume_bytes(path: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
     if !path.metadata().is_ok_and(|metadata| metadata.is_file()) {
         return Err("Bus resume capture configuration is missing".into());
@@ -351,12 +449,16 @@ pub(crate) fn read_resume_json(path: &Path) -> Result<Value, String> {
     if bytes.len() > 2 * 1024 * 1024 {
         return Err("Bus resume capture configuration is too large".into());
     }
-    serde_json::from_slice(&bytes).map_err(|_| "Bus resume capture configuration is invalid".into())
+    Ok(bytes)
 }
 
 fn resume_entry_matches(entry: &Value, shape: HookEntryShape, command: &str) -> bool {
     match shape {
         HookEntryShape::Command => entry.get("command").and_then(Value::as_str) == Some(command),
+        HookEntryShape::TimedCommand => {
+            entry.get("type").and_then(Value::as_str) == Some("command")
+                && entry.get("command").and_then(Value::as_str) == Some(command)
+        }
         HookEntryShape::NestedCommands => {
             entry
                 .get("hooks")
@@ -378,10 +480,16 @@ pub(crate) fn validate_resume_hooks(
 ) -> Result<(), String> {
     let document = read_resume_json(path)?;
     let command = contract.command(binary);
+    let container = document.get(contract.container_key);
+    let disabled = contract.reject_disabled_container
+        && container
+            .and_then(|c| c.get("enabled"))
+            .and_then(Value::as_bool)
+            == Some(false);
     let complete = document.get("disableAllHooks").and_then(Value::as_bool) != Some(true)
+        && !disabled
         && contract.events.iter().all(|event| {
-            document
-                .get("hooks")
+            container
                 .and_then(|hooks| hooks.get(event))
                 .and_then(Value::as_array)
                 .is_some_and(|entries| {

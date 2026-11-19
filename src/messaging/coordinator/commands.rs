@@ -214,7 +214,8 @@ fn complete_hook_setup(state: &mut BusState, id: AgentId) -> Result<(), String> 
     }
     state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
     if state.agent(id).is_some_and(|a| {
-        (a.runtime_identity.session_id.is_some() || a.provider == Provider::Codex)
+        (a.runtime_identity.session_id.is_some()
+            || matches!(a.provider, Provider::Codex | Provider::Agy))
             && a.current_request.is_none()
     }) {
         state.set_agent_error(id, None)

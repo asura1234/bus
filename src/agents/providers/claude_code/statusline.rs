@@ -1,52 +1,27 @@
 //! Claude's status-line tap. Quota capture is advisory; stdout belongs to the
 //! user's original command, including its ANSI escapes and trailing newlines.
+#[cfg(test)]
+use std::time::Duration;
 use std::{
-    io::{self, Read, Write},
+    io,
     path::{Path, PathBuf},
-    process::Stdio,
-    time::Duration,
 };
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::agents::providers::statusline_tap::{
+    self, atomic_write, read_json, USAGE_FILE as USAGE,
+};
+#[cfg(test)]
+use crate::agents::providers::statusline_tap::{
+    passthrough, read_usage, COMMAND_TIMEOUT, MAX_BYTES,
+};
 use crate::agents::providers::usage::{
     Observation, ObservationManifest, UsageWindow, UsageWindows, FIVE_HOUR_MINUTES, WEEKLY_MINUTES,
 };
 use crate::utils::time as bus_io;
 
-const MAX_BYTES: u64 = 2 * 1024 * 1024;
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const ORIGINAL: &str = "claude-statusline.json";
-const USAGE: &str = "usage.json";
-const RECURSION_GUARD: &str = "BUS_STATUSLINE_ACTIVE";
-
-// Preserve the statusline caller's existing refusal; the platform owns only
-// the private temporary file, replacement, sync and failure cleanup mechanics.
-fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    if path.exists() && std::fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(io::Error::other("Bus refuses to replace a symlink"));
-    }
-    crate::platform::atomic_write(path, bytes)
-}
-
-fn read_json(path: &Path) -> io::Result<Value> {
-    if !path.metadata()?.is_file() {
-        return Err(io::Error::other("Status line data is not a regular file"));
-    }
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take(MAX_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(io::Error::other("Status line data is too large"));
-    }
-    Ok(serde_json::from_slice(&bytes)?)
-}
-
-pub(crate) fn read_usage(spool: &Path) -> io::Result<Observation> {
-    Ok(serde_json::from_value(read_json(&spool.join(USAGE))?)?)
-}
 
 /// Resolve ordinary settings from low to high precedence. Keep presentation
 /// fields (padding, refreshInterval, etc.) as well as the original command.
@@ -120,22 +95,7 @@ pub(crate) fn rebind(spool: &Path, binary: &Path) -> io::Result<bool> {
 }
 
 fn callback_command(binary: &Path) -> String {
-    let program = binary.to_string_lossy();
-    #[cfg(windows)]
-    if git_bash().is_none() {
-        return format!(
-            "& '{}' --bus-callback claude-statusline",
-            program.replace('\'', "''")
-        );
-    }
-    // Claude uses Git Bash on Windows when available. Its status-line command
-    // therefore needs POSIX quoting, not the native terminal's PowerShell `&`.
-    #[cfg(windows)]
-    let program = program.replace('\\', "/");
-    format!(
-        "'{}' --bus-callback claude-statusline",
-        program.replace('\'', "'\\''")
-    )
+    statusline_tap::callback_command(binary, "claude-statusline", true)
 }
 
 fn windows(value: &Value) -> UsageWindows {
@@ -183,153 +143,21 @@ fn capture(spool: &Path, launch: &str, input: &[u8]) -> io::Result<()> {
 /// This callback deliberately skips ordinary hook logging/locks and the `{}`
 /// hook response. Even a broken spool must not suppress the user's status line.
 pub(crate) fn run() {
-    if std::env::var_os(RECURSION_GUARD).is_some() {
-        return;
-    }
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    let reader = std::thread::Builder::new().spawn(move || {
-        let mut bytes = Vec::new();
-        let result = io::stdin()
-            .lock()
-            .take(MAX_BYTES + 1)
-            .read_to_end(&mut bytes);
-        let _ = tx.send(
-            result
-                .ok()
-                .filter(|_| bytes.len() as u64 <= MAX_BYTES)
-                .map(|_| bytes),
-        );
-    });
-    if reader.is_err() {
-        return;
-    }
-    let Ok(Some(input)) = rx.recv_timeout(Duration::from_secs(1)) else {
-        return;
-    };
-    let spool = std::env::var_os("BUS_CALLBACK_DIR").map(PathBuf::from);
-    let launch = std::env::var("BUS_LAUNCH_ID").unwrap_or_default();
-    let output = render(spool.as_deref(), &launch, &input, COMMAND_TIMEOUT);
-    let _ = io::stdout().lock().write_all(&output);
+    statusline_tap::run_tap(ORIGINAL, b"Claude | Bus\n", false, capture);
 }
 
+#[cfg(test)]
 fn render(spool: Option<&Path>, launch: &str, input: &[u8], timeout: Duration) -> Vec<u8> {
-    let original = spool.and_then(|p| read_json(&p.join(ORIGINAL)).ok());
-    if let Some(spool) = spool {
-        let _ = capture(spool, launch, input);
-    }
-    let Some(original) = original else {
-        return Vec::new();
-    };
-    let command = original
-        .get("command")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty());
-    match command {
-        Some(command) => passthrough(command, input, timeout).unwrap_or_default(),
-        None => b"Claude | Bus\n".to_vec(),
-    }
-}
-
-fn passthrough(command: &str, input: &[u8], timeout: Duration) -> io::Result<Vec<u8>> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async {
-        let mut process = statusline_shell();
-        process
-            .arg(command)
-            .env(RECURSION_GUARD, "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        #[cfg(unix)]
-        process.process_group(0);
-        let mut child = process.spawn()?;
-        #[cfg(unix)]
-        let group = child.id();
-        let mut stdin = child.stdin.take().expect("piped stdin");
-        let stdout = child.stdout.take().expect("piped stdout");
-        let mut output = Vec::new();
-        let finished = tokio::time::timeout(timeout, async {
-            tokio::try_join!(
-                async {
-                    // Commands that do not read stdin may close it immediately.
-                    // Still drain their stdout and let them finish normally.
-                    let _ = stdin.write_all(input).await;
-                    drop(stdin);
-                    Ok::<(), io::Error>(())
-                },
-                async {
-                    stdout.take(MAX_BYTES + 1).read_to_end(&mut output).await?;
-                    if output.len() as u64 > MAX_BYTES {
-                        return Err(io::Error::other("Status line output is too large"));
-                    }
-                    Ok(())
-                },
-                child.wait(),
-            )
-        })
-        .await;
-        if !matches!(finished, Ok(Ok(_))) {
-            // Kill the whole shell group on Unix so a timed-out HUD cannot
-            // leave a grandchild holding pipes or running after each redraw.
-            #[cfg(unix)]
-            if let Some(group) = group {
-                // SAFETY: this is the fresh child's private process group.
-                unsafe {
-                    libc::kill(-(group as i32), libc::SIGKILL);
-                }
-            }
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_millis(100), child.wait()).await;
-        }
-        if output.len() as u64 > MAX_BYTES {
-            output.clear();
-        }
-        Ok(output)
-    })
-}
-
-fn statusline_shell() -> tokio::process::Command {
-    #[cfg(not(windows))]
-    {
-        let mut command = tokio::process::Command::new("/bin/sh");
-        command.arg("-c");
-        command
-    }
-    #[cfg(windows)]
-    {
-        if let Some(bash) = git_bash() {
-            let mut command = tokio::process::Command::new(bash);
-            command.arg("-c");
-            command
-        } else {
-            let mut command = tokio::process::Command::new("powershell.exe");
-            command.args(["-NoProfile", "-Command"]);
-            command
-        }
-    }
-}
-
-#[cfg(windows)]
-fn git_bash() -> Option<PathBuf> {
-    std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH")
-        .map(PathBuf::from)
-        .or_else(|| {
-            crate::utils::env::path_var().and_then(|path| {
-                std::env::split_paths(&path)
-                    .map(|p| p.join("bash.exe"))
-                    .find(|p| p.is_file())
-            })
-        })
-        .or_else(|| {
-            ["ProgramFiles", "ProgramFiles(x86)"]
-                .into_iter()
-                .filter_map(std::env::var_os)
-                .map(|p| PathBuf::from(p).join("Git/bin/bash.exe"))
-                .find(|p| p.is_file())
-        })
+    statusline_tap::render_tap(
+        spool,
+        launch,
+        input,
+        timeout,
+        ORIGINAL,
+        b"Claude | Bus\n",
+        false,
+        capture,
+    )
 }
 
 #[cfg(test)]

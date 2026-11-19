@@ -12,7 +12,7 @@ from tools import install_skills
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "tools" / "install_skills.py"
-PROVIDERS = ("claude", "codex", "cursor", "grok", "kimi")
+PROVIDERS = ("claude", "codex", "cursor", "grok", "kimi", "agy")
 
 
 def run_tool(home, command):
@@ -90,3 +90,18 @@ def test_remove_preserves_preexisting_empty_provider_directory(tmp_path):
     assert run_tool(home, "install").returncode == 0
     assert run_tool(home, "remove").returncode == 0
     assert (home / ".claude").is_dir()
+
+
+def test_symlinked_gemini_ancestors_are_not_written_through(tmp_path):
+    for rel in (".gemini", ".gemini/config"):
+        home = tmp_path / f"home-{rel.replace('/', '-')}"
+        target = tmp_path / f"target-{rel.replace('/', '-')}"
+        target.mkdir(parents=True)
+        link = home / rel
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target, target_is_directory=True)
+
+        result = run_tool(home, "install")
+        assert result.returncode == 0, result.stderr
+        assert "agy: skipped: skills path is a symlink" in result.stdout
+        assert list(target.iterdir()) == []

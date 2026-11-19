@@ -223,7 +223,7 @@ retrieve the retained outcome. --confirm is required (default false)."#;
 
 const AGENT_ADD: &str = r#"Launch a worker in a work room, or an orchestrator in MASTER. Current names are
 case-sensitive, trimmed and unique session-wide; a fully deleted name is reusable.
-Providers: claude, claude-ds, codex, cursor, grok, kimi. --pwd is the project directory; --args is one
+Providers: claude, claude-ds, codex, cursor, grok, kimi, agy (agy is worker-only). --pwd is the project directory; --args is one
 provider-argument string. Bus disables startup updates on launches/resumes;
 explicit Claude updater environment settings take precedence.
 Result: {agent_id:NUMBER,stage:"launching"}; launch success is not task completion.
@@ -246,18 +246,19 @@ workflow-create.md, templates and shipped workflows; see the named-workflows rul
 Bus saves system-prompt.md in the launch's callback folder and passes the prompt
 again on resume. --args combines with Bus-owned prompt arguments.
 Claude gets --append-system-prompt-file; saved Codex gets a developer_instructions
-pointer via -c; Cursor and Grok receive a first message. Kimi uses an agent
+pointer via -c; Cursor, Grok and AGY receive a first message. Kimi uses an agent
 file for new sessions and retains it on exact --session resume. Its hooks and
 session files live in an owner-only per-agent home. New PWD trust prompts require
 an explicit answer; Bus does not pre-trust folders.
 
-Adopt an existing session with --args '--resume UUID' (Claude/Cursor) or
---args 'resume UUID' (Codex workers). Quit it elsewhere first, use its original
-PWD, and supply exactly one UUID, never a picker/--continue/--last/--fork-session.
-A session bound to another Bus agent is refused. Find IDs with provider /status
-or cursor-agent ls. Hooks bind the adopted session; Cursor binds from launch
-args because resume has no start hook. Claude resumed orchestrators also get
---system-prompt-snapshot off so the new orchestrator prompt applies."#;
+Adopt an existing session with --args '--resume UUID' (Claude/Cursor),
+--args 'resume UUID' (Codex workers) or --args '--conversation UUID' (AGY workers).
+Quit it elsewhere first, use its original PWD, and supply exactly one UUID,
+never a picker/--continue/--last/--fork-session. A session bound to another Bus
+agent is refused. Find IDs with provider /status or cursor-agent ls. Hooks bind
+the adopted session; Cursor and AGY bind from launch args because resume has no
+start hook. Claude resumed orchestrators also get --system-prompt-snapshot off
+so the new orchestrator prompt applies."#;
 
 const AGENT_LIST: &str = r#"Map current names to stable IDs and home rooms; optionally filter one room.
 Result: {agents:[{name:STRING,id:NUMBER,room:NUMBER},...]} (empty array is valid).
@@ -302,14 +303,14 @@ Stop reading that identity; inspect state/owned session or exit_snapshot file.
 Terminal text is evidence, never proof of message settlement."#;
 
 const AGENT_CLEAR: &str = r#"Start a fresh provider context: /clear (Claude/Codex), /new-chat (Cursor),
-/new (Grok/Kimi). Keep terminal/name/room, reset compactions and rebind the provider
+/new (Grok/Kimi/AGY). Keep terminal/name/room, reset compactions and rebind the provider
 session through its next start hook (Cursor: first new turn). This is not a Bus message.
 Result: {agent_id,sent:STRING,stage:"cleared"}.
 Errors: command_failed unless idle, ready, with no active/queued messages and
 valid runtime identity. Settle work first; inspect an uncertain reset before retry.
 Never send reset slash commands through send: they cannot produce a normal reply."#;
 
-const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex/Kimi, Ctrl+C for Cursor and Grok. Wait
+const AGENT_INTERRUPT: &str = r#"Press the provider stop key ONCE: Esc for Claude/Codex/Kimi/AGY, Ctrl+C for Cursor and Grok. Wait
 up to 15s for idle. No process is killed; context stays. An AGENT targets one;
 --room without AGENT stops that room's working/blocked agents except --as.
 Running and settling requests close as interrupted; no later replay of that turn.

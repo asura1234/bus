@@ -32,7 +32,10 @@ impl RoomAgent {
         {
             Some("terminal_identity_missing")
         } else if identity.session_id.is_none()
-            && !matches!(self.provider, Provider::Codex | Provider::Kimi)
+            && !matches!(
+                self.provider,
+                Provider::Codex | Provider::Kimi | Provider::Agy
+            )
         {
             Some("session_hook_missing")
         } else {

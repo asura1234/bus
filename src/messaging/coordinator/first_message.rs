@@ -13,6 +13,7 @@ pub(super) fn first_message_text(
             crate::agents::providers::grok::system_prompt::prompt_message(instructions)
         }
         Provider::Cursor | Provider::Grok => cursor::system_prompt::prompt_message(instructions),
+        Provider::Agy => crate::agents::providers::agy::system_prompt::prompt_message(instructions),
         _ => orchestrator::prompt_message(instructions),
     }
 }

@@ -224,7 +224,7 @@ pub(super) fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
 /// Keep the native enrichment that the ordinary callback tick performs first.
 pub(super) fn requires_fresh_poll(record: &callbacks::Record) -> bool {
     match record.manifest.provider {
-        super::Provider::Grok | super::Provider::Kimi => matches!(
+        super::Provider::Grok | super::Provider::Kimi | super::Provider::Agy => matches!(
             callbacks::parse(record.manifest.provider, &record.value),
             Ok(Parsed::CompletionCandidate { .. } | Parsed::ReconcileSession { .. })
         ),

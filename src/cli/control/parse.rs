@@ -337,6 +337,7 @@ fn agent_cli() -> Command {
                     "cursor",
                     "grok",
                     "kimi",
+                    "agy",
                     "fake",
                 ]))
                 .arg(option("pwd"))

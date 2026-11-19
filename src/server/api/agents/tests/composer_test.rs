@@ -2094,6 +2094,83 @@ fn claude_composer_keeps_literal_yes_no_hint_as_owned_input() {
 }
 
 #[test]
+fn agy_composer_observes_idle_working_and_paste_chips() {
+    use crate::terminal::runtime::SubmissionInspector;
+    let rule = "─".repeat(40);
+    let idle = format!("Antigravity CLI 1.5.11\n\n{rule}\n\n>\n{rule}\n\n? for shortcuts\n");
+    assert_eq!(
+        observe(AgentKind::Antigravity, &idle, "hello"),
+        InputObservation::Empty
+    );
+    assert!(observer(AgentKind::Antigravity, "hello".into()).submission_available(&idle));
+
+    let typed =
+        format!("Antigravity CLI 1.5.11\n\n{rule}\n\n> hello world\n{rule}\n\n? for shortcuts\n");
+    assert_eq!(
+        observe(AgentKind::Antigravity, &typed, "hello world"),
+        InputObservation::Pending
+    );
+
+    let long_text = "x".repeat(1853);
+    let pasted = format!(
+        "Antigravity CLI 1.5.11\n\n{rule}\n\n> [Pasted text #1 1853 chars]\n{rule}\n\n? for shortcuts\n"
+    );
+    assert_eq!(
+        observe(AgentKind::Antigravity, &pasted, &long_text),
+        InputObservation::Pending
+    );
+
+    // Working screen with open composer (`esc to cancel` footer) supports mid-turn steering!
+    let working = format!("⠋  Generating...\n\n{rule}\n\n>\n{rule}\n\nesc to cancel\n");
+    assert_eq!(
+        observe(AgentKind::Antigravity, &working, "steer me"),
+        InputObservation::Empty
+    );
+    assert!(
+        observer(AgentKind::Antigravity, "steer me".into()).submission_available(&working),
+        "AGY working composer with `esc to cancel` footer must remain open for steering"
+    );
+
+    // Untrusted workspace dialog is Unavailable for prompt submission.
+    let untrusted = "Accessing workspace:\n/tmp/repo\nDo you trust the contents of this project?\n> Yes, I trust this folder\n  No, exit\n  ↑/↓ Navigate · enter Confirm\n";
+    assert_eq!(
+        observe(AgentKind::Antigravity, untrusted, "hello"),
+        InputObservation::Unavailable
+    );
+    assert!(!observer(AgentKind::Antigravity, "hello".into()).submission_available(untrusted));
+
+    // Historical trust dialog in scrollback above the live composer + mode placeholder is Empty & Idle!
+    let post_trust = format!(
+        "{untrusted}\n\nAntigravity CLI 1.5.11\n ┃ Introducing Gemini 4 Hydrogen\n ┃ esc to dismiss\n{rule}\n> Auto mode: edits & safe commands auto-approved (...\n{rule}\n? for shortcuts          auto · Claude Opus 5.5 · high\n"
+    );
+    assert_eq!(
+        observe_with_cursor(AgentKind::Antigravity, &post_trust, "hello", Some((2, 12))),
+        InputObservation::Empty
+    );
+    assert!(observer(AgentKind::Antigravity, "hello".into()).submission_available(&post_trust));
+
+    // A non-faint user draft starting with "Plan mode:" and cursor at end stays Other (not Empty).
+    let plan_draft = format!(
+        "Antigravity CLI 1.5.11\n\n{rule}\n> Plan mode: review this PR\n{rule}\n? for shortcuts          plan · Claude Opus 5.5 · high\n"
+    );
+    assert_eq!(
+        observe_with_cursor(AgentKind::Antigravity, &plan_draft, "hello", Some((27, 3))),
+        InputObservation::Other
+    );
+
+    // Working screen with right-aligned model status on the `esc to cancel` row remains steerable.
+    let working_with_status = format!(
+        "⣻  Investigating...\n{rule}\n>\n{rule}\nesc to cancel           auto · Claude Opus 5.5 · high\n"
+    );
+    assert_eq!(
+        observe(AgentKind::Antigravity, &working_with_status, "steer me"),
+        InputObservation::Empty
+    );
+    assert!(observer(AgentKind::Antigravity, "steer me".into())
+        .submission_available(&working_with_status));
+}
+
+#[test]
 fn codex_composer_keeps_literal_yes_no_hint_as_owned_input() {
     use crate::terminal::runtime::SubmissionInspector;
     let text = "Please print [y/n]";

@@ -9,7 +9,7 @@ use std::{
 use serde_json::{json, Value};
 
 use crate::agents::providers::{
-    claude_code::statusline as claude_statusline,
+    statusline_tap,
     usage::{Observation, UsageWindow, UsageWindows},
 };
 use crate::messaging::model::{AgentId, BusState, Provider, RequestId, RoomAgent};
@@ -58,10 +58,11 @@ impl CursorUsageSnapshot {
 pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
     pub(crate) claude: Option<UsageSnapshot>,
+    agy: Option<UsageSnapshot>,
     cursor: Option<CursorUsageSnapshot>,
     cursor_errors: BTreeMap<AgentId, CursorUsageSnapshot>,
     started_at_ms: u64,
-    claude_reads: BTreeMap<AgentId, Instant>,
+    statusline_reads: BTreeMap<AgentId, Instant>,
 }
 
 impl Default for Usage {
@@ -69,10 +70,11 @@ impl Default for Usage {
         Self {
             codex: None,
             claude: None,
+            agy: None,
             cursor: None,
             cursor_errors: BTreeMap::new(),
             started_at_ms: bus_io::now_ms(),
-            claude_reads: BTreeMap::new(),
+            statusline_reads: BTreeMap::new(),
         }
     }
 }
@@ -83,6 +85,7 @@ impl Usage {
         let snapshot = match agent.provider {
             Provider::Codex => self.codex.as_ref(),
             Provider::ClaudeCode | Provider::ClaudeDs => self.claude.as_ref(),
+            Provider::Agy => self.agy.as_ref(),
             _ => None,
         }?;
         if snapshot.observed_by_agent != agent.id || !snapshot.fresh(now_ms) {
@@ -100,7 +103,11 @@ impl Usage {
 
     pub(crate) fn exhausted(&self, now_ms: u64) -> Vec<(String, AgentId, Option<bool>)> {
         let mut result = Vec::new();
-        for (provider, snapshot) in [("codex", &self.codex), ("claude", &self.claude)] {
+        for (provider, snapshot) in [
+            ("codex", &self.codex),
+            ("claude", &self.claude),
+            ("agy", &self.agy),
+        ] {
             let Some(snapshot) = snapshot else {
                 continue;
             };
@@ -136,8 +143,9 @@ impl Usage {
     }
 
     pub(crate) fn state_json(&self) -> Value {
+        let now_ms = bus_io::now_ms();
         json!({
-            "claude": self.claude_json(bus_io::now_ms()),
+            "claude": self.claude_json(now_ms),
             "codex": match &self.codex {
                 None => unknown("No Codex turn has reported rate limits since Bus started"),
                 Some(snapshot) => json!({
@@ -148,27 +156,15 @@ impl Usage {
                     "observed_by_agent": snapshot.observed_by_agent,
                 }),
             },
-            "cursor": self.cursor_json(bus_io::now_ms()),
+            "cursor": self.cursor_json(now_ms),
             "grok": unknown(crate::agents::providers::grok::usage::allowance_unavailable_reason()),
             "kimi": unknown("Kimi has no local allowance source"),
+            "agy": statusline_json(&self.agy, "AGY", now_ms),
         })
     }
 
     fn claude_json(&self, now_ms: u64) -> Value {
-        let Some(snapshot) = &self.claude else {
-            return unknown("No Claude status line has reported rate limits since Bus started");
-        };
-        if !snapshot.fresh(now_ms) {
-            return unknown("Claude allowance observation is stale");
-        }
-        let current = |w: &&UsageWindow| w.resets_at.is_none_or(|at| at > now_ms / 1000);
-        let five_hour = snapshot.windows.five_hour.as_ref().filter(current);
-        let weekly = snapshot.windows.weekly.as_ref().filter(current);
-        if five_hour.is_none() && weekly.is_none() {
-            return unknown("Claude allowance windows are missing or expired");
-        }
-        json!({"status":"observed", "five_hour":five_hour, "weekly":weekly,
-            "read_at_ms":snapshot.read_at_ms, "observed_by_agent":snapshot.observed_by_agent})
+        statusline_json(&self.claude, "Claude", now_ms)
     }
 
     fn cursor_json(&self, now_ms: u64) -> Value {
@@ -235,48 +231,97 @@ impl Usage {
 
     /// Advisory only: no State mutation, delivery errors, or event-spool growth.
     pub(crate) fn refresh_claude(&mut self, agent: &RoomAgent, spool: &Path) {
-        if !agent.provider.uses_claude_harness() || agent.session_binding_invalidated {
-            return;
+        if let Some(record) =
+            self.read_verified_statusline(agent, spool, Provider::uses_claude_harness)
+        {
+            self.merge_claude(record, agent.id);
+        }
+    }
+
+    fn merge_claude(&mut self, record: Observation, observed_by_agent: AgentId) {
+        merge_snapshot(
+            &mut self.claude,
+            self.started_at_ms,
+            record,
+            observed_by_agent,
+        );
+    }
+
+    pub(crate) fn refresh_agy(&mut self, agent: &RoomAgent, spool: &Path) {
+        if let Some(record) = self.read_verified_statusline(agent, spool, |p| p == Provider::Agy) {
+            merge_snapshot(&mut self.agy, self.started_at_ms, record, agent.id);
+        }
+    }
+
+    fn read_verified_statusline(
+        &mut self,
+        agent: &RoomAgent,
+        spool: &Path,
+        matches_provider: impl Fn(Provider) -> bool,
+    ) -> Option<Observation> {
+        if !matches_provider(agent.provider) || agent.session_binding_invalidated {
+            return None;
         }
         let now = Instant::now();
         if self
-            .claude_reads
+            .statusline_reads
             .get(&agent.id)
             .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(1))
         {
-            return;
+            return None;
         }
-        self.claude_reads.insert(agent.id, now);
-        let Ok(record) = claude_statusline::read_usage(spool) else {
-            return;
-        };
+        self.statusline_reads.insert(agent.id, now);
+        let record = statusline_tap::read_usage(spool).ok()?;
         if record.manifest.agent_id != agent.id.0
-            || !record.manifest.provider.uses_claude_harness()
+            || !matches_provider(record.manifest.provider)
             || Some(record.manifest.launch_id.as_str())
                 != agent.runtime_identity.launch_id.as_deref()
             || Some(record.session_id.as_str()) != agent.runtime_identity.session_id.as_deref()
         {
-            return;
+            return None;
         }
-        self.merge_claude(record, agent.id);
+        Some(record)
     }
+}
 
-    fn merge_claude(&mut self, record: Observation, observed_by_agent: AgentId) {
-        if record.read_at_ms < self.started_at_ms
-            || record.read_at_ms > bus_io::now_ms()
-            || self
-                .claude
-                .as_ref()
-                .is_some_and(|old| old.read_at_ms >= record.read_at_ms)
-        {
-            return;
-        }
-        self.claude = Some(UsageSnapshot {
-            windows: record.windows,
-            read_at_ms: record.read_at_ms,
-            observed_by_agent,
-        });
+fn statusline_json(snapshot: &Option<UsageSnapshot>, label: &str, now_ms: u64) -> Value {
+    let Some(snapshot) = snapshot else {
+        return unknown(&format!(
+            "No {label} status line has reported rate limits since Bus started"
+        ));
+    };
+    if !snapshot.fresh(now_ms) {
+        return unknown(&format!("{label} allowance observation is stale"));
     }
+    let current = |w: &&UsageWindow| w.resets_at.is_none_or(|at| at > now_ms / 1000);
+    let five_hour = snapshot.windows.five_hour.as_ref().filter(current);
+    let weekly = snapshot.windows.weekly.as_ref().filter(current);
+    if five_hour.is_none() && weekly.is_none() {
+        return unknown(&format!("{label} allowance windows are missing or expired"));
+    }
+    json!({"status":"observed", "five_hour":five_hour, "weekly":weekly,
+        "read_at_ms":snapshot.read_at_ms, "observed_by_agent":snapshot.observed_by_agent})
+}
+
+fn merge_snapshot(
+    slot: &mut Option<UsageSnapshot>,
+    started_at_ms: u64,
+    record: Observation,
+    observed_by_agent: AgentId,
+) {
+    if record.read_at_ms < started_at_ms
+        || record.read_at_ms > bus_io::now_ms()
+        || slot
+            .as_ref()
+            .is_some_and(|old| old.read_at_ms >= record.read_at_ms)
+    {
+        return;
+    }
+    *slot = Some(UsageSnapshot {
+        windows: record.windows,
+        read_at_ms: record.read_at_ms,
+        observed_by_agent,
+    });
 }
 
 fn unknown(reason: &str) -> Value {

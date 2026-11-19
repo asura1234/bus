@@ -3,7 +3,15 @@ use crate::messaging::model::{AgentId, BusState, Request, RequestPhase, RoomId};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub(super) const PROVIDERS: [&str; 6] = ["claude", "claude-ds", "codex", "kimi", "grok", "cursor"];
+pub(super) const PROVIDERS: [&str; 7] = [
+    "claude",
+    "claude-ds",
+    "codex",
+    "kimi",
+    "grok",
+    "cursor",
+    "agy",
+];
 
 #[derive(Debug, Default, Serialize)]
 struct Counts {

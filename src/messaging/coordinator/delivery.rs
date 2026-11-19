@@ -148,10 +148,13 @@ impl Worker {
             {
                 continue;
             }
-            // Initial Cursor/Grok instructions stay on the readiness tick.
+            // Initial Cursor/Grok/AGY instructions stay on the readiness tick.
             // They must precede queued work and must not hold another recipient.
             if !launch_prompts
-                && matches!(agent.provider, Provider::Cursor | Provider::Grok)
+                && matches!(
+                    agent.provider,
+                    Provider::Cursor | Provider::Grok | Provider::Agy
+                )
                 && agent
                     .runtime_identity
                     .launch_id
@@ -240,11 +243,13 @@ impl Worker {
     /// Claude accepts that follow-up while its idle status still lags a turn
     /// it started itself. Any other provider that can take input does the same
     /// once it is Working: the native `steer` flag, not an interrupt. Grok's
-    /// composer refuses a follow-up for the whole turn, so that provider stays
-    /// queued. Queue-only work, a restart, a dialog, and an explicit interrupt
-    /// stay queued too. A closed composer is the native submission window
-    /// (a few hundred milliseconds); a definite refusal returns the head
-    /// to the queue. This tick does not sleep.
+    /// composer refuses a follow-up for the whole turn, and AGY folds input
+    /// arriving during its unbound first-message onboarding turn into a
+    /// continuation (`invocationNum >= 1`) that emits no `Started` proof, so
+    /// both providers stay queued on unbound turns. Queue-only work, a restart,
+    /// a dialog, and an explicit interrupt stay queued too. A closed composer
+    /// is the native submission window (a few hundred milliseconds); a definite
+    /// refusal returns the head to the queue. This tick does not sleep.
     fn steer_into_unbound_turn(&self, agent: &RoomAgent, own_turn: bool) -> bool {
         if agent.interrupt_pending || agent.provider_retry.is_some() || agent.dialog {
             return false;
@@ -265,7 +270,8 @@ impl Worker {
         let claude_lag = agent.provider.uses_claude_harness()
             && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
             && (agent.status == RuntimeStatus::Working || own_turn);
-        let busy = agent.status == RuntimeStatus::Working && agent.provider != Provider::Grok;
+        let busy = agent.status == RuntimeStatus::Working
+            && !matches!(agent.provider, Provider::Grok | Provider::Agy);
         claude_lag || busy
     }
 
@@ -380,8 +386,10 @@ impl Worker {
     }
 
     fn deliver_launch_prompt(&mut self, agent: &RoomAgent) -> Result<bool, String> {
-        if !matches!(agent.provider, Provider::Cursor | Provider::Grok)
-            || agent.current_request.is_some()
+        if !matches!(
+            agent.provider,
+            Provider::Cursor | Provider::Grok | Provider::Agy
+        ) || agent.current_request.is_some()
         {
             return Ok(false);
         }
@@ -393,10 +401,14 @@ impl Worker {
         ) else {
             return Ok(false);
         };
-        if identity.session_id.is_none() {
+        let spool = self.data_dir.join("callbacks").join(launch);
+        // Fresh AGY launches defer SessionStart until the first submitted prompt.
+        if identity.session_id.is_none()
+            && (agent.provider != Provider::Agy
+                || super::launch::reserved_session(&spool).is_some())
+        {
             return Ok(false);
         }
-        let spool = self.data_dir.join("callbacks").join(launch);
         let attempted = spool.join("launch-prompt-attempted");
         if attempted.exists() {
             return Ok(false);
@@ -633,7 +645,10 @@ impl Worker {
             return Ok(());
         };
         if identity.session_id.is_none()
-            && !matches!(agent.provider, Provider::Codex | Provider::Kimi)
+            && !matches!(
+                agent.provider,
+                Provider::Codex | Provider::Kimi | Provider::Agy
+            )
         {
             return Ok(());
         }

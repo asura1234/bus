@@ -1,59 +1,19 @@
 //! Bounded durable retries for Grok observations. Native replies require the
 //! owned Build 1.0.70 post-gate transcript record.
+use super::callback_observations::{claim_with_policy, observation_paths_with_ext, Claim};
 use super::{
     callback, callbacks, AgentId, BusState, CallbackEventKind, CallbackRecordResult, Path,
     RuntimeStatus, Worker,
 };
 use crate::agents::providers::grok::completion::{self, CompletionResolution};
-use serde::{Deserialize, Serialize};
 use std::ops::ControlFlow;
 
-#[derive(Default, Deserialize, Serialize)]
-struct Retry {
-    attempts: u8,
-    next_at: u64,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Claim {
-    Attempt(u8),
-    NotDue,
-    Exhausted,
-}
-
 pub(super) fn observation_paths(path: &Path) -> Vec<std::path::PathBuf> {
-    let mut paths = vec![path.to_path_buf()];
-    let marker = path.with_extension("grok-retry");
-    if marker.exists() {
-        paths.push(marker);
-    }
-    paths
+    observation_paths_with_ext(path, "grok-retry")
 }
 
 fn claim(path: &Path, now: u64) -> Result<Claim, String> {
-    let marker = path.with_extension("grok-retry");
-    let mut retry: Retry = match std::fs::read(&marker) {
-        Ok(bytes) if bytes.len() <= 1024 => {
-            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?
-        }
-        Ok(_) => return Err("Grok retry metadata is oversized".into()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Retry::default(),
-        Err(error) => return Err(error.to_string()),
-    };
-    if retry.attempts >= 8 {
-        return Ok(Claim::Exhausted);
-    }
-    if retry.next_at > now {
-        return Ok(Claim::NotDue);
-    }
-    retry.attempts += 1;
-    retry.next_at = now.saturating_add(2000);
-    crate::agents::providers::hook_json::atomic_write(
-        &marker,
-        &serde_json::to_vec(&retry).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(Claim::Attempt(retry.attempts))
+    claim_with_policy(path, now, "grok-retry", "Grok", 8, 2000)
 }
 
 fn claim_idle_observation(state: &BusState, id: AgentId, path: &Path) -> Result<Claim, String> {
@@ -92,50 +52,6 @@ fn claim_idle_observation(state: &BusState, id: AgentId, path: &Path) -> Result<
 }
 
 impl Worker {
-    pub(super) fn retire_superseded_observation(
-        &mut self,
-        id: AgentId,
-        dir: &Path,
-        path: &Path,
-        record: &callbacks::Record,
-        parsed: &callbacks::Parsed,
-    ) -> Result<bool, String> {
-        let session = match parsed {
-            callbacks::Parsed::Session { session, source } if source.as_deref() == Some("new") => {
-                session
-            }
-            callbacks::Parsed::Session { .. } => return Ok(false),
-            callbacks::Parsed::Started { session, .. }
-            | callbacks::Parsed::Final { session, .. }
-            | callbacks::Parsed::CompletionCandidate { session, .. }
-            | callbacks::Parsed::ReconcileSession { session }
-            | callbacks::Parsed::BackgroundPending { session, .. }
-            | callbacks::Parsed::Failure { session, .. }
-            | callbacks::Parsed::Completed { session, .. }
-            | callbacks::Parsed::Response { session, .. } => session,
-            callbacks::Parsed::Ignore => return Ok(false),
-        };
-        if !matches!(
-            record.manifest.provider,
-            crate::agents::providers::ProviderKind::Grok
-                | crate::agents::providers::ProviderKind::Kimi
-        ) || self
-            .state
-            .agent(id)
-            .and_then(|a| a.superseded_session_id.as_deref())
-            != Some(session.as_str())
-        {
-            return Ok(false);
-        }
-        tracing::debug!(
-            event = "bus.callback.ignored",
-            reason = "superseded_session",
-            "Retiring observation from the accepted reset's previous session"
-        );
-        self.acknowledge_spool(dir, observation_paths(path))?;
-        Ok(true)
-    }
-
     pub(super) fn grok_completion_callback(
         &self,
         id: AgentId,

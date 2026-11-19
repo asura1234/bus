@@ -83,7 +83,7 @@ def test_verdict_guide_is_shipped_for_all_referring_skills_and_providers(tmp_pat
                         if target in page.read_text()]
     assert referring_skills
     canonical = (ROOT / "orchestration/bus-communication-guide.md").read_bytes()
-    for provider in (".claude", ".agents", ".cursor", ".grok", ".kimi-code"):
+    for provider in (".claude", ".agents", ".cursor", ".grok", ".kimi-code", ".gemini/config"):
         root = home / provider / "skills"
         guide = root / "_bus/docs/bus-communication-guide.md"
         assert guide.is_file(), f"{provider}: verdict guide is missing from the bundle"

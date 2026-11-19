@@ -60,7 +60,8 @@ impl BusState {
         now_ms: u64,
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
-        if owner.status != RuntimeStatus::Idle
+        if owner.provider == crate::messaging::model::Provider::Agy
+            || owner.status != RuntimeStatus::Idle
             || owner.working_directory_error.is_some()
             || owner.dialog
             || owner.deletion_pending

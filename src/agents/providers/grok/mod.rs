@@ -19,6 +19,8 @@ pub(crate) const HOOK_CONTRACT: HookContract = HookContract {
         "StopCancelled",
         "Notification",
     ],
+    container_key: "hooks",
     entry_shape: HookEntryShape::NestedCommands,
     default_version: None,
+    reject_disabled_container: false,
 };

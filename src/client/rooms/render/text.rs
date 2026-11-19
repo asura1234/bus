@@ -156,6 +156,7 @@ pub(in crate::client::rooms) fn provider(provider: Provider) -> &'static str {
         Provider::Cursor => "Cursor",
         Provider::Grok => "Grok",
         Provider::Kimi => "Kimi",
+        Provider::Agy => "AGY",
         #[cfg(feature = "dev-tools")]
         Provider::Fake => "Fake",
     }

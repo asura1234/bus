@@ -10,6 +10,7 @@ fn directory_fixture(
         Provider::Cursor => "cursor",
         Provider::Grok => "grok",
         Provider::Kimi => "kimi",
+        Provider::Agy => "agy",
         #[cfg(feature = "dev-tools")]
         Provider::Fake => "fake",
     };
