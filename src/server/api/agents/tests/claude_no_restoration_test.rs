@@ -7,7 +7,7 @@ const PROMPT: &str = r#"{"type":"user","uuid":"original","parentUuid":null,"prom
 const TOOL: &str = r#"{"type":"assistant","uuid":"tool","parentUuid":"original","sessionId":"session","version":"2.1.316","isSidechain":false,"message":{"content":[{"type":"tool_use","id":"tool-id","name":"Bash","input":{}}]}}"#;
 const RESULT: &str = r#"{"type":"user","uuid":"result","parentUuid":"tool","promptId":"prompt","sessionId":"session","version":"2.1.316","isSidechain":false,"sourceToolAssistantUUID":"tool","message":{"content":[{"type":"tool_result","tool_use_id":"tool-id","content":"done"}]}}"#;
 const STREAM: &str = r#"{"type":"assistant","uuid":"thinking","parentUuid":"result","sessionId":"session","version":"2.1.316","isSidechain":false,"message":{"content":[{"type":"thinking","thinking":"continuing"}]}}"#;
-const CANCEL: &str = r#"{"type":"user","uuid":"cancel","parentUuid":"thinking","promptId":"prompt","sessionId":"session","version":"2.1.316","isSidechain":false,"interruptedMessageId":"streaming-message","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+const CANCEL: &str = r#"{"type":"user","uuid":"cancel","parentUuid":"thinking","promptId":"prompt","sessionId":"session","version":"2.1.316","isSidechain":false,"interruptedMessageId":"11111111-2222-4333-8444-555555555555","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
 
 fn interrupted_frame(runtime: &TerminalRuntime, body: &str, bottom: &str, footer: &str) {
     runtime.test_process_pty_bytes(
@@ -18,6 +18,15 @@ fn interrupted_frame(runtime: &TerminalRuntime, body: &str, bottom: &str, footer
     );
 }
 
+// The live Claude 2.1.316 producer's cancelled API message ID was absent
+// from earlier transcript identifiers, including the parent assistant row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EarlyEvidence {
+    None,
+    Cancel,
+    Frame,
+}
+
 async fn exercise(
     before: &str,
     after: &str,
@@ -26,6 +35,7 @@ async fn exercise(
     footer: &str,
     qualifies: bool,
     restores_late: bool,
+    early: EarlyEvidence,
 ) {
     let directory = crate::utils::test_temp::unique_temp_path("claude-no-restoration");
     fs::create_dir_all(&directory).unwrap();
@@ -35,6 +45,10 @@ async fn exercise(
     let receipt = directory.join("completion");
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let generation = clock.advance(Duration::ZERO);
+    let delivery = (early != EarlyEvidence::None).then(|| clock.hold_next_write_delivery());
     let sender = runtime.submission_handle(true);
     let original = receipt.clone();
     let stop = tokio::task::spawn_blocking(move || {
@@ -46,14 +60,36 @@ async fn exercise(
             Some(&anchor),
         )
     });
+    let append = || {
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(after.as_bytes())
+            .unwrap();
+    };
+    if let Some((waiting, release)) = delivery {
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            writes.try_recv().is_err(),
+            "Esc has not reached the fake PTY"
+        );
+        if early == EarlyEvidence::Cancel {
+            append();
+        } else {
+            interrupted_frame(&runtime, body, bottom, footer);
+        }
+        release.send(()).unwrap();
+    }
     assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
-    fs::OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .unwrap()
-        .write_all(after.as_bytes())
-        .unwrap();
-    interrupted_frame(&runtime, body, bottom, footer);
+    clock.wait_for_submission_check(generation);
+    clock.resume();
+    if early != EarlyEvidence::Cancel {
+        append();
+    }
+    if early != EarlyEvidence::Frame {
+        interrupted_frame(&runtime, body, bottom, footer);
+    }
     if restores_late {
         tokio::time::sleep(Duration::from_millis(250)).await;
         assert!(
@@ -97,6 +133,7 @@ async fn claude_tool_progress_stream_cancel_retires_without_editing_and_reuses_r
         "",
         true,
         false,
+        EarlyEvidence::None,
     )
     .await;
 }
@@ -119,12 +156,25 @@ async fn claude_no_restoration_holds_without_fresh_linked_tool_and_cancel_eviden
         ),
         (
             before.clone(),
-            after.replace(r#""interruptedMessageId":"streaming-message","#, ""),
+            after.replace(
+                r#""interruptedMessageId":"11111111-2222-4333-8444-555555555555","#,
+                "",
+            ),
         ),
         (before, after.trim_end().to_owned()),
     ];
     for (before, after) in cases {
-        exercise(&before, &after, "", "────────────────", "", false, false).await;
+        exercise(
+            &before,
+            &after,
+            "",
+            "────────────────",
+            "",
+            false,
+            false,
+            EarlyEvidence::None,
+        )
+        .await;
     }
 }
 
@@ -143,7 +193,17 @@ async fn claude_no_restoration_requires_complete_empty_composer() {
             "❯ [ ] Alpha\r\n  [ ] Beta\r\nSpace:select",
         ),
     ] {
-        exercise(&before, &after, body, bottom, footer, false, false).await;
+        exercise(
+            &before,
+            &after,
+            body,
+            bottom,
+            footer,
+            false,
+            false,
+            EarlyEvidence::None,
+        )
+        .await;
     }
 }
 
@@ -157,6 +217,7 @@ async fn claude_late_restoration_takes_precedence_over_typed_cancel_evidence() {
         "",
         true,
         true,
+        EarlyEvidence::None,
     )
     .await;
 }
@@ -203,5 +264,83 @@ async fn claude_typed_cancel_cannot_retire_an_opaque_or_joined_receipt() {
             writes.try_recv().is_err(),
             "no editing keys on joined or opaque input"
         );
+    }
+}
+
+async fn reject(before: String, after: String, early: EarlyEvidence) {
+    exercise(
+        &before,
+        &after,
+        "",
+        "────────────────",
+        "",
+        false,
+        false,
+        early,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_a_pre_stop_cancel_uuid_appended_again() {
+    reject(
+        format!("{PROMPT}\n{TOOL}\n{RESULT}\n{STREAM}\n{CANCEL}\n"),
+        format!("{CANCEL}\n"),
+        EarlyEvidence::None,
+    )
+    .await;
+    // Even a rewritten row cannot reuse a cancellation UUID from far outside
+    // the parent-walk tail of the same transcript.
+    let earlier = CANCEL.replace("11111111-2222-4333-8444-555555555555", "older-message");
+    let padding = serde_json::json!({"type":"api-request-blob","blob":"x".repeat(2 * 1024 * 1024)});
+    reject(
+        format!("{earlier}\n{padding}\n{PROMPT}\n{TOOL}\n{RESULT}\n"),
+        format!("{STREAM}\n{CANCEL}\n"),
+        EarlyEvidence::None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_duplicate_cancel_rows_after_delivery() {
+    reject(
+        format!("{PROMPT}\n{TOOL}\n{RESULT}\n"),
+        format!("{STREAM}\n{CANCEL}\n{CANCEL}\n"),
+        EarlyEvidence::None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_cancel_before_esc_delivery() {
+    reject(
+        format!("{PROMPT}\n{TOOL}\n{RESULT}\n"),
+        format!("{STREAM}\n{CANCEL}\n"),
+        EarlyEvidence::Cancel,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_empty_frame_before_esc_delivery() {
+    reject(
+        format!("{PROMPT}\n{TOOL}\n{RESULT}\n"),
+        format!("{STREAM}\n{CANCEL}\n"),
+        EarlyEvidence::Frame,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_a_reused_or_off_chain_api_message() {
+    let off_chain = r#"{"type":"assistant","uuid":"other-branch","parentUuid":"foreign","sessionId":"session","version":"2.1.316","isSidechain":false,"message":{"id":"11111111-2222-4333-8444-555555555555"}}"#;
+    let earlier_cancel = CANCEL.replace(r#""uuid":"cancel""#, r#""uuid":"other-cancel""#);
+    for row in [off_chain, &earlier_cancel] {
+        reject(
+            format!("{PROMPT}\n{TOOL}\n{RESULT}\n{row}\n"),
+            format!("{STREAM}\n{CANCEL}\n"),
+            EarlyEvidence::None,
+        )
+        .await;
     }
 }

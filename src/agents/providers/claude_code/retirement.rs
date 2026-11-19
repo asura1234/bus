@@ -1,6 +1,7 @@
 //! Transcript evidence for Claude Code 2.1.316's tool-progress cancel path.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
@@ -9,6 +10,7 @@ use std::{
 
 const VERSION: &str = "2.1.316";
 const MAX_TAIL: u64 = 2 * 1024 * 1024;
+const MAX_NOVELTY_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct TranscriptAnchor {
@@ -97,16 +99,16 @@ impl TranscriptAnchor {
             return None;
         }
         let offset = metadata.len();
-        let prefix_len = usize::try_from(offset.min(512)).ok()?;
-        let mut prefix = vec![0; prefix_len];
-        file.seek(SeekFrom::Start(offset - prefix_len as u64))
-            .ok()?;
-        file.read_exact(&mut prefix).ok()?;
-        prefix.ends_with(b"\n").then_some(CancelWatermark {
+        if offset > MAX_NOVELTY_BYTES {
+            return None;
+        }
+        let mut prefix = Vec::new();
+        (&mut file).take(offset).read_to_end(&mut prefix).ok()?;
+        (prefix.len() as u64 == offset && prefix.ends_with(b"\n")).then(|| CancelWatermark {
             anchor: self,
             file,
             offset,
-            prefix,
+            prefix_digest: Sha256::digest(&prefix).into(),
             checked: None,
         })
     }
@@ -131,7 +133,7 @@ pub(crate) struct CancelWatermark<'a> {
     anchor: &'a TranscriptAnchor,
     file: File,
     offset: u64,
-    prefix: Vec<u8>,
+    prefix_digest: [u8; 32],
     checked: Option<(u64, bool)>,
 }
 
@@ -160,50 +162,56 @@ impl CancelWatermark<'_> {
         let end = self.file.metadata().ok()?.len();
         let start = end.saturating_sub(MAX_TAIL);
         let metadata = fs::symlink_metadata(&self.anchor.path).ok()?;
-        if self.offset < start
+        if end > MAX_NOVELTY_BYTES
+            || self.offset < start
             || self.offset >= end
             || !metadata.is_file()
             || file_identity(&metadata) != Some((self.anchor.device, self.anchor.inode))
         {
             return None;
         }
-        self.file.seek(SeekFrom::Start(start)).ok()?;
-        let mut tail = Vec::new();
+        self.file.seek(SeekFrom::Start(0)).ok()?;
+        let mut transcript = Vec::new();
         (&mut self.file)
-            .take(end - start)
-            .read_to_end(&mut tail)
+            .take(end)
+            .read_to_end(&mut transcript)
             .ok()?;
-        let watermark = usize::try_from(self.offset - start).ok()?;
-        if !tail.get(..watermark)?.ends_with(&self.prefix) || !tail.ends_with(b"\n") {
+        let watermark = usize::try_from(self.offset).ok()?;
+        if transcript.len() as u64 != end
+            || Sha256::digest(transcript.get(..watermark)?)[..] != self.prefix_digest
+            || !transcript.ends_with(b"\n")
+        {
             return None;
         }
-        let mut offset = start;
+        let mut split = usize::try_from(start).ok()?;
+        if split != 0 {
+            split += transcript[split..].iter().position(|byte| *byte == b'\n')? + 1;
+        }
+        let (history, tail) = transcript.split_at(split);
+        let mut offset = split as u64;
         let mut rows = Vec::new();
         for line in tail.split_inclusive(|byte| *byte == b'\n') {
-            let at = offset;
+            rows.push(Row {
+                offset,
+                value: serde_json::from_slice(line).ok()?,
+            });
             offset += line.len() as u64;
-            if at == start && start != 0 {
-                continue;
-            }
-            if let Ok(value) = serde_json::from_slice(line) {
-                rows.push(Row { offset: at, value });
-            } else if at >= self.offset {
-                return None;
-            }
         }
         let main = |row: &&Row| {
             field(&row.value, "sessionId") == Some(self.anchor.session.as_str())
                 && row.value.get("isSidechain").and_then(Value::as_bool) == Some(false)
         };
         let cancel = rows.iter().rfind(main)?;
+        let uuid = field(&cancel.value, "uuid")?;
+        let message_id = field(&cancel.value, "interruptedMessageId")?;
         if cancel.offset < self.offset
             || field(&cancel.value, "version") != Some(VERSION)
             || field(&cancel.value, "type") != Some("user")
             || field(&cancel.value, "promptId") != Some(self.anchor.prompt.as_str())
-            || field(&cancel.value, "interruptedMessageId").is_none()
             || field(&cancel.value, "promptSource").is_some()
             || field(&cancel.value, "sourceToolAssistantUUID").is_some()
-            || field(&cancel.value, "uuid").is_none()
+            || uuid == message_id
+            || !novel_cancellation_ids(history, &rows, cancel, uuid, message_id)
         {
             return None;
         }
@@ -220,7 +228,8 @@ impl CancelWatermark<'_> {
                     && field(value, "promptSource") == Some("typed")
                     && field(value, "turnOrigin") == Some("human")
                     && row.offset < self.offset
-                    && progressed)
+                    && progressed
+                    && self.file.metadata().ok()?.len() == end)
                     .then_some(ToolProgressCancellation);
             }
             if field(value, "uuid") != Some(parent) {
@@ -247,6 +256,43 @@ impl CancelWatermark<'_> {
         }
         None
     }
+}
+
+/// Claude 2.1.316 fills interruptedMessageId from the in-flight API stream.
+/// That stream may leave no assistant row with its message.id. Bind the
+/// novel ID to the anchored parent chain of this fresh cancellation row.
+fn novel_cancellation_ids(
+    history: &[u8],
+    rows: &[Row],
+    cancel: &Row,
+    uuid: &str,
+    message_id: &str,
+) -> bool {
+    let conflicts = |row: &Value| {
+        field(row, "uuid") == Some(uuid)
+            || [
+                "uuid",
+                "parentUuid",
+                "leafUuid",
+                "id",
+                "promptId",
+                "sessionId",
+                "session_id",
+                "requestId",
+                "turnId",
+                "sourceToolAssistantUUID",
+                "interruptedMessageId",
+            ]
+            .iter()
+            .any(|key| field(row, key) == Some(message_id))
+            || row.get("message").and_then(|message| field(message, "id")) == Some(message_id)
+    };
+    !rows
+        .iter()
+        .any(|row| row.offset != cancel.offset && conflicts(&row.value))
+        && history
+            .split_inclusive(|byte| *byte == b'\n')
+            .all(|line| serde_json::from_slice::<Value>(line).is_ok_and(|row| !conflicts(&row)))
 }
 
 fn field<'a>(row: &'a Value, key: &str) -> Option<&'a str> {

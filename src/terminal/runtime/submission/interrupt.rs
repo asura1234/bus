@@ -159,7 +159,7 @@ impl SubmissionHandle {
                     verified_empty = no_restoration.as_ref().is_some_and(|proof| {
                         available
                             && body.as_deref() == Some("")
-                            && submission.content_seq.load(Ordering::Acquire) != proof.before_stop
+                            && submission.content_seq.load(Ordering::Acquire) != proof.after_stop
                             && submission
                                 .inspect
                                 .claude_empty_editable_composer(&screen, cursor)
@@ -238,14 +238,6 @@ fn press_claude_stop<'a>(
     if *stopped {
         return Ok(None);
     }
-    // Only the first Esc can establish a fresh transcript boundary.
-    let proof = anchor
-        .and_then(|anchor| anchor.watermark(session))
-        .map(|watermark| NoRestoration {
-            watermark,
-            before_stop: submission.content_seq.load(Ordering::Acquire),
-            empty_since: None,
-        });
     let deadline = submission.hard_deadline;
     let completion = lease.with_unedited(|| {
         submission.io.queue_input_write_scoped(
@@ -261,12 +253,25 @@ fn press_claude_stop<'a>(
     completion
         .recv_timeout(submission.clock.remaining(deadline))
         .map_err(io::Error::other)??;
+    // Only the first delivered Esc can open a proof window. If the
+    // transcript or frame advanced before this boundary, require new evidence.
+    let proof = anchor
+        .and_then(|anchor| anchor.watermark(session))
+        .map(|watermark| NoRestoration {
+            watermark,
+            after_stop: submission.content_seq.load(Ordering::Acquire),
+            empty_since: None,
+        });
+    #[cfg(test)]
+    submission
+        .clock
+        .submission_checked(submission.clock.generation());
     Ok(proof)
 }
 
 struct NoRestoration<'a> {
     watermark: CancelWatermark<'a>,
-    before_stop: u64,
+    after_stop: u64,
     empty_since: Option<Instant>,
 }
 

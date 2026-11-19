@@ -19,6 +19,7 @@ struct TestTime {
     draft_waits: usize,
     checked_generation: Option<u64>,
     write_failure: Option<WriteCompletionFault>,
+    write_delivery: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
 }
 
 impl SubmissionClock {
@@ -221,6 +222,26 @@ impl SubmissionClock {
             release: receiver,
         });
         release
+    }
+
+    /// Stop the fake writer before the key reaches the PTY channel.
+    pub(crate) fn hold_next_write_delivery(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (waiting, reached) = std::sync::mpsc::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        let mut state = self.state.0.lock().unwrap();
+        assert!(state.write_delivery.is_none());
+        state.write_delivery = Some((waiting, resume));
+        (reached, release)
+    }
+
+    pub(super) fn wait_for_write_delivery(&self) {
+        let barrier = self.state.0.lock().unwrap().write_delivery.take();
+        if let Some((waiting, resume)) = barrier {
+            waiting.send(()).unwrap();
+            resume.recv_timeout(NATIVE_TEST_TIMEOUT).unwrap();
+        }
     }
 
     pub(super) fn take_write_failure(&self) -> Option<WriteCompletionFault> {
