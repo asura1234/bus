@@ -989,9 +989,11 @@ mod codex_startup_tests;
 #[tokio::test]
 async fn agy_busy_task_tray_guarded_prompt_writes_only_with_a_composer() {
     let active = include_str!("fixtures/agy_working_with_task_tray.txt");
+    let cancellable = active.replacen("? for shortcuts", "esc to cancel", 1);
     let draft = active.replacen("\n>\n", "\n> [Pasted text #1 1500 chars]\n", 1);
     for (frame, accepted, expected_error) in [
         (active, true, None),
+        (cancellable.as_str(), true, None),
         (
             draft.as_str(),
             false,
