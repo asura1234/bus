@@ -63,6 +63,8 @@ fn send_async_survives_planned_restart_and_new_generation() {
         "restart-follow",
         &json!(19),
         &mut |request, _| {
+            assert_eq!(request.method, "message.status");
+            assert_eq!(request.params["_async_send_follower"], true);
             reads += 1;
             if reads == 1 {
                 return Ok(Response::success(

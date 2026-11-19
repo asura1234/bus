@@ -33,6 +33,8 @@ const IO_BURST_CHUNKS: usize = 16;
 pub(crate) const SOCKET_NAME: &str = "control.sock";
 /// Status polling has independent admission from interactive control calls.
 pub(super) const WAIT_SOCKET_NAME: &str = "wait.sock";
+/// Transport metadata for status reads issued by `bus send --async`.
+pub(crate) const ASYNC_SEND_FOLLOWER: &str = "_async_send_follower";
 pub(super) const LOCK_NAME: &str = "control.lock";
 /// The socket name of a Bus started by a build from before every session ran
 /// the control socket. Such a Bus keeps it until it is restarted.

@@ -2,9 +2,9 @@
 #[cfg(test)]
 use super::client::{request, request_with_timeout};
 use super::protocol::{
-    encode, poll_write, worker_timeout, ControlledStream, Frame, FrameError, IO_TIMEOUT, LOCK_NAME,
-    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, RESPONSE_WRITE_TIMEOUT, SOCKET_NAME,
-    WAIT_SOCKET_NAME,
+    encode, poll_write, worker_timeout, ControlledStream, Frame, FrameError, ASYNC_SEND_FOLLOWER,
+    IO_TIMEOUT, LOCK_NAME, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL,
+    RESPONSE_WRITE_TIMEOUT, SOCKET_NAME, WAIT_SOCKET_NAME,
 };
 pub(crate) use super::protocol::{ControlCall, Request, Response};
 use crate::messaging::{coordinator::BusCommand, storage::io as storage_io};
@@ -228,6 +228,7 @@ struct Client {
     accepted: Instant,
     /// Retained through writing/closing so slow reply readers are attributable.
     request: Option<(String, &'static str)>,
+    async_send_follower: bool,
 }
 
 enum State {
@@ -255,6 +256,7 @@ impl Client {
             deadline: Instant::now() + IO_TIMEOUT,
             accepted: Instant::now(),
             request: None,
+            async_send_follower: false,
         }
     }
 
@@ -441,6 +443,22 @@ impl Client {
             .request
             .as_ref()
             .map_or(("", "unread"), |(id, method)| (id.as_str(), *method));
+        // Cancelling a long-lived `send --async` can close a status socket
+        // while its poll is in flight. Keep partial writes and other errors
+        // at WARN so failed transfers remain visible.
+        if self.async_send_follower && reason == "BrokenPipe" && written_bytes == 0 {
+            tracing::debug!(
+                event = "bus.control.response.failed",
+                control_request_id = id,
+                method,
+                stage = "write",
+                reason,
+                response_bytes,
+                written_bytes,
+                "Async send follower disconnected before the status response"
+            );
+            return;
+        }
         tracing::warn!(
             event = "bus.control.response.failed",
             control_request_id = id,
@@ -500,6 +518,14 @@ impl Client {
                 "Status poll budget reached",
             ));
         }
+        self.async_send_follower = request.method == "message.status"
+            && matches!(
+                request
+                    .params
+                    .as_object_mut()
+                    .and_then(|params| params.remove(ASYNC_SEND_FOLLOWER)),
+                Some(serde_json::Value::Bool(true))
+            );
         let id = request.id.clone();
         let method = crate::messaging::perf::control_method_label(&request.method);
         self.request = Some((id.chars().take(128).collect(), method));

@@ -898,7 +898,10 @@ fn run_async(
                 ));
             }
             assert_eq!(request.method, "message.status");
-            assert_eq!(request.params, json!({"message": "19"}));
+            assert_eq!(
+                request.params,
+                json!({"message": "19", "_async_send_follower": true})
+            );
             timeouts.push(timeout);
             Ok(Response::success(
                 &request.id,
@@ -1591,7 +1594,10 @@ fn send_async_recovers_from_transient_server_busy_after_queued_receipt() {
                 ));
             }
             assert_eq!(request.method, "message.status");
-            assert_eq!(request.params, json!({"message": "19"}));
+            assert_eq!(
+                request.params,
+                json!({"message": "19", "_async_send_follower": true})
+            );
             polls += 1;
             Ok(match polls {
                 1 => Response::success(&request.id, status(vec![recipient(1, "queued", false)])),
@@ -1764,7 +1770,10 @@ fn async_following_caps_overload_backoff_and_recovers_after_extended_server_busy
         &json!(19),
         &mut |request: &Request, timeout| {
             assert_eq!(request.method, "message.status");
-            assert_eq!(request.params, json!({"message": "19"}));
+            assert_eq!(
+                request.params,
+                json!({"message": "19", "_async_send_follower": true})
+            );
             assert!(timeout.is_none());
             calls += 1;
             assert!(calls <= 9, "following must end after the turn completes");
