@@ -1,16 +1,30 @@
 //! TUI restart entry, build receipt and immutable executable for rollback.
 use crate::utils::restart_record::{self, BuildStamp, LivePid, TuiBuild};
 use std::io;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static RESTART_PENDING: AtomicBool = AtomicBool::new(false);
 
-struct PendingRestart;
+struct PendingRestart<'a>(&'a AtomicBool);
 
-impl Drop for PendingRestart {
+impl<'a> PendingRestart<'a> {
+    fn try_begin(pending: &'a AtomicBool, root: &Path) -> Option<Self> {
+        if pending.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        let reservation = Self(pending);
+        let handoff_pending =
+            restart_record::read_live_pid(&restart_record::restart_lock_path(root))
+                .is_some_and(|owner| crate::platform::process_still_live(owner.pid, owner.birth));
+        (!handoff_pending).then_some(reservation)
+    }
+}
+
+impl Drop for PendingRestart<'_> {
     fn drop(&mut self) {
-        RESTART_PENDING.store(false, Ordering::Release);
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -19,10 +33,11 @@ impl Drop for PendingRestart {
 /// Capture command output: the receipt and build errors must not enter the terminal.
 pub(super) fn start_handoff() -> io::Result<()> {
     // The CLI locks after building; repeated keypresses must not start parallel builds.
-    if RESTART_PENDING.swap(true, Ordering::AcqRel) {
+    let root = crate::utils::env::bus_data_dir()
+        .ok_or_else(|| io::Error::other("BUS_DATA_DIR is missing"))?;
+    let Some(pending) = PendingRestart::try_begin(&RESTART_PENDING, &root) else {
         return Ok(());
-    }
-    let pending = PendingRestart;
+    };
     let binary = crate::platform::fs::running_executable()?;
     let mut command = Command::new(binary);
     // Runtime --dev has the same meaning as for the public CLI, independently
@@ -48,6 +63,10 @@ pub(super) fn start_handoff() -> io::Result<()> {
         })?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "tests/restart_test.rs"]
+mod tests;
 
 pub(super) fn record_ready(server: Option<&BuildStamp>) {
     if let Err(error) = record_ready_inner(server) {
