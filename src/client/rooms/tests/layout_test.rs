@@ -165,8 +165,8 @@ fn nothing_is_drawn_under_the_composer() {
     let screen = assert_composer_on_last_row(&mut ui, 100, 30, "queued requests");
     assert!(!screen.contains("queued requests"), "{screen}");
 
-    // The Ctrl+R recall search titles the composer instead.
-    key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    // The Ctrl+T recall search titles the composer instead.
+    key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
     assert!(ui.history_search.is_some());
     let screen = assert_composer_on_last_row(&mut ui, 100, 30, "recall search");
     assert!(screen.contains("search   1/"), "{screen}");

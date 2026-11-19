@@ -47,6 +47,11 @@ pub(super) fn dispatch_client_shell_actions(
             shell::ClientShellAction::ClipboardWrite(bytes) => {
                 crate::client::clipboard::write_osc52_bytes(&bytes);
             }
+            shell::ClientShellAction::RestartBus => {
+                if let Err(error) = crate::client::restart::start_handoff() {
+                    tracing::warn!(event = "bus.restart.failed", %error);
+                }
+            }
             shell::ClientShellAction::EditComposer => {
                 if let Some(shell) = shell.as_deref_mut() {
                     if crate::client::host_terminal::output::busy() {

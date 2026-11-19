@@ -14,6 +14,7 @@ const SWITCHES: &[&str] = &[
     "--all",
     "--style",
     "--yolo",
+    "--no-dev",
 ];
 
 #[derive(Debug, Default)]

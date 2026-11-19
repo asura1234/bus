@@ -102,6 +102,16 @@ impl BusUi {
             }
             return true;
         }
+        let restart =
+            matches!(key.code, KeyCode::Char('r' | 'R')) && key.modifiers == KeyModifiers::CONTROL;
+        if restart {
+            if key.kind == KeyEventKind::Press && self.quitting.is_none() {
+                outcome
+                    .actions
+                    .push(crate::client::compositor::ClientShellAction::RestartBus);
+            }
+            return true;
+        }
         let quit =
             matches!(key.code, KeyCode::Char('q' | 'Q')) && key.modifiers == KeyModifiers::CONTROL;
         if quit {

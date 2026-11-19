@@ -85,3 +85,29 @@ fn version_identifies_the_compiled_commit() {
     let version = String::from_utf8(output.stdout).expect("UTF-8 version");
     assert!(version.contains(env!("BUS_BUILD_SHA")), "{version}");
 }
+
+#[test]
+fn top_level_help_lists_current_tui_restart_history_and_quit_chords() {
+    for dev in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bus"));
+        if dev {
+            command.arg("--dev");
+        }
+        let output = command
+            .arg("--help")
+            .env("BUS_DATA_DIR", "relative-help-must-not-resolve-a-session")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        for chord in [
+            "Ctrl+T history search",
+            "Ctrl+R restart (--dev only)",
+            "Ctrl+Q save and quit",
+        ] {
+            assert!(text.contains(chord), "missing {chord}: {text}");
+        }
+        assert!(!text.contains("Ctrl+R history search"), "{text}");
+        assert!(!text.contains("Ctrl+C save and quit"), "{text}");
+    }
+}

@@ -21,15 +21,17 @@ fn ctrl_e_moves_to_line_end_and_shift_toggles_composer_size() {
 }
 
 #[test]
-fn ctrl_r_searches_history_and_shift_opens_a_room_form() {
+fn ctrl_t_searches_and_cycles_history_and_ctrl_shift_r_opens_a_room_form() {
     let (mut ui, room, _) = fixture();
     ui.locals.get_mut(&room).unwrap().recall = vec![
         Recalled::now("alpha path".into()),
         Recalled::now("beta note".into()),
     ];
-    key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
     assert!(ui.form.is_none());
     assert_eq!(ui.locals[&room].text.text, "beta note");
+    key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
+    assert_eq!(ui.locals[&room].text.text, "alpha path");
     key(&mut ui, KeyCode::Char('p'), KeyModifiers::NONE);
     assert_eq!(ui.locals[&room].text.text, "alpha path");
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
@@ -236,7 +238,7 @@ fn switching_rooms_restores_the_recall_source_even_after_an_old_save_ack() {
     local
         .recall
         .push(Recalled::now("first recalled prompt".into()));
-    key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
     let preview = ui
         .pending
         .iter_mut()
@@ -311,7 +313,7 @@ fn reopening_the_current_room_preserves_recall_and_its_accepted_prompt() {
     let local = ui.locals.get_mut(&first).unwrap();
     local.text.insert("live draft");
     local.recall.push(Recalled::now("recalled prompt".into()));
-    key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
     key(&mut ui, KeyCode::Char('p'), KeyModifiers::NONE);
 
     key(&mut ui, KeyCode::F(6), KeyModifiers::NONE);
@@ -326,7 +328,7 @@ fn reopening_the_current_room_preserves_recall_and_its_accepted_prompt() {
 }
 
 #[test]
-fn room_switching_preserves_up_down_recall_without_ctrl_r() {
+fn room_switching_preserves_up_down_recall_without_ctrl_t() {
     let (mut ui, first, _) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let second = snapshot.state.create_room("second").unwrap();
@@ -509,4 +511,54 @@ fn storage_recovery_keeps_a_rejected_room_creation_error_log_only() {
     assert!(logs.contains("bus.command.failed"), "{logs}");
     assert!(logs.contains("Storage paused; retrying"), "{logs}");
     assert!(!room_screen(&mut ui, 100, 30).contains("Storage paused"));
+}
+
+#[test]
+fn ctrl_r_requests_restart_without_editing_or_cycling_prompt_history() {
+    use crossterm::event::KeyEventKind;
+    for code in ['r', 'R'] {
+        let (mut ui, room, _) = fixture();
+        ui.locals.get_mut(&room).unwrap().text.insert("live draft");
+        ui.locals.get_mut(&room).unwrap().recall = vec![Recalled::now("older prompt".into())];
+        let mut outcome = crate::client::compositor::ClientShellInput::default();
+        assert!(ui.input(
+            &RawInputEvent::Key(TerminalKey::new(KeyCode::Char(code), KeyModifiers::CONTROL)),
+            false,
+            &mut outcome,
+        ));
+        assert!(matches!(
+            outcome.actions.as_slice(),
+            [crate::client::compositor::ClientShellAction::RestartBus]
+        ));
+        assert_eq!(ui.locals[&room].text.text, "live draft");
+        assert!(ui.history_search.is_none());
+        assert!(ui.quitting.is_none(), "preflight runs before save-and-quit");
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            let mut key = TerminalKey::new(KeyCode::Char(code), KeyModifiers::CONTROL);
+            key.kind = kind;
+            let mut outcome = Default::default();
+            assert!(ui.input(&RawInputEvent::Key(key), false, &mut outcome));
+            assert!(outcome.actions.is_empty());
+        }
+    }
+}
+
+#[test]
+fn ctrl_r_does_not_cycle_an_open_prompt_search() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().recall =
+        vec![Recalled::now("older".into()), Recalled::now("newer".into())];
+    key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
+    let mut outcome = Default::default();
+    ui.input(
+        &RawInputEvent::Key(TerminalKey::new(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+        false,
+        &mut outcome,
+    );
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [crate::client::compositor::ClientShellAction::RestartBus]
+    ));
+    assert_eq!(ui.locals[&room].text.text, "newer");
+    assert_eq!(ui.history_search.as_ref().unwrap().selected, 0);
 }

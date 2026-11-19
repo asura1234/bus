@@ -185,7 +185,7 @@ impl BusUi {
         );
     }
 
-    /// The Ctrl+R recall search, which has no panel of its own.
+    /// The Ctrl+T recall search, which has no panel of its own.
     fn composer_title(&self, room: RoomId) -> String {
         let Some(search) = self.history_search.as_ref() else {
             return String::new();

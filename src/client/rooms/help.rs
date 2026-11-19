@@ -18,7 +18,7 @@ Ctrl+_         Undo the last edit
 Ctrl+Y         Paste back the last Ctrl+K / Ctrl+U / Ctrl+W deletion
 Option+Y       After Ctrl+Y, cycle earlier deletions
 Esc Esc        Clear the draft and save it so Up brings it back
-Ctrl+R         Search prompt history
+Ctrl+T         Search prompt history; press again for the next match
 Ctrl+F         Find in chat history, newest first; Up older, Down newer, Esc closes
                Enter older, Shift+Enter newer
 Alt+I          Toggle * → You: only messages addressed to you
@@ -63,7 +63,9 @@ Enter          Add agent / room; complete or add file
 Ctrl+Enter     Confirm form
 Esc            Cancel
 
-Quit
+Quit and restart
+Ctrl+R         Restart Bus with the current session and launch flags (--dev only)
+               Build failures keep Bus running; keypress confirms
 Ctrl+Q         Save, stop the agents and the server, quit
                After an unsaved warning: press again within 5s to force quit
                and risk losing edits; wait 5s, then Ctrl+Q retries saving";
