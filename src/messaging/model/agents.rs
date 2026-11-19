@@ -711,7 +711,12 @@ impl BusState {
         if status == RuntimeStatus::Idle {
             // No hook reports an interrupted turn; the idle screen is its end.
             // Codex reports Idle under an approval dialog, which is not one.
-            if agent_state.interrupt_pending && !agent_state.dialog {
+            // A durable autonomous claim needs the identity-checked poll sample.
+            if agent_state.interrupt_pending
+                && !agent_state.dialog
+                && (agent_state.current_request.is_some()
+                    || agent_state.autonomous_stop.claim.is_none())
+            {
                 self.close_interrupted(agent, now_ms)?;
             }
             self.complete_pending_final(agent, now_ms)?;

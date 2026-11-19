@@ -1135,3 +1135,106 @@ fn verified_idle_retires_only_the_previous_unbound_autonomous_stop() {
     );
     assert_eq!(last.expected_activity.unwrap().state_change_seq, 12);
 }
+
+fn interrupt_bound_autonomous(f: &mut Fixture, lose_receipt: bool) -> AgentId {
+    let autonomous = add_autonomous(f, true);
+    if lose_receipt {
+        f.worker.transport = Box::new(FailAtFirstStop(f.native.clone()));
+    }
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"first"});
+    if lose_receipt {
+        let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send(f, params)));
+        assert!(crash.is_err());
+        reopen_after_interrupt(f);
+    } else {
+        let result = send(f, params);
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.result["interrupts"][0]["outcome"], "interrupting");
+    }
+    assert_eq!(stop_keys(f).len(), 1);
+    autonomous
+}
+
+fn assert_later_autonomous_send(f: &mut Fixture, autonomous: AgentId) {
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"later send"});
+    let result = send(f, params);
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["stage"], "queued");
+    assert_eq!(result.result["interrupts"][0]["outcome"], "interrupting");
+    assert_eq!(
+        f.worker.state.queued_requests(autonomous).last(),
+        Some(&sent_request(&result))
+    );
+    let native = f.native.lock().unwrap();
+    let stops: Vec<_> = native
+        .iter()
+        .filter_map(|method| match method {
+            Method::AgentSendKeys(params) => Some(params),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stops.len(), 2);
+    assert_eq!(stops[1].target, "autonomous-pane");
+    assert_eq!(
+        stops[1].expected_terminal_id.as_deref(),
+        Some("autonomous-terminal")
+    );
+}
+
+#[test]
+fn later_autonomous_episode_stops_after_acknowledged_interrupt_without_final() {
+    let mut f = Fixture::new(Provider::Codex);
+    let autonomous = interrupt_bound_autonomous(&mut f, false);
+    poll_autonomous(&mut f, "idle", 11, false, None);
+    poll_autonomous(&mut f, "working", 12, false, None);
+    assert_later_autonomous_send(&mut f, autonomous);
+}
+
+#[test]
+fn later_autonomous_episode_stops_after_lost_receipt_without_final() {
+    let mut f = Fixture::new(Provider::Codex);
+    let autonomous = interrupt_bound_autonomous(&mut f, true);
+    poll_autonomous(&mut f, "idle", 11, false, None);
+    reopen_after_interrupt(&mut f);
+    poll_autonomous(&mut f, "working", 12, false, None);
+    assert_later_autonomous_send(&mut f, autonomous);
+}
+
+#[test]
+fn later_autonomous_episode_stops_after_an_intervening_bus_request() {
+    for lose_receipt in [false, true] {
+        let mut f = Fixture::new(Provider::Codex);
+        let autonomous = interrupt_bound_autonomous(&mut f, lose_receipt);
+        poll_autonomous(&mut f, "idle", 11, false, None);
+        let mut state = f.worker.state.clone();
+        let queued = state.queued_requests(autonomous)[0];
+        state
+            .begin_submission(queued, "autonomous-launch", 1)
+            .unwrap();
+        assert_eq!(
+            state.close_interrupted(autonomous, f.now).unwrap(),
+            [queued]
+        );
+        f.worker.save(state).unwrap();
+        poll_autonomous(&mut f, "working", 12, false, None);
+        assert_later_autonomous_send(&mut f, autonomous);
+    }
+}
+
+#[test]
+fn authenticated_autonomous_claim_deduplicates_if_its_turn_reappears_after_idle() {
+    let mut f = Fixture::new(Provider::Codex);
+    let autonomous = interrupt_bound_autonomous(&mut f, true);
+    poll_autonomous(&mut f, "idle", 11, false, None);
+    reopen_after_interrupt(&mut f);
+    poll_autonomous(&mut f, "working", 12, false, None);
+    let mut state = f.worker.state.clone();
+    state.observe_autonomous_turn(autonomous, "autonomous-turn".into(), true);
+    f.worker.save(state).unwrap();
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"same turn"});
+    let result = send(&mut f, params);
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["stage"], "queued");
+    assert_eq!(result.result["interrupts"][0]["outcome"], "unknown");
+    assert_eq!(stop_keys(&f).len(), 1);
+}

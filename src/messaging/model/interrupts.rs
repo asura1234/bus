@@ -40,6 +40,12 @@ impl AutonomousStopState {
     pub(super) fn is_empty(&self) -> bool {
         self == &Self::default()
     }
+
+    fn clear_activity(&mut self) {
+        self.provider_turn_id = None;
+        self.activity = None;
+        self.turn_activity = None;
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -106,17 +112,21 @@ impl BusState {
         }
     }
 
-    /// A coherent native idle sample delimits an autonomous episode even if
-    /// its stop could not be correlated to an authenticated provider turn.
-    pub(crate) fn retire_unbound_autonomous_stop(&mut self, id: AgentId) {
+    /// A coherent native idle sample ends the observed episode. A bound claim
+    /// can still deduplicate if its authenticated provider turn reappears.
+    pub(crate) fn observe_autonomous_idle(
+        &mut self,
+        id: AgentId,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
         let Some(owner) = self
             .agents
             .get_mut(&id)
             .filter(|agent| agent.current_request.is_none())
         else {
-            return;
+            return Ok(());
         };
-        let matches_episode = owner.autonomous_stop.claim.as_ref().is_some_and(|claim| {
+        let matches_unbound_claim = owner.autonomous_stop.claim.as_ref().is_some_and(|claim| {
             claim.target.is_none()
                 && claim.provider_turn_id.is_none()
                 && claim.identity.launch_id == owner.runtime_identity.launch_id
@@ -125,10 +135,14 @@ impl BusState {
                     owner.runtime_identity.session_id.as_ref() == Some(session)
                 })
         });
-        if matches_episode {
-            owner.autonomous_stop = AutonomousStopState::default();
-            owner.interrupt_pending = false;
+        owner.autonomous_stop.clear_activity();
+        if matches_unbound_claim {
+            owner.autonomous_stop.claim = None;
         }
+        if owner.interrupt_pending {
+            self.close_interrupted(id, now_ms)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn autonomous_callback_turn(
@@ -514,6 +528,9 @@ impl BusState {
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?;
         agent_state.interrupt_pending = false;
+        if agent_state.current_request.is_none() {
+            agent_state.autonomous_stop.clear_activity();
+        }
         let hold = agent_state.provider_retry.take();
         let held = hold.as_ref().map(|retry| retry.lead);
         let prepared = hold.map(|retry| retry.queued_ids).unwrap_or_default();

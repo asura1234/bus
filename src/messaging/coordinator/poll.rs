@@ -105,7 +105,9 @@ impl Worker {
                 && status == RuntimeStatus::Idle
                 && stop_observation.is_some_and(|info| info.dialog_id.is_none())
             {
-                state.retire_unbound_autonomous_stop(agent.id);
+                state
+                    .observe_autonomous_idle(agent.id, observed_at_ms)
+                    .map_err(|e| e.to_string())?;
             }
             Self::observe_grok_banner(&mut state, agent, info, observed_at_ms)?;
             let dialog_id = info.and_then(|info| info.dialog_id.clone());

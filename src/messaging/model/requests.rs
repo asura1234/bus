@@ -81,7 +81,9 @@ impl BusState {
             .agents
             .get_mut(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?;
+        agent.interrupt_pending = resuming_owner && agent.interrupt_pending;
         agent.current_request = Some(request);
+        agent.autonomous_stop = Default::default();
         if let Some(hold) = agent.provider_retry.as_mut().filter(|hold| {
             !hold.queued_ids.is_empty()
                 && (hold.lead == request || hold.queued_ids.contains(&request))
