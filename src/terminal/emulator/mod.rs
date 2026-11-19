@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -174,11 +175,20 @@ pub(crate) struct GhosttyPaneCore {
 
 pub(crate) struct PaneTerminal {
     pub(crate) ghostty: GhosttyPaneTerminal,
+    pty_output_revision: AtomicU64,
 }
 
 impl PaneTerminal {
     pub(crate) fn new(ghostty: GhosttyPaneTerminal) -> Self {
-        Self { ghostty }
+        Self {
+            ghostty,
+            pty_output_revision: AtomicU64::new(0),
+        }
+    }
+
+    /// Revision of complete native PTY output, independent of viewport changes.
+    pub(in crate::terminal) fn pty_output_revision(&self) -> u64 {
+        self.pty_output_revision.load(Ordering::Acquire)
     }
 
     pub fn scroll_up(&self, lines: usize) {

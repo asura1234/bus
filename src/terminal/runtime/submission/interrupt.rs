@@ -156,14 +156,15 @@ impl SubmissionHandle {
                             )),
                         };
                     }
-                    verified_empty = no_restoration.as_ref().is_some_and(|proof| {
-                        available
-                            && body.as_deref() == Some("")
-                            && submission.content_seq.load(Ordering::Acquire) != proof.after_stop
-                            && submission
-                                .inspect
-                                .claude_empty_editable_composer(&screen, cursor)
+                    let later_output = no_restoration.as_mut().is_some_and(|proof| {
+                        proof.has_later_frame(submission.terminal.pty_output_revision())
                     });
+                    verified_empty = later_output
+                        && available
+                        && body.as_deref() == Some("")
+                        && submission
+                            .inspect
+                            .claude_empty_editable_composer(&screen, cursor);
                     if body.is_some_and(|body| !body.is_empty()) {
                         return Err(io::Error::other(
                             "Changed or foreign Claude draft preserved",
@@ -259,7 +260,7 @@ fn press_claude_stop<'a>(
         .and_then(|anchor| anchor.watermark(session))
         .map(|watermark| NoRestoration {
             watermark,
-            after_stop: submission.content_seq.load(Ordering::Acquire),
+            after_stop: settled_pty_revision(submission),
             empty_since: None,
         });
     #[cfg(test)]
@@ -269,13 +270,25 @@ fn press_claude_stop<'a>(
     Ok(proof)
 }
 
+fn settled_pty_revision(submission: &ObservedSubmission) -> Option<u64> {
+    let _guard = submission.content_lock.try_lock().ok()?;
+    (!submission.terminal.synchronized_output_active())
+        .then(|| submission.terminal.pty_output_revision())
+}
+
 struct NoRestoration<'a> {
     watermark: CancelWatermark<'a>,
-    after_stop: u64,
+    after_stop: Option<u64>,
     empty_since: Option<Instant>,
 }
 
 impl NoRestoration<'_> {
+    fn has_later_frame(&mut self, revision: u64) -> bool {
+        // An open frame at the stop boundary may finish after Esc. Its first
+        // complete observation only establishes the baseline.
+        *self.after_stop.get_or_insert(revision) != revision
+    }
+
     fn observe(&mut self, empty: bool, now: Instant, deadline: Instant) -> bool {
         if !empty || !self.watermark.has_cancellation() {
             self.empty_since = None;

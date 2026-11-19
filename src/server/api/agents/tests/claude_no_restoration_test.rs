@@ -10,12 +10,13 @@ const STREAM: &str = r#"{"type":"assistant","uuid":"thinking","parentUuid":"resu
 const CANCEL: &str = r#"{"type":"user","uuid":"cancel","parentUuid":"thinking","promptId":"prompt","sessionId":"session","version":"2.1.316","isSidechain":false,"interruptedMessageId":"11111111-2222-4333-8444-555555555555","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
 
 fn interrupted_frame(runtime: &TerminalRuntime, body: &str, bottom: &str, footer: &str) {
-    runtime.test_process_pty_bytes(
-        format!(
-            "\x1b[2J\x1b[HInterrupted · What should Claude do instead?\r\n────────────────\r\n❯ {body}\r\n{bottom}\r\n{footer}\x1b[3;3H"
-        )
-        .as_bytes(),
-    );
+    runtime.test_process_pty_bytes(interrupted_frame_bytes(body, bottom, footer).as_bytes());
+}
+
+fn interrupted_frame_bytes(body: &str, bottom: &str, footer: &str) -> String {
+    format!(
+        "\x1b[2J\x1b[HInterrupted · What should Claude do instead?\r\n────────────────\r\n❯ {body}\r\n{bottom}\r\n{footer}\x1b[3;3H"
+    )
 }
 
 // The live Claude 2.1.316 producer's cancelled API message ID was absent
@@ -25,6 +26,9 @@ enum EarlyEvidence {
     None,
     Cancel,
     Frame,
+    InFlightFrame,
+    Scroll,
+    SynchronizedFrame,
 }
 
 async fn exercise(
@@ -74,12 +78,26 @@ async fn exercise(
             writes.try_recv().is_err(),
             "Esc has not reached the fake PTY"
         );
-        if early == EarlyEvidence::Cancel {
-            append();
+        if early == EarlyEvidence::InFlightFrame {
+            let frame = interrupted_frame_bytes(body, bottom, footer);
+            runtime.test_process_pty_bytes_with_hook(frame.as_bytes(), || {
+                release.send(()).unwrap();
+                clock.wait_for_submission_check(generation);
+            });
         } else {
-            interrupted_frame(&runtime, body, bottom, footer);
+            if early == EarlyEvidence::Cancel {
+                append();
+            } else {
+                if early == EarlyEvidence::SynchronizedFrame {
+                    runtime.test_process_pty_bytes(b"\x1b[?2026h");
+                }
+                interrupted_frame(&runtime, body, bottom, footer);
+                if early == EarlyEvidence::SynchronizedFrame {
+                    assert!(runtime.synchronized_output_active());
+                }
+            }
+            release.send(()).unwrap();
         }
-        release.send(()).unwrap();
     }
     assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
     clock.wait_for_submission_check(generation);
@@ -87,8 +105,16 @@ async fn exercise(
     if early != EarlyEvidence::Cancel {
         append();
     }
-    if early != EarlyEvidence::Frame {
-        interrupted_frame(&runtime, body, bottom, footer);
+    match early {
+        EarlyEvidence::None | EarlyEvidence::Cancel => {
+            interrupted_frame(&runtime, body, bottom, footer);
+        }
+        EarlyEvidence::Scroll => {
+            runtime.scroll_up(1);
+            runtime.scroll_reset();
+        }
+        EarlyEvidence::SynchronizedFrame => runtime.test_process_pty_bytes(b"\x1b[?2026l"),
+        EarlyEvidence::Frame | EarlyEvidence::InFlightFrame => {}
     }
     if restores_late {
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -338,6 +364,71 @@ async fn claude_no_restoration_rejects_a_reused_or_off_chain_api_message() {
     for row in [off_chain, &earlier_cancel] {
         reject(
             format!("{PROMPT}\n{TOOL}\n{RESULT}\n{row}\n"),
+            format!("{STREAM}\n{CANCEL}\n"),
+            EarlyEvidence::None,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_a_pty_batch_in_flight_at_the_stop_baseline() {
+    reject(
+        format!("{PROMPT}\n{TOOL}\n{RESULT}\n"),
+        format!("{STREAM}\n{CANCEL}\n"),
+        EarlyEvidence::InFlightFrame,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_scroll_without_later_pty_output() {
+    reject(
+        format!("{PROMPT}\n{TOOL}\n{RESULT}\n"),
+        format!("{STREAM}\n{CANCEL}\n"),
+        EarlyEvidence::Scroll,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_completion_of_a_pre_stop_synchronized_frame() {
+    reject(
+        format!("{PROMPT}\n{TOOL}\n{RESULT}\n"),
+        format!("{STREAM}\n{CANCEL}\n"),
+        EarlyEvidence::SynchronizedFrame,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_nonunique_parent_and_anchor_uuids() {
+    let wrong_parent = STREAM.replace(r#""parentUuid":"result""#, r#""parentUuid":"foreign""#);
+    let wrong_anchor = PROMPT.replace(r#""parentUuid":null"#, r#""parentUuid":"foreign""#);
+    let large_metadata =
+        serde_json::json!({"type":"api-request-blob","blob":"x".repeat(2 * 1024 * 1024)});
+    for older in [
+        wrong_parent.clone(),
+        wrong_anchor,
+        format!("{wrong_parent}\n{large_metadata}"),
+    ] {
+        reject(
+            format!("{older}\n{PROMPT}\n{TOOL}\n{RESULT}\n"),
+            format!("{STREAM}\n{CANCEL}\n"),
+            EarlyEvidence::None,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn claude_no_restoration_rejects_a_branch_in_the_anchored_parent_chain() {
+    let branch = STREAM.replace(r#""uuid":"thinking""#, r#""uuid":"sibling""#);
+    let mut missing_uuid: serde_json::Value = serde_json::from_str(&branch).unwrap();
+    missing_uuid.as_object_mut().unwrap().remove("uuid");
+    for extra in [missing_uuid.to_string(), branch] {
+        reject(
+            format!("{PROMPT}\n{TOOL}\n{RESULT}\n{extra}\n"),
             format!("{STREAM}\n{CANCEL}\n"),
             EarlyEvidence::None,
         )

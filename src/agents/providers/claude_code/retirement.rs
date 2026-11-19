@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeSet,
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -211,28 +212,33 @@ impl CancelWatermark<'_> {
             || field(&cancel.value, "promptSource").is_some()
             || field(&cancel.value, "sourceToolAssistantUUID").is_some()
             || uuid == message_id
-            || !novel_cancellation_ids(history, &rows, cancel, uuid, message_id)
         {
             return None;
         }
         let mut parent = field(&cancel.value, "parentUuid")?;
+        let mut walked = BTreeSet::new();
         let mut tool_result = None;
         let mut progressed = false;
         for row in rows.iter().filter(main).rev().skip(1) {
             let value = &row.value;
+            let matches_parent = field(value, "uuid") == Some(parent);
+            if matches_parent && !walked.insert(parent) {
+                return None;
+            }
             // Any newer typed turn in the main transcript makes the cancel ambiguous.
             if field(value, "type") == Some("user") && field(value, "promptSource").is_some() {
-                return (field(value, "uuid") == Some(parent)
+                return (matches_parent
                     && field(value, "version") == Some(VERSION)
                     && field(value, "promptId") == Some(self.anchor.prompt.as_str())
                     && field(value, "promptSource") == Some("typed")
                     && field(value, "turnOrigin") == Some("human")
                     && row.offset < self.offset
                     && progressed
+                    && unambiguous_transcript(history, &rows, cancel, uuid, message_id, &walked)
                     && self.file.metadata().ok()?.len() == end)
                     .then_some(ToolProgressCancellation);
             }
-            if field(value, "uuid") != Some(parent) {
+            if !matches_parent {
                 continue;
             }
             if field(value, "version") != Some(VERSION)
@@ -261,15 +267,26 @@ impl CancelWatermark<'_> {
 /// Claude 2.1.316 fills interruptedMessageId from the in-flight API stream.
 /// That stream may leave no assistant row with its message.id. Bind the
 /// novel ID to the anchored parent chain of this fresh cancellation row.
-fn novel_cancellation_ids(
+fn unambiguous_transcript(
     history: &[u8],
     rows: &[Row],
     cancel: &Row,
-    uuid: &str,
+    cancel_uuid: &str,
     message_id: &str,
+    walked: &BTreeSet<&str>,
 ) -> bool {
-    let conflicts = |row: &Value| {
-        field(row, "uuid") == Some(uuid)
+    let session = field(&cancel.value, "sessionId");
+    let mut seen = BTreeSet::new();
+    let mut conflicts = |row: &Value| {
+        let uuid = field(row, "uuid");
+        let on_chain = uuid.and_then(|id| walked.get(id).copied());
+        let sibling = on_chain.is_none()
+            && field(row, "sessionId") == session
+            && row.get("isSidechain").and_then(Value::as_bool) == Some(false)
+            && field(row, "parentUuid").is_some_and(|parent| walked.contains(parent));
+        uuid == Some(cancel_uuid)
+            || on_chain.is_some_and(|id| !seen.insert(id))
+            || sibling
             || [
                 "uuid",
                 "parentUuid",
@@ -293,6 +310,7 @@ fn novel_cancellation_ids(
         && history
             .split_inclusive(|byte| *byte == b'\n')
             .all(|line| serde_json::from_slice::<Value>(line).is_ok_and(|row| !conflicts(&row)))
+        && seen.len() == walked.len()
 }
 
 fn field<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
