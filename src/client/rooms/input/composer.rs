@@ -215,7 +215,7 @@ impl BusUi {
                     usize::from(self.view.composer.height.saturating_sub(1).max(1)),
                 );
             }
-            (KeyCode::Char('r' | 'R'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('t' | 'T'), KeyModifiers::CONTROL) => {
                 self.cycle_history_search();
             }
             (KeyCode::Char('r' | 'R'), modifiers)

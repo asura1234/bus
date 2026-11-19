@@ -62,6 +62,17 @@ pub(super) struct Rpc {
     deadline: Instant,
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub(super) enum StartupProbe {
+    Idle = 3,
+    EndpointUnavailable,
+    LoadedThreadUnavailable,
+    SessionMismatch,
+    ActiveTurn,
+    ThreadStatusUnavailable,
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 impl Rpc {
     pub(super) fn connect(path: &Path, deadline: Instant) -> io::Result<Self> {
@@ -254,6 +265,41 @@ impl Rpc {
         }
     }
 
+    fn loaded_thread(&mut self) -> io::Result<String> {
+        let loaded = self.call("thread/loaded/list", json!({"limit":2}))?;
+        let threads = loaded["data"]
+            .as_array()
+            .ok_or_else(|| io::Error::other("Codex loaded thread list is invalid"))?;
+        if threads.len() != 1 || !loaded["nextCursor"].is_null() {
+            return Err(io::Error::other(
+                "Codex initial input requires exactly one loaded TUI thread",
+            ));
+        }
+        threads[0]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| io::Error::other("Codex loaded thread has no identity"))
+    }
+
+    /// Startup proof uses only bounded metadata, never input or thread resume.
+    pub(super) fn probe_startup(socket: &Path, deadline: Instant, expected: &str) -> StartupProbe {
+        let Ok(mut rpc) = Self::connect(socket, deadline) else {
+            return StartupProbe::EndpointUnavailable;
+        };
+        let Ok(thread) = rpc.loaded_thread() else {
+            return StartupProbe::LoadedThreadUnavailable;
+        };
+        if !expected.is_empty() && expected != thread {
+            return StartupProbe::SessionMismatch;
+        }
+        match rpc.active_turn(&thread, false) {
+            Ok(None) => StartupProbe::Idle,
+            Ok(Some(_)) => StartupProbe::ActiveTurn,
+            Err(_) => StartupProbe::ThreadStatusUnavailable,
+        }
+    }
+
     pub(super) fn prompt(
         &mut self,
         thread: &str,
@@ -264,20 +310,7 @@ impl Rpc {
     ) -> io::Result<Value> {
         let (thread, active) = (|| -> io::Result<_> {
             let thread = if thread.is_empty() {
-                let loaded = self.call("thread/loaded/list", json!({"limit":2}))?;
-                let threads = loaded["data"]
-                    .as_array()
-                    .ok_or_else(|| io::Error::other("Codex loaded thread list is invalid"))?;
-                if threads.len() != 1 || !loaded["nextCursor"].is_null() {
-                    return Err(io::Error::other(
-                        "Codex initial input requires exactly one loaded TUI thread",
-                    ));
-                }
-                threads[0]
-                    .as_str()
-                    .filter(|id| !id.is_empty())
-                    .ok_or_else(|| io::Error::other("Codex loaded thread has no identity"))?
-                    .to_owned()
+                self.loaded_thread()?
             } else {
                 thread.to_owned()
             };

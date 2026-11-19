@@ -188,7 +188,7 @@ impl BusUi {
         match (code, modifiers) {
             (KeyCode::Esc, _) => self.cancel_search(),
             (KeyCode::Enter, _) => self.history_search = None,
-            (KeyCode::Char('r' | 'R'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('t' | 'T'), KeyModifiers::CONTROL) => {
                 if let Some(search) = &mut self.history_search {
                     search.selected = search.selected.saturating_add(1);
                 }

@@ -67,6 +67,8 @@ pub(super) struct HostOptions {
     pub graphics: super::session::Graphics,
     /// Start the scratch Bus with `--yolo`, as a developer would.
     pub yolo: bool,
+    /// Exercise a normal runtime session with dev commands disabled.
+    pub no_dev: bool,
 }
 
 /// Entry of the hidden `bus --dev tui __host` process.
@@ -144,7 +146,9 @@ fn start(
         .openpty(pty_size(options.cols, options.rows))
         .map_err(|e| e.to_string())?;
     let mut command = CommandBuilder::new(&binary);
-    command.arg("--dev");
+    if !options.no_dev {
+        command.arg("--dev");
+    }
     if options.yolo {
         command.arg("--yolo");
     }
@@ -205,6 +209,7 @@ fn start(
         home: paths.home_dir(),
         graphics: options.graphics,
         yolo: options.yolo,
+        no_dev: options.no_dev,
     };
     Ok(Host {
         paths: paths.clone(),
@@ -491,7 +496,13 @@ impl Host {
         let mut report =
             json!({"ok": true, "session": self.info.name, "run_dir": self.info.run_dir});
         if self.exited().is_none() {
-            report["quit"] = json!(self.bus(&["quit"]).ok());
+            // The control quit command is dev-only. Normal sessions use the
+            // same terminal chord as the developer so drafts are saved too.
+            report["quit"] = json!(if self.info.no_dev {
+                self.write(b"\x11").is_ok()
+            } else {
+                self.bus(&["quit"]).ok()
+            });
             let deadline = Instant::now() + Duration::from_secs(8);
             while self.exited().is_none() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(100));

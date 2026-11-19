@@ -1,5 +1,5 @@
 //! Prepare a shell-owned shared runtime; Bus owns only its lifetime channel.
-use super::rpc::Rpc;
+use super::{is_standalone, rpc::Rpc};
 use std::{
     fs, io,
     os::unix::{fs::DirBuilderExt, net::UnixListener},
@@ -24,6 +24,7 @@ struct Session {
     directory: PathBuf,
     socket: PathBuf,
     rpc: Option<Rpc>,
+    startup: super::startup::Readiness,
     lifetime: Option<mpsc::Sender<()>>,
     watcher: Option<std::thread::JoinHandle<()>>,
 }
@@ -88,7 +89,7 @@ impl Runtime {
         expected_turn: Option<&str>,
     ) -> Option<io::Result<()>> {
         let session = self.session.as_mut()?;
-        if session.standalone() {
+        if is_standalone(&session.directory) {
             return None;
         }
         let started = Instant::now();
@@ -109,6 +110,15 @@ impl Runtime {
         Some(result)
     }
 
+    /// Nonblocking startup admission; native metadata is read on a worker.
+    pub(crate) fn startup_ready(&self, thread: &str, frontend_idle: bool) -> bool {
+        self.session.as_ref().is_none_or(|session| {
+            session
+                .startup
+                .ready(&session.socket, &session.directory, thread, frontend_idle)
+        })
+    }
+
     pub(crate) fn has_session(&self) -> bool {
         self.session.is_some()
     }
@@ -120,7 +130,7 @@ impl Runtime {
         deadline: Instant,
     ) -> Option<io::Result<Option<String>>> {
         let session = self.session.as_mut()?;
-        if session.standalone() {
+        if is_standalone(&session.directory) {
             return None;
         }
         let result = session
@@ -223,13 +233,10 @@ impl Session {
             socket: directory.join("s"),
             directory,
             rpc: None,
+            startup: Default::default(),
             lifetime: Some(stop),
             watcher: Some(watcher),
         })
-    }
-
-    fn standalone(&self) -> bool {
-        fs::read(self.directory.join("mode")).is_ok_and(|mode| mode == b"standalone")
     }
 
     fn connection(&mut self, deadline: Instant) -> io::Result<&mut Rpc> {
@@ -271,6 +278,7 @@ pub(crate) mod test_support {
                 directory: socket.parent().unwrap().to_owned(),
                 socket,
                 rpc: None,
+                startup: super::super::startup::Readiness::confirmed(),
                 lifetime: None,
                 watcher: None,
             }),

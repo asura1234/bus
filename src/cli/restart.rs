@@ -1054,6 +1054,9 @@ mod tests {
         assert!(text.contains("pause"), "{text}");
         assert!(text.contains("slot locks"), "{text}");
         assert!(text.contains("--confirm"), "{text}");
+        assert!(text.contains("Ctrl+R"), "{text}");
+        assert!(text.contains("Ctrl+T"), "{text}");
+        assert!(text.contains("no dialog opens"), "{text}");
         assert!(text.contains("log.jsonl"), "{text}");
         assert!(text.contains("--dev"), "{text}");
         assert!(text.contains("keep this session"), "{text}");

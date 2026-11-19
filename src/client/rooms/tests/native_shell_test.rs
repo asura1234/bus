@@ -1108,3 +1108,73 @@ fn rename_preview_keeps_the_field_cursor_when_the_pane_has_none() {
         "a pane without a caret must not erase the rename field's"
     );
 }
+
+#[test]
+fn legacy_r_control_byte_restarts_but_reported_shift_opens_new_room() {
+    let (ui, _, _) = fixture();
+    let mut shell = shell_with(ui);
+    let legacy = shell.handle_input_bytes(b"\x12");
+    assert!(matches!(
+        legacy.actions.as_slice(),
+        [crate::client::compositor::ClientShellAction::RestartBus]
+    ));
+    assert!(shell.bus.as_ref().unwrap().form.is_none());
+
+    for shifted in [b"\x1b[114;6u".as_slice(), b"\x1b[27;6;82~"] {
+        let (ui, _, _) = fixture();
+        let mut shell = shell_with(ui);
+        assert!(shell.handle_input_bytes(shifted).actions.is_empty());
+        assert!(matches!(
+            shell.bus.as_ref().unwrap().form,
+            Some(forms::Form::Room(_))
+        ));
+    }
+}
+
+#[test]
+fn ctrl_r_is_global_in_room_terminal_and_overlays_without_forwarding() {
+    for view in ["room", "terminal", "help", "rename", "deletion"] {
+        let (mut ui, room, agent) = fixture();
+        ui.locals
+            .get_mut(&room)
+            .unwrap()
+            .text
+            .insert("untouched draft");
+        match view {
+            "terminal" => {
+                ui.open_terminal(agent);
+                ui.receive_event(BusEvent::TerminalFocused {
+                    agent,
+                    pane_id: "pane_1".into(),
+                });
+            }
+            "help" => ui.form = Some(forms::Form::Help { scroll: 0 }),
+            "rename" => key(&mut ui, KeyCode::F(2), KeyModifiers::NONE),
+            "deletion" => ui.action(render::Action::Delete(
+                super::deletion::DeleteTarget::Agent(agent),
+            )),
+            _ => {}
+        }
+        let mut shell = shell_with(ui);
+        let outcome = shell.handle_input_bytes(b"\x12");
+        assert!(
+            matches!(
+                outcome.actions.as_slice(),
+                [crate::client::compositor::ClientShellAction::RestartBus]
+            ),
+            "{view}"
+        );
+        assert!(!outcome.detach);
+        assert!(
+            !outcome.requests.iter().any(|r| matches!(
+                r,
+                crate::protocol::wire::ClientMessage::ClientShellPaneInput { .. }
+            )),
+            "{view}"
+        );
+        assert_eq!(
+            shell.bus.as_ref().unwrap().locals[&room].text.text,
+            "untouched draft"
+        );
+    }
+}

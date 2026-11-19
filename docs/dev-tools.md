@@ -47,6 +47,16 @@ cells; the TUI driver clicks them by name. Only the dev variant (./run dev) has 
 ui hold-acks and ui release-acks hold and release RoomCreated, AgentAdded and
 DevFocusRequested before UI dispatch for deterministic scratch ordering tests. ui hits reports
 holding_acknowledgements and held_acknowledgements so the test can confirm the hold without sleeps.
+
+In a TUI launched with `--dev`, **Ctrl+R** starts the same handoff as
+`bus --dev restart --confirm`; the keypress is its confirmation, with no dialog.
+Without `--dev` it refuses with ``dev tool: run `bus --dev restart --confirm` ``
+in the client log and leaves the session running. Prompt-history search and
+cycling use **Ctrl+T**; **Ctrl+Q** still saves and quits. **Ctrl+Shift+R** adds
+a room when the terminal reports Shift separately. If both R shortcuts arrive
+as the same legacy control byte, Bus treats it as **Ctrl+R**; use **ROOMS +** to
+add a room on those terminals.
+
 restart (`bus --dev restart --confirm`) builds the checkout that owns this
 executable with `cargo build --locked --bin bus` (and `--features dev-tools` when
 this build has it), then saves and quits the whole Bus and relaunches that binary

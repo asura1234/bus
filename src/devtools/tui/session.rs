@@ -89,6 +89,8 @@ pub(super) struct SessionInfo {
     pub graphics: Graphics,
     #[serde(default)]
     pub yolo: bool,
+    #[serde(default)]
+    pub no_dev: bool,
 }
 
 /// Who reserved a session directory: the token its host must present, and
@@ -758,6 +760,19 @@ fn state_home() -> PathBuf {
     std::env::home_dir()
         .map(|home| home.join(".local").join("state"))
         .unwrap_or_else(std::env::temp_dir)
+}
+
+pub(super) fn timestamp() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    format!(
+        "{:04}{:02}{:02}-{:02}{:02}{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    )
 }
 
 #[cfg(test)]

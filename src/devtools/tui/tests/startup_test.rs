@@ -47,6 +47,7 @@ impl Fixture {
                 home: paths.home_dir(),
                 graphics: Graphics::default(),
                 yolo: false,
+                no_dev: false,
             })
             .unwrap();
         Self {
