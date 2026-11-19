@@ -914,7 +914,7 @@ fn autonomous_started(f: &mut Fixture, agent: AgentId, turn: &str) {
     f.worker.consume_callbacks(agent, &directory).unwrap();
 }
 
-fn add_autonomous(f: &mut Fixture) -> AgentId {
+fn add_autonomous(f: &mut Fixture, authenticated: bool) -> AgentId {
     let mut state = f.worker.state.clone();
     let id = state
         .create_agent(f.room, "autonomous", Provider::Cursor, f.dir.clone(), None)
@@ -936,7 +936,9 @@ fn add_autonomous(f: &mut Fixture) -> AgentId {
         .unwrap();
     state.observe_stop_activity(id, Some((4, 10)));
     f.worker.save(state).unwrap();
-    autonomous_started(f, id, "autonomous-turn");
+    if authenticated {
+        autonomous_started(f, id, "autonomous-turn");
+    }
     id
 }
 
@@ -952,7 +954,7 @@ fn autonomous_follower_has_a_durable_stop_intent_before_earlier_recipient_dispat
     ] {
         let mut f = Fixture::new(Provider::Codex);
         running(&mut f, "old work", "turn-1");
-        let autonomous = add_autonomous(&mut f);
+        let autonomous = add_autonomous(&mut f, true);
         if stale_at_admission {
             let mut state = f.worker.state.clone();
             state.observe_stop_activity(autonomous, activity);
@@ -1018,7 +1020,7 @@ fn autonomous_follower_has_a_durable_stop_intent_before_earlier_recipient_dispat
 #[test]
 fn autonomous_ambiguous_stop_claim_survives_coordinator_reopen() {
     let mut f = Fixture::new(Provider::Codex);
-    let autonomous = add_autonomous(&mut f);
+    let autonomous = add_autonomous(&mut f, true);
     f.worker.transport = Box::new(FailAtFirstStop(f.native.clone()));
     let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"first"});
     let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send(&mut f, params)));
@@ -1039,4 +1041,97 @@ fn autonomous_ambiguous_stop_claim_survives_coordinator_reopen() {
     assert_eq!(result.result["interrupts"][0]["outcome"], "unknown");
     assert_eq!(stop_keys(&f).len(), 1);
     assert_eq!(f.worker.state.queued_requests(autonomous).len(), 2);
+}
+
+struct AutonomousPoll(Arc<Mutex<Vec<Method>>>, schema::AgentInfo);
+
+impl Transport for AutonomousPoll {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(method, Method::AgentListWithDetectionContext(_)) {
+            return Ok(ResponseResult::AgentList {
+                agents: vec![self.1.clone()],
+            });
+        }
+        Native(self.0.clone()).request(method)
+    }
+}
+
+fn poll_autonomous(f: &mut Fixture, status: &str, seq: u64, skipped: bool, dialog: Option<&str>) {
+    let info = serde_json::from_value(json!({
+        "generation":4, "state_change_seq":seq, "terminal_id":"autonomous-terminal",
+        "pane_id":"autonomous-pane", "agent":"cursor", "agent_status":status,
+        "screen_detection_skipped":skipped, "dialog_id":dialog, "native_ready":true,
+        "interactive_ready":true, "workspace_id":"w", "tab_id":"t",
+        "focused":false, "revision":seq,
+        "agent_session":{"source":"bus","agent":"cursor","kind":"id","value":"autonomous-session"}
+    }))
+    .unwrap();
+    f.worker.transport = Box::new(AutonomousPoll(f.native.clone(), info));
+    f.worker.poll().unwrap();
+}
+
+#[test]
+fn verified_idle_retires_only_the_previous_unbound_autonomous_stop() {
+    let mut f = Fixture::new(Provider::Codex);
+    let autonomous = add_autonomous(&mut f, false);
+    f.worker.transport = Box::new(FailAtFirstStop(f.native.clone()));
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"first"});
+    let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send(&mut f, params)));
+    assert!(crash.is_err());
+    assert_eq!(stop_keys(&f).len(), 1);
+
+    reopen_after_interrupt(&mut f);
+    assert_eq!(
+        f.worker.state.agent(autonomous).unwrap().status,
+        RuntimeStatus::Unavailable
+    );
+    poll_autonomous(&mut f, "working", 10, false, None);
+    autonomous_started(&mut f, autonomous, "late-first-start");
+    for (status, skipped, dialog) in [
+        ("working", false, None),
+        ("unknown", true, None),
+        ("idle", true, None),
+        ("idle", false, Some("approval")),
+    ] {
+        poll_autonomous(&mut f, status, 10, skipped, dialog);
+        poll_autonomous(&mut f, "working", 10, false, None);
+        let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"same turn"});
+        let result = send(&mut f, params);
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.result["interrupts"][0]["outcome"], "unknown");
+        assert_eq!(stop_keys(&f).len(), 1);
+    }
+
+    poll_autonomous(&mut f, "idle", 11, false, None);
+    reopen_after_interrupt(&mut f);
+    poll_autonomous(&mut f, "working", 12, false, None);
+    autonomous_started(&mut f, autonomous, "later-turn");
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"later send"});
+    let result = send(&mut f, params);
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["stage"], "queued");
+    assert_eq!(result.result["interrupts"][0]["outcome"], "interrupting");
+    assert_eq!(
+        stop_keys(&f),
+        [vec!["ctrl+c".to_string()], vec!["ctrl+c".to_string()]]
+    );
+    let follower = sent_request(&result);
+    assert_eq!(
+        f.worker.state.queued_requests(autonomous).last(),
+        Some(&follower)
+    );
+    let native = f.native.lock().unwrap();
+    let last = native
+        .iter()
+        .rev()
+        .find_map(|method| match method {
+            Method::AgentSendKeys(params) => Some(params),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        last.expected_terminal_id.as_deref(),
+        Some("autonomous-terminal")
+    );
+    assert_eq!(last.expected_activity.unwrap().state_change_seq, 12);
 }

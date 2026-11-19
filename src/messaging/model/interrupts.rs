@@ -106,6 +106,31 @@ impl BusState {
         }
     }
 
+    /// A coherent native idle sample delimits an autonomous episode even if
+    /// its stop could not be correlated to an authenticated provider turn.
+    pub(crate) fn retire_unbound_autonomous_stop(&mut self, id: AgentId) {
+        let Some(owner) = self
+            .agents
+            .get_mut(&id)
+            .filter(|agent| agent.current_request.is_none())
+        else {
+            return;
+        };
+        let matches_episode = owner.autonomous_stop.claim.as_ref().is_some_and(|claim| {
+            claim.target.is_none()
+                && claim.provider_turn_id.is_none()
+                && claim.identity.launch_id == owner.runtime_identity.launch_id
+                && claim.identity.terminal_id == owner.runtime_identity.terminal_id
+                && claim.identity.session_id.as_ref().is_none_or(|session| {
+                    owner.runtime_identity.session_id.as_ref() == Some(session)
+                })
+        });
+        if matches_episode {
+            owner.autonomous_stop = AutonomousStopState::default();
+            owner.interrupt_pending = false;
+        }
+    }
+
     pub(crate) fn autonomous_callback_turn(
         &self,
         callback: &super::ProviderCallback,

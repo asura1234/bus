@@ -84,23 +84,29 @@ impl Worker {
                     .observe_status(agent.id, status, observed_at_ms)
                     .map_err(|e| e.to_string())?;
             }
-            let activity = info
-                .filter(|info| {
-                    info.native_ready
-                        && !info.screen_detection_skipped
-                        && info.generation != 0
-                        && info.state_change_seq != 0
-                        && agent.runtime_identity.terminal_id.as_ref() == Some(&info.terminal_id)
-                        && agent.runtime_identity.pane_id.as_ref() == Some(&info.pane_id)
-                        && agent.runtime_identity.session_id.as_deref()
-                            == info
-                                .agent_session
-                                .as_ref()
-                                .map(|session| session.value.as_str())
-                        && matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked)
-                })
+            let stop_observation = info.filter(|info| {
+                info.native_ready
+                    && !info.screen_detection_skipped
+                    && info.generation != 0
+                    && info.state_change_seq != 0
+                    && agent.runtime_identity.terminal_id.as_ref() == Some(&info.terminal_id)
+                    && agent.runtime_identity.pane_id.as_ref() == Some(&info.pane_id)
+                    && agent.runtime_identity.session_id.as_deref()
+                        == info
+                            .agent_session
+                            .as_ref()
+                            .map(|session| session.value.as_str())
+            });
+            let activity = stop_observation
+                .filter(|_| matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked))
                 .map(|info| (info.generation, info.state_change_seq));
             state.observe_stop_activity(agent.id, activity);
+            if agent.current_request.is_none()
+                && status == RuntimeStatus::Idle
+                && stop_observation.is_some_and(|info| info.dialog_id.is_none())
+            {
+                state.retire_unbound_autonomous_stop(agent.id);
+            }
             Self::observe_grok_banner(&mut state, agent, info, observed_at_ms)?;
             let dialog_id = info.and_then(|info| info.dialog_id.clone());
             if info.is_some_and(|info| !info.screen_detection_skipped) {
