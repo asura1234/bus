@@ -58,8 +58,11 @@ fn multi_recipient_delivery(provider: Provider) {
     let single_message = single.request(single_id).unwrap().prompt.id.0;
     assert_eq!(
         single.render_request_payload(single_id).unwrap(),
-        format!("[Bus message {single_message} from you]\nsingle task"),
-        "{provider:?} single-recipient header must stay unchanged"
+        format!(
+            "[Bus message {single_message} from you (room {})]\nsingle task",
+            room.0
+        ),
+        "{provider:?} single-recipient header must keep the request room"
     );
     let requests = state
         .submit_message_from(
@@ -76,8 +79,10 @@ fn multi_recipient_delivery(provider: Provider) {
     let message = state.request(requests[0]).unwrap().prompt.id.0;
     worker.save(state).unwrap();
     worker.submit_ready().unwrap();
-    let expected =
-        format!("[Bus message {message} from you to app master 2, bus master 2]\ncoordinate once");
+    let expected = format!(
+        "[Bus message {message} from you (room {}) to app master 2, bus master 2]\ncoordinate once",
+        room.0
+    );
     assert_eq!(
         prompts.lock().unwrap().as_slice(),
         std::slice::from_ref(&expected),

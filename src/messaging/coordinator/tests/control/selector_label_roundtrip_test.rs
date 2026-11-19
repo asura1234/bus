@@ -218,7 +218,7 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
             .lines()
             .filter(|line| {
                 line.starts_with("[Bus message ")
-                    && line.ends_with(&format!("from agent {}]", sender.0))
+                    && line.ends_with(&format!("from agent {} (room {})]", sender.0, room.0))
             })
             .count(),
         2,

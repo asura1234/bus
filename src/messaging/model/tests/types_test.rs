@@ -657,7 +657,10 @@ fn deliverable_messages_carry_a_short_header_and_bus_notices_carry_none() {
     let payload = state.render_request_payload(developer).unwrap();
     assert_eq!(
         payload,
-        format!("[Bus message {message} from you]\nreview the change")
+        format!(
+            "[Bus message {message} from you (room {})]\nreview the change",
+            room.0
+        )
     );
     assert!(!payload.contains("answer with bus send"), "{payload}");
     assert!(!payload.contains("stage:"), "{payload}");
@@ -776,13 +779,15 @@ fn multi_recipient_batched_headers_keep_each_messages_own_recipients() {
     let payload = state.coalesce_queue(first).unwrap();
     assert!(
         payload.contains(&format!(
-            "[Bus message {first_message} from you to reviewer, builder]\nshared task"
+            "[Bus message {first_message} from you (room {}) to reviewer, builder]\nshared task",
+            room.0
         )),
         "{payload}"
     );
     assert!(
         payload.contains(&format!(
-            "[Bus message {second_message} from you]\nprivate followup"
+            "[Bus message {second_message} from you (room {})]\nprivate followup",
+            room.0
         )),
         "{payload}"
     );
