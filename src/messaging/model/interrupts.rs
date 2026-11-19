@@ -56,6 +56,20 @@ pub(crate) struct SendInterruptOutcome {
 }
 
 impl SendInterrupt {
+    fn autonomous(owner: &super::RoomAgent) -> Self {
+        let episode = &owner.autonomous_stop;
+        Self {
+            target: None,
+            activity: episode
+                .activity
+                .filter(|activity| episode.turn_activity.as_ref() == Some(activity)),
+            identity: owner.runtime_identity.clone(),
+            submission_boundary: None,
+            submission_status_revision: 0,
+            provider_turn_id: episode.provider_turn_id.clone(),
+        }
+    }
+
     pub(crate) fn replayable(&self) -> bool {
         self.target.is_some()
             || (self.activity.is_some()
@@ -87,22 +101,18 @@ impl BusState {
         if owner.interrupt_pending {
             return None;
         }
-        let target = owner.current_request.and_then(|id| self.request(id));
-        if target.is_none() && !self.needs_interrupt_stop(owner) {
-            return None;
-        }
+        let Some(target) = owner.current_request.and_then(|id| self.request(id)) else {
+            return self
+                .needs_interrupt_stop(owner)
+                .then(|| SendInterrupt::autonomous(owner));
+        };
         Some(SendInterrupt {
-            target: target.map(|request| request.id),
-            activity: owner.autonomous_stop.activity.filter(|activity| {
-                target.is_none() && owner.autonomous_stop.turn_activity.as_ref() == Some(activity)
-            }),
+            target: Some(target.id),
+            activity: None,
             identity: owner.runtime_identity.clone(),
-            submission_boundary: target.and_then(|row| row.submission_boundary),
-            submission_status_revision: target.map_or(0, |row| row.submission_status_revision),
-            provider_turn_id: target.map_or_else(
-                || owner.autonomous_stop.provider_turn_id.clone(),
-                |row| row.provider_turn_id.clone(),
-            ),
+            submission_boundary: target.submission_boundary,
+            submission_status_revision: target.submission_status_revision,
+            provider_turn_id: target.provider_turn_id.clone(),
         })
     }
 
@@ -222,15 +232,35 @@ impl BusState {
         recipient: AgentId,
         intent: &SendInterrupt,
     ) -> bool {
-        let claim = match intent.target {
-            Some(id) => self
-                .request(id)
-                .and_then(|row| row.send_interrupt_claim.as_ref()),
-            None => self
-                .agent(recipient)
-                .and_then(|agent| agent.autonomous_stop.claim.as_ref()),
+        let owner = self.agent(recipient);
+        let Some(id) = intent.target else {
+            return owner
+                .and_then(|owner| owner.autonomous_stop.claim.as_ref())
+                .is_some_and(|claim| claim.same_turn(intent));
         };
-        claim.is_some_and(|claim| claim.same_turn(intent))
+        let Some(row) = self.request(id) else {
+            return false;
+        };
+        if row
+            .send_interrupt_claim
+            .as_ref()
+            .is_some_and(|claim| claim.same_turn(intent))
+        {
+            return true;
+        }
+        // A provisional join may still be in the autonomous episode that
+        // already received a stop. A lost native receipt leaves it provisional.
+        row.phase == RequestPhase::Submitting
+            && !row.trusted_start_bound
+            && owner
+                .filter(|owner| owner.current_request == Some(id))
+                .is_some_and(|owner| {
+                    owner
+                        .autonomous_stop
+                        .claim
+                        .as_ref()
+                        .is_some_and(|claim| claim.same_turn(&SendInterrupt::autonomous(owner)))
+                })
     }
 
     pub(crate) fn release_send_interrupt_claim(

@@ -1418,3 +1418,173 @@ fn busy_join_clears_the_autonomous_claim_only_after_positive_ownership() {
         }
     }
 }
+
+fn assert_provisional_stop_was_deduplicated(
+    state: &crate::messaging::model::BusState,
+    recipient: AgentId,
+) {
+    let queued = *state.queued_requests(recipient).last().unwrap();
+    let request = state.request(queued).unwrap();
+    assert_eq!(request.phase, RequestPhase::Queued);
+    assert!(
+        request.send_interrupt.is_none(),
+        "the stop outcome is settled"
+    );
+    let outcome = request.send_interrupt_outcome.as_ref().unwrap();
+    assert_eq!(outcome.outcome, "unknown");
+    assert_eq!(
+        outcome.reason.as_deref(),
+        Some("The prior stop may have reached the terminal")
+    );
+}
+
+fn recorded_stop_terminals(f: &Fixture) -> Vec<String> {
+    f.native
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|method| match method {
+            Method::AgentSendKeys(params) => params.expected_terminal_id.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+fn pending_busy_join_deduplicates_stop(composer: bool) {
+    let (mut f, autonomous, head, original) = claimed_busy_join();
+    let other = second_running(&mut f);
+    let (reply, _) = defer_busy_join(&mut f, head);
+    if composer {
+        let draft = Draft {
+            text: "queue for both recipients".into(),
+            recipient_ids: [autonomous, other].into(),
+            ..Draft::default()
+        };
+        f.worker
+            .command(BusCommand::Submit(f.room, draft), &mpsc::channel().0)
+            .unwrap();
+    } else {
+        let params = json!({
+            "room": f.room.0.to_string(), "to": ["autonomous", "second"], "text": "queue for both"
+        });
+        let result = send(&mut f, params);
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.result["stage"], "queued");
+        assert_eq!(result.result["request_ids"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            result.result["interrupts"][0]["agent_id"],
+            json!(autonomous)
+        );
+        assert_eq!(result.result["interrupts"][0]["outcome"], "unknown");
+        assert_eq!(result.result["interrupts"][1]["agent_id"], json!(other));
+        assert_eq!(result.result["interrupts"][1]["outcome"], "interrupting");
+    }
+    assert_eq!(stop_keys(&f).len(), 2);
+    assert_eq!(
+        recorded_stop_terminals(&f),
+        ["autonomous-terminal", "second-terminal"]
+    );
+    let saved = f.worker.store.load().unwrap().unwrap();
+    assert_provisional_stop_was_deduplicated(&saved, autonomous);
+    let [other_request] = saved.queued_requests(other) else {
+        panic!("the unrelated recipient's request must remain queued");
+    };
+    assert_eq!(
+        saved
+            .request(*other_request)
+            .unwrap()
+            .send_interrupt_outcome
+            .as_ref()
+            .unwrap()
+            .outcome,
+        "interrupting"
+    );
+    assert_eq!(saved.agent(autonomous).unwrap().current_request, Some(head));
+    assert_eq!(saved.request(head).unwrap().phase, RequestPhase::Submitting);
+    assert!(saved.send_interrupt_already_claimed(autonomous, &original));
+
+    reply.send(busy_join_error(None, true)).unwrap();
+    f.worker.finish_native_submissions(false);
+    assert_eq!(f.request(head).phase, RequestPhase::Queued);
+    f.worker.replay_queued_send_interrupts(f.now).unwrap();
+    assert_eq!(stop_keys(&f).len(), 2);
+}
+
+#[test]
+fn pending_busy_join_deduplicates_cli_stop_without_blocking_other_recipients() {
+    pending_busy_join_deduplicates_stop(false);
+}
+
+#[test]
+fn pending_busy_join_deduplicates_composer_stop_without_blocking_other_recipients() {
+    pending_busy_join_deduplicates_stop(true);
+}
+
+fn uncertain_busy_join(f: &mut Fixture, head: RequestId) -> String {
+    let (reply, method) = defer_busy_join(f, head);
+    reply.send(busy_join_error(None, false)).unwrap();
+    f.worker.finish_native_submissions(false);
+    assert!(f.request(head).uncertain_outcome);
+    let (Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params)) =
+        method
+    else {
+        unreachable!("defer_busy_join verified the native method");
+    };
+    params.text
+}
+
+fn uncertain_busy_join_deduplicates_stop(reopen: bool) {
+    let (mut f, autonomous, head, original) = claimed_busy_join();
+    uncertain_busy_join(&mut f, head);
+    if reopen {
+        reopen_after_interrupt(&mut f);
+        poll_autonomous(&mut f, "working", 10, false, None);
+    }
+    assert_eq!(
+        f.worker.state.agent(autonomous).unwrap().current_request,
+        Some(head)
+    );
+    assert_eq!(f.request(head).phase, RequestPhase::Submitting);
+    assert!(f.request(head).uncertain_outcome);
+    let params =
+        json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"after uncertain join"});
+    let result = send(&mut f, params);
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["stage"], "queued");
+    assert_eq!(
+        (
+            result.result["interrupts"][0]["outcome"].as_str(),
+            stop_keys(&f).len()
+        ),
+        (Some("unknown"), 1)
+    );
+    let saved = f.worker.store.load().unwrap().unwrap();
+    assert_provisional_stop_was_deduplicated(&saved, autonomous);
+    assert!(saved.send_interrupt_already_claimed(autonomous, &original));
+}
+
+#[test]
+fn uncertain_busy_join_deduplicates_stop_after_the_native_receipt() {
+    uncertain_busy_join_deduplicates_stop(false);
+}
+
+#[test]
+fn uncertain_busy_join_deduplicates_stop_after_reopen() {
+    uncertain_busy_join_deduplicates_stop(true);
+}
+
+#[test]
+fn uncertain_busy_join_allows_a_stop_after_a_new_turn_binds() {
+    let (mut f, autonomous, head, original) = claimed_busy_join();
+    let payload = uncertain_busy_join(&mut f, head);
+    autonomous_started_with_prompt(&mut f, autonomous, "new-authenticated-turn", &payload);
+    assert_eq!(
+        f.request(head).provider_turn_id.as_deref(),
+        Some("new-authenticated-turn")
+    );
+    assert!(f.request(head).trusted_start_bound);
+    assert!(!saved_autonomous_claim(&f, autonomous, &original));
+    f.worker.replay_queued_send_interrupts(f.now).unwrap();
+    assert_eq!(stop_keys(&f).len(), 1);
+    assert_later_autonomous_send(&mut f, autonomous);
+}
