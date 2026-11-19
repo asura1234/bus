@@ -322,6 +322,7 @@ impl BusState {
                         origin.session_id = runtime.session_id.clone();
                     }
                 }
+                let binds_provisional_owner = request.phase == RequestPhase::Submitting;
                 request.provider_session_id = callback.provider_session_id;
                 request.provider_turn_id = callback.provider_turn_id;
                 request.provider_prompt_id = callback.provider_prompt_id;
@@ -339,6 +340,9 @@ impl BusState {
                     self.bind_restart_continuation_group(request_id);
                 }
                 if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
+                    if binds_provisional_owner {
+                        agent.autonomous_stop = Default::default();
+                    }
                     agent.actionable_error = None;
                 }
                 self.release_parked_prepared_retry(callback.agent_id, request_id);

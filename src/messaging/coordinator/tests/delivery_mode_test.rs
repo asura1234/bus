@@ -1,6 +1,10 @@
 //! `bus send --mode`: who may choose how a message reaches a running turn.
 use super::*;
-use crate::messaging::control::Response;
+use crate::messaging::{
+    control::Response,
+    model::SendInterrupt,
+    native::{NativeCall, NativeResult},
+};
 
 fn send(fixture: &mut Fixture, params: Value) -> Response {
     // Each call is a new request: a repeated ID would replay the first receipt.
@@ -888,6 +892,10 @@ fn definite_claude_prewrite_refusal_releases_the_queued_stop_claim() {
 }
 
 fn autonomous_started(f: &mut Fixture, agent: AgentId, turn: &str) {
+    autonomous_started_with_prompt(f, agent, turn, "native work");
+}
+
+fn autonomous_started_with_prompt(f: &mut Fixture, agent: AgentId, turn: &str, prompt: &str) {
     let provider = f.worker.state.agent(agent).unwrap().provider;
     let directory = f.dir.join("callbacks/autonomous-launch");
     callbacks::initialize(
@@ -905,7 +913,7 @@ fn autonomous_started(f: &mut Fixture, agent: AgentId, turn: &str) {
         provider,
         json!({
             "hook_event_name": "beforeSubmitPrompt", "conversation_id": "autonomous-session",
-            "generation_id": turn, "prompt": "native work"
+            "generation_id": turn, "prompt": prompt
         }),
         &[],
         false,
@@ -1211,6 +1219,15 @@ fn later_autonomous_episode_stops_after_an_intervening_bus_request() {
         state
             .begin_submission(queued, "autonomous-launch", 1)
             .unwrap();
+        state
+            .record_submission(
+                queued,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: Some("autonomous-session".into()),
+                    provider_turn_id: None,
+                },
+            )
+            .unwrap();
         assert_eq!(
             state.close_interrupted(autonomous, f.now).unwrap(),
             [queued]
@@ -1237,4 +1254,167 @@ fn authenticated_autonomous_claim_deduplicates_if_its_turn_reappears_after_idle(
     assert_eq!(result.result["stage"], "queued");
     assert_eq!(result.result["interrupts"][0]["outcome"], "unknown");
     assert_eq!(stop_keys(&f).len(), 1);
+}
+
+struct DeferredBusyJoin {
+    native: Arc<Mutex<Vec<Method>>>,
+    receipt: Option<mpsc::Receiver<NativeResult>>,
+}
+
+impl Transport for DeferredBusyJoin {
+    fn request(&mut self, method: Method) -> NativeResult {
+        Native(self.native.clone()).request(method)
+    }
+
+    fn submit(&mut self, method: Method) -> NativeCall {
+        self.native.lock().unwrap().push(method);
+        NativeCall::Pending(self.receipt.take().unwrap())
+    }
+}
+
+fn claimed_busy_join() -> (Fixture, AgentId, RequestId, SendInterrupt) {
+    let mut f = Fixture::new(Provider::Codex);
+    let autonomous = add_autonomous(&mut f, true);
+    let mut state = f.worker.state.clone();
+    let original = state.send_interrupt_target(autonomous).unwrap();
+    let head = state
+        .submit_message_with(
+            f.room,
+            Draft {
+                text: "join the running turn".into(),
+                recipient_ids: [autonomous].into(),
+                ..Draft::default()
+            },
+            Author::Developer,
+            f.now,
+            false,
+        )
+        .unwrap()[0];
+    f.worker.save(state).unwrap();
+    f.worker.transport = Box::new(FailAtFirstStop(f.native.clone()));
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"stop"});
+    let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send(&mut f, params)));
+    assert!(crash.is_err());
+    assert_eq!(stop_keys(&f).len(), 1);
+    reopen_after_interrupt(&mut f);
+    poll_autonomous(&mut f, "working", 10, false, None);
+    assert!(saved_autonomous_claim(&f, autonomous, &original));
+    (f, autonomous, head, original)
+}
+
+fn saved_autonomous_claim(f: &Fixture, autonomous: AgentId, original: &SendInterrupt) -> bool {
+    f.worker
+        .store
+        .load()
+        .unwrap()
+        .unwrap()
+        .send_interrupt_already_claimed(autonomous, original)
+}
+
+fn defer_busy_join(f: &mut Fixture, head: RequestId) -> (mpsc::Sender<NativeResult>, Method) {
+    let (reply, receipt) = mpsc::channel();
+    f.worker.transport = Box::new(DeferredBusyJoin {
+        native: f.native.clone(),
+        receipt: Some(receipt),
+    });
+    f.deliver();
+    assert_eq!(f.request(head).phase, RequestPhase::Submitting);
+    let method = f.native.lock().unwrap().last().unwrap().clone();
+    match &method {
+        Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
+            assert!(params.steer);
+            assert_eq!(params.expected_terminal_id, "autonomous-terminal");
+        }
+        _ => panic!("expected a native busy join, got {method:?}"),
+    }
+    (reply, method)
+}
+
+fn busy_join_error(code: Option<&str>, definitely_rejected: bool) -> NativeResult {
+    Err(TransportError {
+        code: code.map(str::to_owned),
+        message: "simulated busy-join outcome".into(),
+        definitely_rejected,
+        timestamps: Default::default(),
+    })
+}
+
+fn refused_busy_join_preserves_autonomous_stop(code: Option<&str>) {
+    let (mut f, autonomous, head, original) = claimed_busy_join();
+    let before = f.worker.state.queued_requests(autonomous).to_vec();
+    assert_eq!(before[0], head);
+    let (reply, _) = defer_busy_join(&mut f, head);
+    let saved_while_pending = saved_autonomous_claim(&f, autonomous, &original);
+    reply.send(busy_join_error(code, true)).unwrap();
+    f.worker.finish_native_submissions(false);
+    assert_eq!(f.request(head).phase, RequestPhase::Queued);
+    assert_eq!(f.worker.state.queued_requests(autonomous), before);
+    assert_eq!(
+        f.worker.state.agent(autonomous).unwrap().current_request,
+        None
+    );
+    let saved_after_requeue = saved_autonomous_claim(&f, autonomous, &original);
+
+    reopen_after_interrupt(&mut f);
+    poll_autonomous(&mut f, "working", 10, false, None);
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"still working"});
+    let result = send(&mut f, params);
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["stage"], "queued");
+    assert_eq!(
+        (
+            result.result["interrupts"][0]["outcome"].as_str(),
+            stop_keys(&f).len()
+        ),
+        (Some("unknown"), 1)
+    );
+    assert!(saved_while_pending && saved_after_requeue);
+}
+
+#[test]
+fn definite_busy_join_refusal_preserves_the_autonomous_stop_claim() {
+    refused_busy_join_preserves_autonomous_stop(None);
+}
+
+#[test]
+fn composer_busy_join_preserves_the_autonomous_stop_claim() {
+    refused_busy_join_preserves_autonomous_stop(Some(crate::protocol::api::AGENT_COMPOSER_BUSY));
+}
+
+#[test]
+fn busy_join_clears_the_autonomous_claim_only_after_positive_ownership() {
+    for (native_confirmed, receipt_first) in [(true, true), (false, false), (false, true)] {
+        let (mut f, autonomous, head, original) = claimed_busy_join();
+        let (reply, method) = defer_busy_join(&mut f, head);
+        assert!(saved_autonomous_claim(&f, autonomous, &original));
+        let payload = match &method {
+            Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => {
+                params.text.clone()
+            }
+            _ => unreachable!(),
+        };
+        let receipt = if native_confirmed {
+            Native(Arc::default()).request(method)
+        } else {
+            busy_join_error(None, false)
+        };
+        if receipt_first {
+            reply.send(receipt).unwrap();
+            f.worker.finish_native_submissions(false);
+            assert_eq!(
+                saved_autonomous_claim(&f, autonomous, &original),
+                !native_confirmed
+            );
+        }
+        autonomous_started_with_prompt(&mut f, autonomous, "autonomous-turn", &payload);
+        assert!(f.request(head).trusted_start_bound);
+        assert_eq!(f.request(head).phase, RequestPhase::Active);
+        assert!(!saved_autonomous_claim(&f, autonomous, &original));
+        if !receipt_first {
+            reply.send(busy_join_error(None, true)).unwrap();
+            f.worker.finish_native_submissions(false);
+            assert_eq!(f.request(head).phase, RequestPhase::Active);
+            assert!(!saved_autonomous_claim(&f, autonomous, &original));
+        }
+    }
 }

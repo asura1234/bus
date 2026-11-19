@@ -83,7 +83,6 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.interrupt_pending = resuming_owner && agent.interrupt_pending;
         agent.current_request = Some(request);
-        agent.autonomous_stop = Default::default();
         if let Some(hold) = agent.provider_retry.as_mut().filter(|hold| {
             !hold.queued_ids.is_empty()
                 && (hold.lead == request || hold.queued_ids.contains(&request))
@@ -191,6 +190,7 @@ impl BusState {
             } => {
                 self.release_parked_prepared_retry(agent_id, request);
                 if let Some(agent) = self.agents.get_mut(&agent_id) {
+                    agent.autonomous_stop = Default::default();
                     agent.delivery_rejection = None;
                 }
                 let Some(request_state) = self.requests.get_mut(&request) else {
