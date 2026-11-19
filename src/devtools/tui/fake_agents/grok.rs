@@ -160,6 +160,8 @@ struct Card {
     answer: String,
 }
 
+const QUIT_CONFIRM_WINDOW: Duration = Duration::from_secs(2);
+
 struct Grok {
     cwd: PathBuf,
     session: String,
@@ -170,6 +172,8 @@ struct Grok {
     active: Option<Active>,
     card: Option<Card>,
     wake: Option<Instant>,
+    quit_armed: Option<Instant>,
+    last_screen: Option<String>,
     draft: String,
     pending: Vec<u8>,
     card_pending: Vec<u8>,
@@ -224,6 +228,8 @@ impl Grok {
             active: None,
             card: None,
             wake: None,
+            quit_armed: None,
+            last_screen: None,
             draft: String::new(),
             pending: Vec::new(),
             card_pending: Vec::new(),
@@ -390,6 +396,9 @@ impl Grok {
     }
 
     fn tick(&mut self, now: Instant) -> io::Result<()> {
+        if self.quit_armed.is_some_and(|until| now >= until) {
+            self.quit_armed = None;
+        }
         if self.active.is_none() && self.wake.is_some_and(|at| now >= at) {
             self.wake = None;
             self.emit(
@@ -657,6 +666,8 @@ impl Grok {
                 "─".repeat(58),
                 if self.active.is_some() {
                     "Esc:cancel │ "
+                } else if self.quit_armed.is_some() {
+                    "Ctrl+c:press again to quit │ "
                 } else {
                     ""
                 }
@@ -665,53 +676,89 @@ impl Grok {
         screen
     }
 
-    fn draw(&self) -> io::Result<()> {
-        self.draw_to(&mut io::stdout())
-    }
-
-    fn draw_to(&self, output: &mut impl Write) -> io::Result<()> {
+    fn draw_screen(screen: &str, output: &mut impl Write) -> io::Result<()> {
         // PTY reads can split the repaint before its footer. Keep that partial
         // composer away from the native submission guard until drawing ends.
-        write!(
-            output,
-            "\x1b[?2026h\x1b[H\x1b[2J{}\x1b[?2026l",
-            self.screen()
-        )?;
+        write!(output, "\x1b[?2026h\x1b[H\x1b[2J{screen}\x1b[?2026l")?;
         output.flush()
+    }
+
+    #[cfg(test)]
+    fn draw_to(&self, output: &mut impl Write) -> io::Result<()> {
+        Self::draw_screen(&self.screen(), output)
+    }
+
+    fn draw_if_changed(&mut self, output: &mut impl Write) -> io::Result<()> {
+        let screen = self.screen();
+        if self.last_screen.as_deref() == Some(screen.as_str()) {
+            return Ok(());
+        }
+        Self::draw_screen(&screen, output)?;
+        self.last_screen = Some(screen);
+        Ok(())
+    }
+
+    fn handle_input(&mut self, input: Input, now: Instant) -> io::Result<bool> {
+        if !matches!(input, Input::Interrupt) {
+            self.quit_armed = None;
+        }
+        match input {
+            Input::Text(text) => self.draft.push_str(&text),
+            Input::Backspace => {
+                self.draft.pop();
+            }
+            Input::KillLine => super::kill_line(&mut self.draft),
+            Input::Enter if !self.draft.trim().is_empty() => {
+                let prompt = std::mem::take(&mut self.draft);
+                self.submit(&prompt, now)?;
+            }
+            Input::Escape if self.active.is_some() => self.cancel()?,
+            Input::Interrupt if self.active.is_some() => {
+                self.quit_armed = None;
+                self.cancel()?;
+            }
+            Input::Interrupt => {
+                // Match Grok 1.0.70's two-press quit so one Ctrl+C from a
+                // developer interrupt racing turn completion never exits idle fake Grok.
+                if self.quit_armed.is_some_and(|until| now < until) {
+                    return Ok(false);
+                }
+                self.quit_armed = Some(now + QUIT_CONFIRM_WINDOW);
+            }
+            _ => {}
+        }
+        Ok(true)
     }
 
     fn read_loop(&mut self) -> io::Result<()> {
         let receiver = super::read_input();
-        self.draw()?;
+        self.read_loop_with(receiver, &mut io::stdout())
+    }
+
+    fn read_loop_with(
+        &mut self,
+        receiver: std::sync::mpsc::Receiver<Vec<u8>>,
+        output: &mut impl Write,
+    ) -> io::Result<()> {
+        self.draw_if_changed(output)?;
         loop {
-            let now = Instant::now();
-            self.tick(now)?;
+            self.tick(Instant::now())?;
+            self.draw_if_changed(output)?;
             match receiver.recv_timeout(Duration::from_millis(50)) {
                 Ok(bytes) if self.card.is_some() => self.card_key(&bytes)?,
                 Ok(bytes) => {
+                    let now = Instant::now();
                     self.pending.extend(bytes);
                     for input in drain_input(&mut self.pending) {
-                        match input {
-                            Input::Text(text) => self.draft.push_str(&text),
-                            Input::Backspace => {
-                                self.draft.pop();
-                            }
-                            Input::KillLine => super::kill_line(&mut self.draft),
-                            Input::Enter if !self.draft.trim().is_empty() => {
-                                let prompt = std::mem::take(&mut self.draft);
-                                self.submit(&prompt, now)?;
-                            }
-                            Input::Escape if self.active.is_some() => self.cancel()?,
-                            Input::Interrupt if self.active.is_some() => self.cancel()?,
-                            Input::Interrupt => return Ok(()),
-                            _ => {}
+                        if !self.handle_input(input, now)? {
+                            return Ok(());
                         }
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             }
-            self.draw()?;
+            self.draw_if_changed(output)?;
         }
     }
 }
