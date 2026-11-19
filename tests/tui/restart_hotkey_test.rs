@@ -190,6 +190,12 @@ fn non_dev_ctrl_r_refuses_like_the_cli_and_keeps_running() {
     session.ok(&["restart"]);
     let stamp = read_json(&data.join("restarts/build.json"));
     assert_eq!(stamp["dev"], false, "{stamp}");
+    session.ok(&["expect", "--text", "nondev draft survives"]);
+    let stopped = session.ok(&["stop"]);
+    assert_eq!(
+        stopped["quit"], true,
+        "normal-mode cleanup must save and quit: {stopped}"
+    );
 }
 
 #[test]

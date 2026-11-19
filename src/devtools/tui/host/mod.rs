@@ -496,7 +496,13 @@ impl Host {
         let mut report =
             json!({"ok": true, "session": self.info.name, "run_dir": self.info.run_dir});
         if self.exited().is_none() {
-            report["quit"] = json!(self.bus(&["quit"]).ok());
+            // The control quit command is dev-only. Normal sessions use the
+            // same terminal chord as the developer so drafts are saved too.
+            report["quit"] = json!(if self.info.no_dev {
+                self.write(b"\x11").is_ok()
+            } else {
+                self.bus(&["quit"]).ok()
+            });
             let deadline = Instant::now() + Duration::from_secs(8);
             while self.exited().is_none() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(100));
