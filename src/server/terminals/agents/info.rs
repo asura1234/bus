@@ -38,7 +38,7 @@ impl App {
             pane.agent_session
                 .as_ref()
                 .map(|session| session.value.as_str()),
-            pane.agent_status,
+            current.then_some(pane.agent_status),
         );
         Some(crate::protocol::api::schema::AgentInfo {
             generation: self.state.generation,
@@ -160,11 +160,12 @@ fn screen_metadata(
 
 // Screen Idle can precede Codex's native thread load. Keep that interval in
 // launch progress, before either coordinator readiness or native input admission.
+// A skipped detector frame cannot certify the first idle frontend.
 fn native_startup_ready(
     runtime: Option<&crate::terminal::TerminalRuntime>,
     agent: Option<&str>,
     session: Option<&str>,
-    status: crate::protocol::api::schema::AgentStatus,
+    status: Option<crate::protocol::api::schema::AgentStatus>,
 ) -> bool {
     #[cfg(unix)]
     if agent == Some("codex") {
@@ -175,8 +176,10 @@ fn native_startup_ready(
                     session.unwrap_or(""),
                     matches!(
                         status,
-                        crate::protocol::api::schema::AgentStatus::Idle
-                            | crate::protocol::api::schema::AgentStatus::Done
+                        Some(
+                            crate::protocol::api::schema::AgentStatus::Idle
+                                | crate::protocol::api::schema::AgentStatus::Done
+                        )
                     ),
                 )
             });

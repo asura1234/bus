@@ -1116,7 +1116,9 @@ idle then deliver, and an approval card without `--yolo`.
   logs show agent 20057 reported ready at 03:31:32.607Z, but native
   preflight rejected its first request because no unique loaded thread existed.
   Keep native startup in launch progress until bounded read-only metadata proves
-  one idle loaded thread and the frontend is idle. Do not downgrade the raw
+  one idle loaded thread and a current idle frontend. Cached Idle masked as
+  Unknown must not confirm the first readiness; an admitted launch keeps its
+  readiness through later skipped detector frames. Do not downgrade the raw
   `prompt_not_shown` or `agent_not_idle` errors globally: genuine post-readiness
   refusal still needs its WARN. Cover empty/ambiguous/active threads, a missing
   endpoint, standalone fallback, queued delivery, and a fresh runtime on the

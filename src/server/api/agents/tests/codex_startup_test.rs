@@ -222,3 +222,75 @@ async fn codex_standalone_startup_keeps_visual_readiness_without_a_native_endpoi
         "standalone readiness must not create a native endpoint"
     );
 }
+
+#[tokio::test]
+async fn codex_startup_cached_idle_requires_current_screen_evidence() {
+    use crate::terminal::runtime::native_input::{
+        NativeInput, NativeInterruptCompletion, NativePrompt,
+    };
+    struct IdleBackend(AtomicBool);
+    impl NativeInput for IdleBackend {
+        fn has_session(&self) -> bool {
+            true
+        }
+        fn startup_ready(&self, _thread: &str, frontend_idle: bool) -> bool {
+            if frontend_idle {
+                self.0.store(true, Ordering::Release);
+            }
+            self.0.load(Ordering::Acquire)
+        }
+        fn prompt(&self, _: NativePrompt<'_>) -> Option<std::io::Result<()>> {
+            None
+        }
+        fn interrupt(
+            &self,
+            _: &str,
+            _: std::time::Instant,
+        ) -> Option<std::io::Result<NativeInterruptCompletion>> {
+            None
+        }
+    }
+    fn list(app: &mut App) -> crate::protocol::api::schema::AgentInfo {
+        let response: crate::protocol::api::schema::SuccessResponse =
+            serde_json::from_str(&app.handle_agent_list("startup-cache".into())).unwrap();
+        let crate::protocol::api::schema::ResponseResult::AgentList { mut agents } =
+            response.result
+        else {
+            panic!("agent list")
+        };
+        agents.remove(0)
+    }
+    let (mut app, _, _) = provider_fixture(AgentKind::Codex, false, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .bind_native_input(Arc::new(IdleBackend(AtomicBool::new(false))));
+    let cold = list(&mut app);
+    assert!(cold.screen_detection_skipped);
+    assert_eq!(
+        cold.agent_status,
+        crate::protocol::api::schema::AgentStatus::Unknown
+    );
+    assert!(
+        !cold.interactive_ready,
+        "stale Idle cannot confirm startup: {cold:?}"
+    );
+    assert!(cold.launch_pending);
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_publish_screen_detection(AgentKind::Codex);
+    let fresh = list(&mut app);
+    assert!(!fresh.screen_detection_skipped);
+    assert!(fresh.interactive_ready);
+    assert!(!fresh.launch_pending);
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(b"\r\nrepaint");
+    let admitted = list(&mut app);
+    assert!(admitted.screen_detection_skipped);
+    assert!(
+        admitted.interactive_ready,
+        "an admitted launch retains its readiness through an inconclusive poll"
+    );
+    assert!(!admitted.launch_pending);
+}
