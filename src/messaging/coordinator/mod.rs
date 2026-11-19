@@ -116,11 +116,6 @@ pub(crate) enum BusCommand {
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),
     DeleteAgent(AgentId),
-    /// Confirmation from the local Bus UI. The control protocol cannot create this command.
-    ConfirmTerminalRetirement {
-        request: RequestId,
-        original: AgentRuntimeIdentity,
-    },
     SelectRoom(RoomId),
     LeaveRoom,
     /// Dev `room seen`; the shell marks rooms seen with SelectRoom.

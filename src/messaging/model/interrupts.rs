@@ -11,6 +11,28 @@ use super::{
 pub(crate) const INTERRUPTED: &str = "interrupted";
 
 impl BusState {
+    pub(crate) fn stage_send_interrupts(&mut self, requests: &[RequestId]) {
+        for id in requests {
+            let interrupt = self.request(*id).and_then(|request| {
+                let owner = self.agent(request.agent_id)?;
+                Some(super::types::SendInterrupt {
+                    target: owner.current_request?,
+                    identity: owner.runtime_identity.clone(),
+                })
+            });
+            if let Some(request) = self.requests.get_mut(id) {
+                request.send_interrupt = interrupt;
+            }
+        }
+    }
+
+    pub(crate) fn take_send_interrupt(&mut self, request: RequestId) -> bool {
+        self.requests
+            .get_mut(&request)
+            .and_then(|request| request.send_interrupt.take())
+            .is_some()
+    }
+
     pub(crate) fn stamp_native_delivery_epoch(
         &mut self,
         id: RequestId,
@@ -25,10 +47,6 @@ impl BusState {
         let origin = (agent.provider.uses_claude_harness()
             && identity.pane_id.as_ref() == Some(&epoch.pane_id)
             && identity.terminal_id.as_ref() == Some(&epoch.terminal_id)
-            && identity
-                .session_id
-                .as_ref()
-                .is_some_and(|id| !id.is_empty())
             && identity.launch_id == request.expected_launch_id)
             .then(|| identity.clone());
         for member in std::iter::once(id).chain(self.group_members(id)) {
@@ -132,8 +150,8 @@ impl BusState {
         Ok(())
     }
 
-    /// Resolve only after the coordinator receives guarded close/absence proof.
-    pub(crate) fn resolve_closed_interrupt_terminal(
+    /// Resolve only after native evidence proves the original provider cannot execute its draft.
+    pub(crate) fn resolve_exited_interrupt_terminal(
         &mut self,
         request: RequestId,
         identity: &super::AgentRuntimeIdentity,
@@ -431,8 +449,8 @@ impl super::Request {
         if self.native_delivery_identity.is_none()
             || self.native_delivery_identity != self.interrupt_retirement_identity
         {
-            return "Claude interrupt draft retirement is unresolved. Bus lacks the original delivery identity and cannot safely stop or close a terminal for this request. The queue remains held. Please do not resend.".into();
+            return "Claude interrupt draft retirement is unresolved. Bus lacks the original delivery identity and cannot safely stop the original provider. The queue remains held. Please do not resend.".into();
         }
-        "Claude interrupt draft retirement is unresolved. Inspect the composer and retry the guarded interrupt. To close the original terminal, choose Retire terminal under the recipient in the Bus TUI and confirm the displayed target. Closing it discards its drafts. Resume the agent afterward. Please do not resend.".into()
+        "Claude interrupt draft retirement is unresolved. Retry the guarded interrupt or use request recover to check for the original provider exit. The queue will remain held until Bus can verify the original draft is safe. Please do not resend.".into()
     }
 }

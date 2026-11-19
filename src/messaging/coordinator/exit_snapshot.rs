@@ -120,6 +120,8 @@ impl Worker {
             .agents()
             .filter(|agent| {
                 !agent.deletion_pending
+                    && self.state.interrupt_retirement_owner(agent.id).is_none()
+                    && agent.runtime_identity.pane_id.is_some()
                     && agent.exit_snapshot.as_ref().is_some_and(|snapshot| {
                         snapshot.close_pending()
                             && snapshot.launch_id == agent.runtime_identity.launch_id

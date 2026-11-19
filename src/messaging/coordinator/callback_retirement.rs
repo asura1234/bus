@@ -1,10 +1,63 @@
 //! Read callback evidence before releasing an interrupted Claude input group.
 use super::{
-    callback, callbacks, order_records, AgentId, BusState, CallbackEventKind, Parsed,
-    ProviderCallback, RuntimeStatus, Worker,
+    callback, callbacks, order_records, AgentId, BusState, CallbackEventKind, Method, Parsed,
+    ProviderCallback, ResponseResult, RuntimeStatus, Worker,
 };
 
 impl Worker {
+    /// Verify the original terminal with a read-only native lookup. A missing
+    /// pane or a different terminal at the same address can leave the original
+    /// provider running in a detached terminal.
+    pub(in crate::messaging::coordinator) fn resolve_exited_claude_input(
+        &mut self,
+        state: &mut BusState,
+        agent: AgentId,
+        now_ms: u64,
+    ) -> Result<bool, String> {
+        let Some(request) = state.interrupt_retirement_owner(agent) else {
+            return Ok(false);
+        };
+        let Some(original) = state.interrupt_retirement_origin(request).cloned() else {
+            return Ok(false);
+        };
+        let (Some(pane), Some(terminal)) = (&original.pane_id, &original.terminal_id) else {
+            return Ok(false);
+        };
+        let observation = self
+            .transport
+            .request(Method::PaneGet(super::schema::PaneTarget {
+                pane_id: pane.clone(),
+            }));
+        let original_exited = matches!(&observation, Ok(ResponseResult::PaneInfo { pane: observed })
+            if observed.pane_id == *pane && observed.terminal_id == *terminal
+                && observed.agent_process_exited
+                && original.session_id.as_ref().is_some_and(|session| {
+                    observed.agent_exited_session_id.as_ref() == Some(session)
+                })
+                && observed.agent.is_none()
+                && observed.agent_session.is_none());
+        let original_absent = !original_exited
+            && !matches!(observation, Ok(ResponseResult::PaneInfo { pane: observed })
+                if observed.terminal_id == *terminal)
+            && matches!(
+                self.transport.request(Method::TerminalRequireAbsent(
+                    super::schema::TerminalTarget {
+                        terminal_id: terminal.clone()
+                    },
+                )),
+                Ok(ResponseResult::TerminalAbsent { terminal_id }) if terminal_id == *terminal
+            );
+        if !original_exited && !original_absent {
+            return Ok(false);
+        }
+        let callbacks = self.retirement_callback_evidence(state, agent)?;
+        state.reconcile_retirement_answers(agent, &callbacks);
+        state
+            .resolve_exited_interrupt_terminal(request, &original, now_ms)
+            .map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
     pub(in crate::messaging::coordinator) fn reconcile_polled_claude_retirement(
         &self,
         state: &mut BusState,

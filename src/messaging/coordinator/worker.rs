@@ -642,6 +642,7 @@ impl Worker {
         self.expire_unconfirmed_submissions(io::now_ms())?;
         perf::COORDINATOR_LOOP.relabel("tick.notices");
         self.refresh_setting_notices()?;
+        self.replay_queued_send_interrupts(io::now_ms())?;
         perf::COORDINATOR_LOOP.relabel("tick.submit");
         self.submit_ready_while(can_deliver).inspect_err(|_| {
             tracing::warn!(

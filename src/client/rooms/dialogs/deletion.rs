@@ -3,7 +3,7 @@ use super::{render::Action, BusUi, Effect};
 use crate::{
     messaging::{
         coordinator::BusCommand,
-        model::{AgentId, AgentRuntimeIdentity, BusState, ModelError, RequestId, RoomId},
+        model::{AgentId, BusState, ModelError, RoomId},
     },
     protocol::keys::host::RawInputEvent,
 };
@@ -13,26 +13,6 @@ use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEv
 pub(super) enum DeleteTarget {
     Room(RoomId),
     Agent(AgentId),
-    TerminalRetirement {
-        agent: AgentId,
-        request: RequestId,
-        original: AgentRuntimeIdentity,
-    },
-}
-
-impl DeleteTarget {
-    pub(super) fn terminal_retirement(state: &BusState, agent: AgentId) -> Option<Self> {
-        let request = state.interrupt_retirement_owner(agent)?;
-        let original = state.interrupt_retirement_origin(request)?;
-        original.terminal_id.as_deref()?;
-        original.pane_id.as_deref()?;
-        original.session_id.as_deref()?;
-        Some(Self::TerminalRetirement {
-            agent,
-            request,
-            original: original.clone(),
-        })
-    }
 }
 
 pub(super) struct DeleteDialog {
@@ -46,9 +26,6 @@ impl BusUi {
         let exists = match &target {
             DeleteTarget::Room(id) => state.room(*id).is_some(),
             DeleteTarget::Agent(id) => state.agent(*id).is_some(),
-            DeleteTarget::TerminalRetirement { agent, .. } => {
-                DeleteTarget::terminal_retirement(state, *agent).as_ref() == Some(&target)
-            }
         };
         if !exists || self.deletion.is_some() {
             return;
@@ -64,11 +41,6 @@ impl BusUi {
                 );
                 return;
             }
-        }
-        if matches!(target, DeleteTarget::TerminalRetirement { .. }) {
-            // A stale button or another event in this input batch cannot
-            // confirm before the new target and warning have been laid out.
-            self.view.hits.clear();
         }
         self.deletion = Some(DeleteDialog {
             target,
@@ -102,25 +74,6 @@ impl BusUi {
                 BusCommand::DeleteAgent(*id),
                 self.snapshot.state.agent(*id).map(|agent| agent.room_id),
             ),
-            DeleteTarget::TerminalRetirement {
-                request, original, ..
-            } => {
-                if !self
-                    .view
-                    .hits
-                    .iter()
-                    .any(|hit| hit.action == Action::ConfirmDelete)
-                {
-                    return;
-                }
-                (
-                    BusCommand::ConfirmTerminalRetirement {
-                        request: *request,
-                        original: original.clone(),
-                    },
-                    None,
-                )
-            }
         };
         if let Some(room) = discard_submissions_in {
             // A not-yet-dispatched room prompt must not outrun deletion.

@@ -540,6 +540,12 @@ pub(crate) enum RestartResume {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct SendInterrupt {
+    pub(crate) target: RequestId,
+    pub(crate) identity: AgentRuntimeIdentity,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) id: RequestId,
     pub(crate) room_id: RoomId,
@@ -583,6 +589,9 @@ pub(crate) struct Request {
     #[serde(default)]
     pub(crate) trusted_start_bound: bool,
     pub(crate) uncertain_outcome: bool,
+    /// An independently queued send must stop this specific still-current turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) send_interrupt: Option<SendInterrupt>,
     /// Native interrupt cannot settle until its restored Bus draft is retired.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupt_retirement_pending: bool,

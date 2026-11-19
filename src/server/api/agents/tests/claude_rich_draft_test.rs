@@ -70,6 +70,17 @@ async fn confirmed_plain(
     runtime
         .submission_handle(true)
         .bind_claude_session("session");
+    submit_plain(runtime, writes, directory, payload, payload, false).await;
+}
+
+async fn submit_plain(
+    runtime: &TerminalRuntime,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    directory: &std::path::Path,
+    payload: &str,
+    rendered: &str,
+    steer: bool,
+) {
     paint(runtime, "", false, "idle");
     let completion = runtime
         .queue_observed_input_with_inspector(
@@ -82,20 +93,23 @@ async fn confirmed_plain(
             ],
             Duration::ZERO,
             None,
-            Box::new(PreservingComposer::new(
-                AgentKind::Claude,
-                payload.into(),
-                directory.to_owned(),
-                vec![
-                    Bytes::from_static(b"\x13"),
-                    Bytes::from_static(b"\x07"),
-                    Bytes::from_static(b"\x7f"),
-                ],
-            )),
+            Box::new(
+                PreservingComposer::new(
+                    AgentKind::Claude,
+                    payload.into(),
+                    directory.to_owned(),
+                    vec![
+                        Bytes::from_static(b"\x13"),
+                        Bytes::from_static(b"\x07"),
+                        Bytes::from_static(b"\x7f"),
+                    ],
+                )
+                .with_steering(steer),
+            ),
         )
         .unwrap();
     assert_eq!(key(writes).await.as_ref(), payload.as_bytes());
-    paint(runtime, payload, false, "owned");
+    paint(runtime, rendered, false, "owned");
     assert_eq!(key(writes).await.as_ref(), b"\r");
     paint(runtime, "", false, "working");
     completion
@@ -919,4 +933,96 @@ async fn lost_final_clear_receipt_uses_fresh_empty_without_another_key() {
         .retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
         .unwrap();
     assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn claude_ds_busy_and_unbound_delivery_retain_the_admitted_input_witness() {
+    // ClaudeDs uses the Claude terminal harness. Exercise its unbound observed
+    // submission and busy-steering observer without starting a provider.
+    for steer in [false, true] {
+        let directory = crate::utils::test_temp::unique_temp_path("claude-late-receipt");
+        let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        let payload = "from bus";
+        submit_plain(&runtime, &mut writes, &directory, payload, payload, steer).await;
+        let sender = runtime.submission_handle(true);
+        sender.bind_claude_session("session");
+        let mut retirement = tokio::task::spawn_blocking(move || {
+            sender.retire_claude_interrupt(
+                "session",
+                &[payload.into()],
+                Bytes::from_static(b"\x1b"),
+            )
+        });
+        tokio::select! {
+            result = &mut retirement => panic!("retirement refused before Esc: {result:?}"),
+            first_key = key(&mut writes) => assert_eq!(first_key.as_ref(), b"\x1b"),
+        }
+        paint(&runtime, payload, false, "restored");
+        clear_restored(&runtime, &mut writes, payload).await;
+        retirement.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn claude_ds_interrupt_retires_exact_soft_wrapped_restoration_after_ctrl_k() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-wrapped-retirement");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let prefix = "bus master:\n[Bus message 51165 from bus master (room 0)]";
+    let payload = format!("{prefix}\nRun the shell command sleep 20, then reply with exactly FIRST_DONE. Do not do anything else.");
+    let wrapped = format!("{prefix}\nRun the shell command sleep 20, then reply with exactly FIRST_DONE. Do not do anything\nelse.");
+    runtime
+        .submission_handle(true)
+        .bind_claude_session("session");
+    submit_plain(&runtime, &mut writes, &directory, &payload, &wrapped, false).await;
+    let sender = runtime.submission_handle(true);
+    let mut retirement = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &[payload], Bytes::from_static(b"\x1b"))
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    // The submission and restoration receipts must describe the same frame.
+    paint(&runtime, &wrapped, false, "restored");
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x01");
+    // Ctrl+A placed the cursor on the first content cell of the wrapped line.
+    runtime.test_process_pty_bytes(b"\x1b[6;1H");
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x0b");
+    paint(&runtime, &format!("{prefix}\nelse."), false, "restored");
+    tokio::select! {
+        result = &mut retirement => panic!("exact post-Ctrl+K frame was refused: {result:?}"),
+        next = key(&mut writes) => assert_eq!(next.as_ref(), b"\x15"),
+    }
+    // A new coherent frame with unrelated text must still prevent any next key.
+    paint(&runtime, "developer's draft", false, "edited");
+    assert!(retirement.await.unwrap().is_err());
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn a_busy_join_preserves_the_leads_exact_restoration_witness() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-joined-receipt");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    confirmed_plain(&runtime, &mut writes, &directory, "lead payload").await;
+    submit_plain(
+        &runtime,
+        &mut writes,
+        &directory,
+        "joined payload",
+        "joined payload",
+        true,
+    )
+    .await;
+    let sender = runtime.submission_handle(true);
+    let mut retirement = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt(
+            "session",
+            &["lead payload".into(), "joined payload".into()],
+            Bytes::from_static(b"\x1b"),
+        )
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    paint(&runtime, "lead payload", false, "restored");
+    tokio::select! {
+        result = &mut retirement => panic!("lost the lead's owned draft: {result:?}"),
+        _ = clear_restored(&runtime, &mut writes, "lead payload") => {}
+    }
+    retirement.await.unwrap().unwrap();
 }

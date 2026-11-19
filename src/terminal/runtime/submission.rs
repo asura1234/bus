@@ -117,8 +117,11 @@ pub(crate) trait SubmissionInspector: Send {
     fn always_use_editor(&self) -> bool {
         false
     }
-    /// Complete plaintext captured before Enter; opaque chips cannot prove identity.
-    fn interrupt_receipt(&self) -> Option<(String, String)> {
+    fn retains_joined_claude_receipts(&self) -> bool {
+        false
+    }
+    /// Payload and rendered body attested before Enter, with an opaque representation flag.
+    fn interrupt_receipt(&self) -> Option<(String, String, bool)> {
         None
     }
     fn interrupted_input(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> Option<String> {
@@ -145,6 +148,7 @@ pub(crate) trait SubmissionInspector: Send {
     fn diagnose_refusal(&self, _screen: &str, _phase: &'static str, _cursor: Option<(u16, u16)>) {}
     /// Indices identify the Ctrl+A, Ctrl+K, Ctrl+U sequence supplied by the API.
     /// Called only after its key was queued under the content/render lock.
+    fn retirement_clear_frame(&self, _index: usize, _screen: &str, _cursor: Option<(u16, u16)>) {}
     fn clearing(&self, _key_index: usize) {}
     /// Advances only when a new owned remainder is actually observed.
     fn cleanup_progress(&self) -> u64 {
@@ -372,27 +376,33 @@ impl SubmissionHandle {
                             submission.diagnostics.pending_paste(&result)
                         };
                         if result.is_ok() {
-                            if let Some(((payload, body), session)) =
-                                submission.inspect.interrupt_receipt().zip(lease.session())
+                            if let Some((payload, body, opaque)) =
+                                submission.inspect.interrupt_receipt()
                             {
-                                lease.retain_confirmed(super::draft_input::ConfirmedPaste {
-                                    session,
-                                    payload,
-                                    body,
-                                    stopped: false,
-                                    attempt: None,
-                                    final_clear_revision: None,
-                                    paste: super::draft_input::PendingPaste {
-                                        inspect: std::mem::replace(
-                                            &mut submission.inspect,
-                                            Box::new(|_: &str| InputObservation::Unavailable),
-                                        ),
-                                        clear: submission.clear.clone(),
-                                        since: submission.clock.now(),
-                                        entered: true,
-                                        withdraw_grace: submission.withdraw_grace,
+                                let joined = submission.inspect.retains_joined_claude_receipts();
+                                lease.retain_confirmed(
+                                    super::draft_input::ConfirmedPaste {
+                                        session: lease.session(),
+                                        payload,
+                                        body,
+                                        opaque,
+                                        stopped: false,
+                                        cleanup_started: false,
+                                        attempt: None,
+                                        final_clear_revision: None,
+                                        paste: super::draft_input::PendingPaste {
+                                            inspect: std::mem::replace(
+                                                &mut submission.inspect,
+                                                Box::new(|_: &str| InputObservation::Unavailable),
+                                            ),
+                                            clear: submission.clear.clone(),
+                                            since: submission.clock.now(),
+                                            entered: true,
+                                            withdraw_grace: submission.withdraw_grace,
+                                        },
                                     },
-                                });
+                                    joined,
+                                );
                             }
                         }
                         if let Some((since, entered)) = pending {

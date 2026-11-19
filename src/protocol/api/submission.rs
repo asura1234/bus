@@ -48,12 +48,29 @@ pub(crate) fn withdrawal_budget(text: &[u8]) -> Duration {
     WITHDRAW_GRACE.max(CLEAR_KEY_DELAY.saturating_mul(lines.saturating_mul(6)))
 }
 
+pub(crate) fn claude_retirement_budget(text: &[u8]) -> Duration {
+    Duration::from_secs(2) + withdrawal_budget(text)
+}
+
 pub(crate) fn maximum_budget(delay: Duration, text: &[u8]) -> Duration {
     confirmation_budget(delay) + withdrawal_budget(text)
 }
 
 /// The guarded calls identify their provider. An unguarded prompt may target
 /// any provider, so reserve the largest applicable paste delay for its text.
+pub(crate) fn interrupt_method_budget(method: &Method) -> Option<Duration> {
+    let Method::AgentSendKeys(params) = method else {
+        return None;
+    };
+    let guard = params.native_interrupt.as_ref()?;
+    guard.retirement_request_id?;
+    guard
+        .expected_payloads
+        .iter()
+        .map(|text| claude_retirement_budget(text.as_bytes()))
+        .max()
+}
+
 pub(crate) fn method_budget(method: &Method) -> Option<Duration> {
     let (delay, text) = match method {
         Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => (

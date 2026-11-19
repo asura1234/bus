@@ -1,6 +1,6 @@
 //! A Bus stop retires only its exact, confirmed Claude draft before settlement.
 use super::{ClearOutcome, InputObservation, ObservedSubmission, SubmissionHandle};
-use crate::terminal::runtime::draft_input::DraftInput;
+use crate::terminal::runtime::draft_input::{ConfirmedPaste, DraftInput, DraftInputLease};
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::{cell::Cell, io, path::Path, sync::atomic::Ordering, time::Duration};
@@ -39,28 +39,19 @@ impl SubmissionHandle {
         if completion_path.is_some_and(confirmed_on_disk) || lease.completed_retirement(&key) {
             return write_completion(completion_path);
         }
-        let Some(mut receipt) = lease.take_confirmed() else {
-            lease.restored();
-            return Err(io::Error::other(
-                "No confirmed Claude input receipt; request remains tracked",
-            ));
-        };
-        if receipt.session != session
-            || !payloads.contains(&receipt.payload)
-            || receipt
-                .attempt
-                .as_ref()
-                .is_some_and(|attempt| attempt != &key)
-        {
-            lease.retain_confirmed(receipt);
-            lease.restored();
-            return Err(io::Error::other("Claude input receipt identity changed"));
-        }
+        let (mut receipt, mut receipts) = take_claude_receipts(&lease, session, payloads, &key)?;
         receipt.attempt = Some(key.clone());
         let final_clear_revision = Cell::new(receipt.final_clear_revision);
         let clock = self.io.submission_clock();
-        let deadline = clock.now() + Duration::from_secs(2) + receipt.paste.withdraw_grace;
-        let submission = ObservedSubmission {
+        let deadline = clock.now()
+            + payloads
+                .iter()
+                .map(|payload| {
+                    crate::protocol::api::submission::claude_retirement_budget(payload.as_bytes())
+                })
+                .max()
+                .expect("nonempty guarded payloads");
+        let mut submission = ObservedSubmission {
             terminal: self.terminal.clone(),
             content_seq: self.content_seq.clone(),
             enter_content_seq: std::cell::Cell::new(0),
@@ -77,6 +68,7 @@ impl SubmissionHandle {
             diagnostics: Default::default(),
             startup_suggestion_open: self.startup_suggestion_open.clone(),
         };
+        let allow_joined_witness = !receipt.cleanup_started;
         let result = (|| {
             if !receipt.stopped {
                 let completion = lease.with_unedited(|| {
@@ -119,6 +111,25 @@ impl SubmissionHandle {
                     {
                         return Ok(());
                     }
+                    if available && allow_joined_witness {
+                        if let Some(body) = body.as_deref().filter(|body| *body != receipt.body) {
+                            // Choose the exact full restored draft from the same
+                            // joined turn. Once any cleanup runs, only its own
+                            // recorded partial remainder may authorize a retry.
+                            if let Some(mut selected) =
+                                take_joined_witness(&mut receipts, session, payloads, body)
+                            {
+                                std::mem::swap(
+                                    &mut submission.inspect,
+                                    &mut selected.paste.inspect,
+                                );
+                                std::mem::swap(&mut submission.clear, &mut selected.paste.clear);
+                                submission.withdraw_grace = selected.paste.withdraw_grace;
+                                receipt.body = selected.body;
+                                receipt.payload = selected.payload;
+                            }
+                        }
+                    }
                     if available
                         && body.as_ref().is_some_and(|body| {
                             body == &receipt.body || submission.inspect.interrupted_remainder(body)
@@ -132,6 +143,7 @@ impl SubmissionHandle {
                                 "Restored Claude draft ownership changed",
                             ));
                         }
+                        receipt.cleanup_started = true;
                         drop(guard);
                         return match submission
                             .clear_draft(Some(&lease), Some(&final_clear_revision))?
@@ -163,9 +175,63 @@ impl SubmissionHandle {
         receipt.final_clear_revision = final_clear_revision.get();
         receipt.paste.inspect = submission.inspect;
         receipt.paste.clear = submission.clear;
-        lease.retain_confirmed(receipt);
+        for saved in receipts {
+            lease.retain_confirmed(saved, true);
+        }
+        lease.retain_confirmed(receipt, true);
         result
     }
+}
+
+fn take_claude_receipts(
+    lease: &DraftInputLease,
+    session: &str,
+    payloads: &[String],
+    key: &str,
+) -> io::Result<(ConfirmedPaste, Vec<ConfirmedPaste>)> {
+    let mut receipts = lease.take_confirmed();
+    let Some(receipt) = receipts.pop() else {
+        let reason = if lease.confirmed_revoked() {
+            "Claude input receipt was revoked; request remains tracked"
+        } else {
+            "No confirmed Claude input receipt; request remains tracked"
+        };
+        return Err(io::Error::other(reason));
+    };
+    let reason = if receipt.session.as_deref() != Some(session)
+        || !payloads.contains(&receipt.payload)
+        || receipt
+            .attempt
+            .as_deref()
+            .is_some_and(|attempt| attempt != key)
+    {
+        "Claude input receipt identity changed"
+    } else if receipt.opaque {
+        "Claude input receipt is opaque; request remains tracked"
+    } else {
+        return Ok((receipt, receipts));
+    };
+    for saved in receipts {
+        lease.retain_confirmed(saved, true);
+    }
+    lease.retain_confirmed(receipt, true);
+    Err(io::Error::other(reason))
+}
+
+fn take_joined_witness(
+    receipts: &mut Vec<ConfirmedPaste>,
+    session: &str,
+    payloads: &[String],
+    body: &str,
+) -> Option<ConfirmedPaste> {
+    let index = receipts.iter().rposition(|candidate| {
+        !candidate.opaque
+            && candidate.body == body
+            && candidate.session.as_deref() == Some(session)
+            && payloads.contains(&candidate.payload)
+            && candidate.attempt.is_none()
+    })?;
+    Some(receipts.remove(index))
 }
 
 fn confirmed_on_disk(path: &Path) -> bool {

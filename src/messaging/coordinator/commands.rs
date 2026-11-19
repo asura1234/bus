@@ -18,13 +18,6 @@ impl Worker {
             C::RenameAgent(id, name) => state.rename_agent(id, &name),
             C::DeleteRoom(id) => return self.delete_room(id, events),
             C::DeleteAgent(id) => return self.delete_agent(id, events),
-            C::ConfirmTerminalRetirement { request, original } => {
-                return self.recover_interrupt_by_terminal_close(
-                    request,
-                    &original,
-                    super::io::now_ms(),
-                );
-            }
             C::SelectRoom(id) => state.select_room(id),
             C::LeaveRoom => {
                 state.leave_room_view();
@@ -161,13 +154,6 @@ impl Worker {
         let requests = state
             .submit_draft_exact(room, draft.clone(), now, true)
             .map_err(|e| e.to_string())?;
-        if let Some(recipients) = requests
-            .first()
-            .and_then(|id| state.request(*id))
-            .map(|request| request.prompt.recipient_ids.clone())
-        {
-            self.interrupt_queued_message(&mut state, room, &recipients, &Author::Developer, now);
-        }
         self.journal(
             state,
             JournalOp::SubmitDraft {
@@ -177,6 +163,20 @@ impl Worker {
                 now_ms: now,
             },
         )?;
+        self.clear_send_interrupt_intents(&requests)?;
+        if let Some(recipients) = requests
+            .first()
+            .and_then(|id| self.state.request(*id))
+            .map(|request| request.prompt.recipient_ids.clone())
+        {
+            let mut state = self.state.clone();
+            self.interrupt_queued_message(&mut state, room, &recipients, &Author::Developer, now);
+            // An idle stop leaves the journaled send unchanged. Folding it
+            // here would put a full-state rewrite on every composer Enter.
+            if state != self.state {
+                self.save(state)?;
+            }
+        }
         self.note_requests_queued(&requests);
         for id in requests {
             super::super::diagnostics::request(&self.state, id, "bus.message.queued", "persisted");

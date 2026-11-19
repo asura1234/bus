@@ -7,9 +7,7 @@ use super::super::{
 use super::geometry::layout;
 use super::text::cells;
 use super::{cell_width, provider, status, wrap, Action, View, ACCENT};
-use crate::messaging::model::{
-    AgentId, BusState, Room, RoomAgent, RoomId, RoomKind, RuntimeStatus,
-};
+use crate::messaging::model::{BusState, Room, RoomAgent, RoomId, RoomKind, RuntimeStatus};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -574,7 +572,6 @@ impl BusUi {
                     false,
                     true,
                 );
-                self.sidebar_retirement_row(view, viewport, agent.id, y + 1);
                 y += 2;
                 continue;
             }
@@ -596,26 +593,7 @@ impl BusUi {
                     y += 1;
                 }
             }
-            self.sidebar_retirement_row(view, viewport, agent.id, y);
             y += 1;
-        }
-    }
-
-    fn sidebar_retirement_row(
-        &self,
-        view: &mut View,
-        viewport: SidebarViewport,
-        agent: AgentId,
-        y: usize,
-    ) {
-        if let Some(target) = DeleteTarget::terminal_retirement(&self.snapshot.state, agent) {
-            view.row(
-                viewport.at(1, y, viewport.sidebar.width.saturating_sub(3)),
-                "Retire terminal…",
-                Some(Action::Delete(target)),
-                false,
-                false,
-            );
         }
     }
 

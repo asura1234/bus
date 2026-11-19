@@ -37,64 +37,58 @@ impl SendDelivery {
 }
 
 impl Worker {
-    pub(in crate::messaging::coordinator) fn recover_interrupt_by_terminal_close(
+    pub(in crate::messaging::coordinator) fn replay_queued_send_interrupts(
         &mut self,
-        id: RequestId,
-        confirmed_original: &crate::messaging::model::AgentRuntimeIdentity,
-        now_ms: u64,
+        now: u64,
     ) -> Result<(), String> {
-        use crate::protocol::api::schema::{Method, PaneCloseIfIdentityParams, ResponseResult};
-        let request = self.state.request(id).ok_or("Unknown request ID")?;
-        let agent = self.state.agent(request.agent_id).ok_or("Unknown agent")?;
-        let agent_id = agent.id;
-        if request.native_delivery_identity.as_ref() != Some(confirmed_original) {
-            return Err("The original delivery terminal changed since confirmation".into());
-        }
-        if request.interrupt_retirement_resolved {
-            return Ok(());
-        }
-        if self.state.interrupt_retirement_owner(agent.id) != Some(id) {
-            return Err("Request has no unresolved interrupt retirement".into());
-        }
-        let identity = self
+        let sends: Vec<_> = self
             .state
-            .interrupt_retirement_origin(id)
-            .cloned()
-            .ok_or("Cannot establish one original delivery terminal for this request group")?;
-        let (Some(pane), Some(terminal), Some(session)) = (
-            &identity.pane_id,
-            &identity.terminal_id,
-            &identity.session_id,
-        ) else {
-            return Err("Original terminal identity is incomplete".into());
-        };
-        let params = PaneCloseIfIdentityParams {
-            pane_id: pane.clone(),
-            expected_terminal_id: terminal.clone(),
-            expected_agent: crate::messaging::identity::provider_kind(agent.provider)
-                .label()
-                .into(),
-            expected_managed_name: crate::messaging::identity::managed_name(
-                agent.room_id,
-                agent.id,
-            ),
-            expected_session_id: Some(session.clone()),
-            close_exited_shell: false,
-            allow_busy_shell: false,
-        };
-        self.require_retirement_ui_process()?;
-        match self.transport.request(Method::PaneCloseIfIdentity(params)) {
-            Ok(ResponseResult::Ok {}) => {}
-            Ok(_) => return Err("Original terminal closure is unconfirmed".into()),
-            Err(error) => return Err(format!("Original terminal closure is unconfirmed: {}. If its ownership changed, close the original terminal explicitly and retry.", error.message)),
+            .requests()
+            .filter(|request| request.phase == RequestPhase::Queued)
+            .filter_map(|request| {
+                Some((
+                    request.id,
+                    request.agent_id,
+                    request.room_id,
+                    request.prompt.author.clone(),
+                    request.send_interrupt.clone()?,
+                ))
+            })
+            .collect();
+        for (request, recipient, room, sender, interrupt) in sends {
+            let mut state = self.state.clone();
+            if !state.take_send_interrupt(request) {
+                continue;
+            }
+            let same_turn = state.agent(recipient).is_some_and(|agent| {
+                agent.current_request == Some(interrupt.target)
+                    && agent.runtime_identity == interrupt.identity
+            });
+            // Persist admission before the key. On an ambiguous process crash,
+            // do not replay a stop into whatever turn the pane now presents.
+            self.save(state)?;
+            if same_turn {
+                let mut state = self.state.clone();
+                self.interrupt_queued_message(&mut state, room, &[recipient].into(), &sender, now);
+                self.save(state)?;
+            }
         }
-        let callbacks = self.retirement_callback_evidence(&self.state, agent_id)?;
+        Ok(())
+    }
+
+    pub(in crate::messaging::coordinator) fn clear_send_interrupt_intents(
+        &mut self,
+        requests: &[RequestId],
+    ) -> Result<(), String> {
         let mut state = self.state.clone();
-        state.reconcile_retirement_answers(agent_id, &callbacks);
-        state
-            .resolve_closed_interrupt_terminal(id, &identity, now_ms)
-            .map_err(|error| error.to_string())?;
-        self.save(state)
+        let mut changed = false;
+        for request in requests {
+            changed |= state.take_send_interrupt(*request);
+        }
+        if changed {
+            self.save(state)?;
+        }
+        Ok(())
     }
 
     pub(super) fn execute_messages(
@@ -138,15 +132,29 @@ impl Worker {
                     actor,
                     at_ms: crate::messaging::storage::io::now_ms(),
                 };
-                if let Some(retire) = p.get("retire_terminal") {
-                    if retire != &Value::Bool(true) {
-                        return Err("retire_terminal must be true".into());
+                if source.interrupt_retirement_resolved {
+                    let stage = if source.phase == RequestPhase::Completed {
+                        "completed"
+                    } else {
+                        "abandoned"
+                    };
+                    return Ok(json!({"request_id":request,"agent_id":agent,"stage":stage}));
+                }
+                if self.state.interrupt_retirement_owner(agent) == Some(request) {
+                    let mut state = self.state.clone();
+                    if !self.resolve_exited_claude_input(&mut state, agent, recovery.at_ms)? {
+                        return Err(ModelError::InterruptRetirementPending.to_string());
                     }
-                    if recovery.actor != Author::Developer {
-                        return Err("Only the developer can retire the original terminal".into());
-                    }
-                    self.require_retirement_peer(p)?;
-                    return Err("In the Bus TUI, choose Retire terminal under the recipient and confirm the original terminal shown there.".into());
+                    let stage = if state
+                        .request(request)
+                        .is_some_and(|row| row.phase == RequestPhase::Completed)
+                    {
+                        "completed"
+                    } else {
+                        "abandoned"
+                    };
+                    self.save(state)?;
+                    return Ok(json!({"request_id":request,"agent_id":agent,"stage":stage}));
                 }
                 let mut state = self.state.clone();
                 state
@@ -293,12 +301,7 @@ impl Worker {
             )
             .map_err(|e| e.to_string())?;
         if delivery == SendDelivery::Interrupt {
-            // The message is queued as its own next turn, so closing the turn
-            // it interrupts cannot reach it. `interrupt_queued_message` is
-            // the same path `agent interrupt` uses: one stop key per turn,
-            // and the turn closes when the provider next reports idle.
-            let interrupter = author.map_or(Author::Developer, Author::Agent);
-            self.interrupt_queued_message(&mut state, room, &recipients, &interrupter, now);
+            state.stage_send_interrupts(&ids);
         }
         let message = state
             .request(ids[0])
@@ -306,6 +309,17 @@ impl Worker {
             .prompt
             .id;
         self.save(state)?;
+        let mut receipt = json!({"message_id":message,"request_ids":ids,"stage":"queued"});
+        if delivery == SendDelivery::Interrupt {
+            // Save the independent next turn before sending any native stop.
+            self.clear_send_interrupt_intents(&ids)?;
+            let mut state = self.state.clone();
+            let interrupter = author.map_or(Author::Developer, Author::Agent);
+            receipt["interrupts"] = self
+                .interrupt_queued_message(&mut state, room, &recipients, &interrupter, now)
+                .into();
+            self.save(state)?;
+        }
         self.note_requests_queued(&ids);
         for id in &ids {
             crate::messaging::diagnostics::request(
@@ -315,7 +329,6 @@ impl Worker {
                 "persisted",
             );
         }
-        let mut receipt = json!({"message_id":message,"request_ids":ids,"stage":"queued"});
         if author.is_some() && p.get("as").is_none() && p.get("caller").is_some() {
             receipt["author_id"] = json!(author);
         }

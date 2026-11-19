@@ -44,35 +44,9 @@ impl BusUi {
                     .map_or("agent", |agent| agent.name.as_str());
                 (format!("Delete agent \"{name}\"?"), "This will close the agent and permanently delete its session data from this room.".into())
             }
-            DeleteTarget::TerminalRetirement {
-                agent,
-                request,
-                original,
-            } => {
-                let name = self
-                    .snapshot
-                    .state
-                    .agent(*agent)
-                    .map_or("agent", |agent| agent.name.as_str());
-                let terminal = original.terminal_id.as_deref().unwrap_or_default();
-                let pane = original.pane_id.as_deref().unwrap_or_default();
-                ("Retire original terminal?".into(), format!(
-                    "{name}, request {}. Terminal {terminal}, pane {pane}. Closing this terminal discards its unsent drafts.",
-                    request.0
-                ))
-            }
         };
         let text_width = dialog_text_width(area);
-        let retirement = matches!(dialog.target, DeleteTarget::TerminalRetirement { .. });
         let mut body = wrap(&message, text_width);
-        let target_visible =
-            !retirement || (text_width >= 30 && usize::from(area.height) >= body.len() + 6);
-        if !target_visible {
-            body = wrap(
-                "Enlarge the window to see the original terminal.",
-                text_width.max(1),
-            );
-        }
         if dialog.command_id.is_some() {
             body.push("Stopping sessions…".into());
         }
@@ -86,22 +60,11 @@ impl BusUi {
             !ready,
         );
         view.row(
-            Rect::new(
-                x + 16,
-                y,
-                text_width
-                    .saturating_sub(16)
-                    .min(if retirement { 13 } else { 10 }),
-                1,
-            ),
-            if retirement {
-                "Close (Enter)"
-            } else {
-                "OK (Enter)"
-            },
-            (ready && target_visible).then_some(Action::ConfirmDelete),
+            Rect::new(x + 16, y, text_width.saturating_sub(16).min(10), 1),
+            "OK (Enter)",
+            ready.then_some(Action::ConfirmDelete),
             false,
-            !ready || !target_visible,
+            !ready,
         );
     }
 

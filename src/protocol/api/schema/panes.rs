@@ -149,6 +149,9 @@ pub struct PaneInfo {
     /// Explicit native process-exit evidence, excluding automatic self-update restarts.
     #[serde(default)]
     pub agent_process_exited: bool,
+    /// Session reported by the process incarnation whose exit is confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_exited_session_id: Option<String>,
     pub pane_id: String,
     pub terminal_id: String,
     pub workspace_id: String,
@@ -229,3 +232,8 @@ pub use super::copy::{
     PaneCopyMotion, PaneCopyMotionParams, PaneCopySearchDirection, PaneCopySearchParams,
     PaneSelectionReadParams, PaneTextPoint, PaneTextRange,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TerminalTarget {
+    pub terminal_id: String,
+}

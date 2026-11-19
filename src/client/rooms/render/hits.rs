@@ -61,9 +61,6 @@ impl BusUi {
             Action::Delete(DeleteTarget::Agent(id)) => {
                 format!("delete-agent:{}", self.agent_name(*id))
             }
-            Action::Delete(DeleteTarget::TerminalRetirement { agent, .. }) => {
-                format!("retire-terminal:{}", self.agent_name(*agent))
-            }
             Action::CancelDelete => "cancel-delete".into(),
             Action::ConfirmDelete => "confirm-delete".into(),
             Action::Room(id) => format!("room:{}", self.room_name(*id)),

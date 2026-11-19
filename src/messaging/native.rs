@@ -118,6 +118,9 @@ impl BusTransport {
                     + crate::protocol::api::submission::RPC_MARGIN
             } else {
                 crate::protocol::api::submission::method_budget(&request.method)
+                    .or_else(|| {
+                        crate::protocol::api::submission::interrupt_method_budget(&request.method)
+                    })
                     .map(|budget| budget + crate::protocol::api::submission::RPC_MARGIN)
                     .unwrap_or(Duration::from_secs(3))
             };

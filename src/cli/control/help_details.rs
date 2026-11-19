@@ -341,12 +341,10 @@ const REQUEST_RECOVER: &str = r#"Explicitly close a stuck recipient request with
 requests close individually, regardless of agent status. Already abandoned is
 idempotent. Typed current work requires confirmed idle, or unavailable with
 session_invalidated; recover a joined group's lead (the group request ID).
-For an unresolved Claude interruption, retry the guarded interrupt or choose
-Retire terminal under the recipient in the Bus TUI. The TUI shows the original
-target before it asks for confirmation. Closing it discards its unsent drafts.
---retire-terminal --confirm gives TUI directions. Resume the agent to drain
-the existing queue. The old request may have run. Do not resend it.
-Result: {request_id,agent_id,stage:"abandoned"}. Preserve other queued work.
+For a held Claude interruption, recovery checks for the original provider exit.
+It leaves the draft and queue fenced until native evidence proves it is safe to
+continue. The old request may have run. Do not resend it.
+Result: {request_id,agent_id,stage:"abandoned"|"completed"}.
 Errors: command_failed for unknown/non-lead/currently working typed request;
 inspect message status and current identity/revision facts, then recover the lead
 only when safe. Replace an invalidated agent before resending. Recovery does not
@@ -407,6 +405,8 @@ delivery. If the reply fails, check the existing answer with bus message status
 MESSAGE before resending. Identical text is a no-op; an uncorrelated send never
 completes the original request.
 Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
+Interrupt-mode receipts include per-recipient stop outcomes in interrupts. A
+queued next turn can coexist with an in-progress or unconfirmed stop.
   --reply-to also returns requester_turn_queued:false and a notice: no requester
   turn was queued. If the requester must act, use a fresh normal send:
   bus send --room ROOM --as YOUR_AGENT_ID --to REQUESTER --text TEXT.

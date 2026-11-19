@@ -484,18 +484,6 @@ impl Client {
                 params.entry("caller").or_insert(serde_json::Value::Null);
             }
         }
-        if request.method == "request.recover" && request.params.get("retire_terminal").is_some() {
-            if let Some(params) = request.params.as_object_mut() {
-                let caller = crate::platform::ipc::local_stream_peer_pid(&self.stream.0)
-                    .and_then(crate::platform::process_instance)
-                    .map_or(
-                        serde_json::Value::Null,
-                        |peer| serde_json::json!({"process":{"pid":peer.pid,"birth":peer.birth}}),
-                    );
-                // Destructive recovery uses the connected peer, never wire claims.
-                params.insert("caller".into(), caller);
-            }
-        }
         if (request.method == "message.status") != poll_budget.is_some() {
             return self.respond(Response::failure(
                 &request.id,

@@ -68,10 +68,11 @@ struct AgentNameOwner {
     session_ref: Option<crate::agents::resume::catalog::AgentSessionRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RecentAgentProcessExit {
     agent: AgentKind,
     observed_at: Instant,
+    confirmed_session: Option<String>,
 }
 
 /// Native restore evidence outlives an unconfirmed provider process. It is

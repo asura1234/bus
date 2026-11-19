@@ -509,28 +509,33 @@ impl Worker {
         recipients: &AgentRecipients,
         interrupter: &crate::messaging::model::Author,
         now: u64,
-    ) {
-        for recipient in recipients.iter() {
-            // One press per turn: a second Esc opens Claude's rewind and a
-            // second Ctrl+C can quit Cursor or Grok.
-            if state
-                .agent(*recipient)
-                .is_some_and(|agent| agent.interrupt_pending)
-            {
-                continue;
-            }
-            if let Err(error) =
-                self.interrupt_agent(state, *recipient, room, interrupter, now, false)
-            {
-                tracing::warn!(
-                    event = "bus.send.interrupt_failed",
-                    agent_id = recipient.0,
-                    room_id = room.0,
-                    error,
-                    "Interrupt-mode delivery could not stop the running turn"
-                );
-            }
-        }
+    ) -> Vec<Value> {
+        recipients
+            .iter()
+            .map(|recipient| {
+                // A second Esc opens Claude's rewind; a second Ctrl+C can quit
+                // Cursor or Grok. A previously started stop still owns the turn.
+                if state
+                    .agent(*recipient)
+                    .is_some_and(|agent| agent.interrupt_pending)
+                {
+                    return json!({"agent_id": recipient, "outcome": "interrupting"});
+                }
+                match self.interrupt_agent(state, *recipient, room, interrupter, now, false) {
+                    Ok(result) => result,
+                    Err(reason) => {
+                        tracing::warn!(
+                            event = "bus.send.interrupt_failed",
+                            agent_id = recipient.0,
+                            room_id = room.0,
+                            reason,
+                            "Interrupt-mode delivery could not stop the running turn"
+                        );
+                        json!({"agent_id": recipient, "outcome": "failed", "reason": reason})
+                    }
+                }
+            })
+            .collect()
     }
 
     /// `agent interrupt` posts "Interrupted AGENT." so waiters learn who
@@ -576,6 +581,38 @@ impl Worker {
             .map_err(|e| e.to_string())
     }
 
+    fn prepare_claude_retirement(
+        &mut self,
+        state: &mut crate::messaging::model::BusState,
+        id: AgentId,
+        request: super::RequestId,
+        runtime: &crate::messaging::model::AgentRuntimeIdentity,
+    ) -> Result<Option<&'static str>, String> {
+        // Do not write Esc until the original prompt is durably tracked.
+        let mut durable = self.state.clone();
+        for target in [&mut *state, &mut durable] {
+            target
+                .set_interrupt_retirement(id, true)
+                .map_err(|e| e.to_string())?;
+            target
+                .clear_native_interrupt_wait(id)
+                .map_err(|e| e.to_string())?;
+        }
+        self.save(durable)?;
+        if runtime.terminal_id.as_deref().is_none_or(str::is_empty)
+            || runtime.session_id.as_deref().is_none_or(str::is_empty)
+        {
+            return Ok(Some(
+                "Claude's original native session is not yet confirmed; input remains tracked",
+            ));
+        }
+        Ok(match state.interrupt_retirement_origin(request) {
+            Some(original) if original == runtime => None,
+            Some(_) => Some("Original Claude terminal changed; resolve retirement of the original terminal first"),
+            None => Some("Cannot establish one original delivery terminal for this request group"),
+        })
+    }
+
     fn interrupt_running_agent(
         &mut self,
         state: &mut crate::messaging::model::BusState,
@@ -595,32 +632,10 @@ impl Worker {
             .then(|| Some((runtime.terminal_id.clone()?, runtime.session_id.clone()?)))
             .flatten();
         if let Some(request) = current.filter(|_| claude) {
-            // The caller may be staging a composer send that will be journaled
-            // once. Persist only the existing input's retirement obligation.
-            let mut durable = self.state.clone();
-            for target in [&mut *state, &mut durable] {
-                target
-                    .set_interrupt_retirement(id, true)
-                    .map_err(|e| e.to_string())?;
-                target
-                    .clear_native_interrupt_wait(id)
-                    .map_err(|e| e.to_string())?;
-            }
-            self.save(durable)?;
-            match state.interrupt_retirement_origin(request) {
-                Some(original) if *original == runtime => {}
-                Some(_) => {
-                    row["outcome"] = json!("failed");
-                    row["reason"] = json!("Original Claude terminal changed; resolve retirement of the original terminal first");
-                    return Ok(row);
-                }
-                None => {
-                    row["outcome"] = json!("failed");
-                    row["reason"] = json!(
-                        "Cannot establish one original delivery terminal for this request group"
-                    );
-                    return Ok(row);
-                }
+            if let Some(reason) = self.prepare_claude_retirement(state, id, request, &runtime)? {
+                row["outcome"] = json!("failed");
+                row["reason"] = json!(reason);
+                return Ok(row);
             }
         }
         let Some(pane) = runtime.pane_id else {
@@ -667,7 +682,11 @@ impl Worker {
                     .map_err(|e| e.to_string())?;
                 row["outcome"] = json!("failed");
                 row["reason"] = json!(format!(
-                    "Claude interrupt retirement is unconfirmed; request remains tracked: {sent:?}"
+                    "Claude interrupt retirement is unconfirmed; request remains tracked: {}",
+                    match &sent {
+                        Err(error) => error.message.as_str(),
+                        _ => "Unexpected native interrupt response",
+                    }
                 ));
                 return Ok(row);
             }

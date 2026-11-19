@@ -13,6 +13,13 @@ impl TerminalState {
         self.recent_agent_process_exit.is_some()
     }
 
+    pub(crate) fn confirmed_exited_agent_session(&self) -> Option<&str> {
+        self.recent_agent_process_exit
+            .as_ref()?
+            .confirmed_session
+            .as_deref()
+    }
+
     pub fn set_detected_agent_process_at(
         &mut self,
         agent: AgentKind,
@@ -51,6 +58,7 @@ impl TerminalState {
     #[cfg(windows)]
     pub(crate) fn agent_process_exited_within(&self, now: Instant, max_age: Duration) -> bool {
         self.recent_agent_process_exit
+            .as_ref()
             .is_some_and(|exit| now.saturating_duration_since(exit.observed_at) <= max_age)
     }
 
@@ -113,9 +121,25 @@ impl TerminalState {
         self.fallback_state = fallback_state;
         if process_exited {
             if let Some(agent) = agent {
+                let confirmed_session = self
+                    .persisted_agent_session
+                    .as_ref()
+                    .filter(|session| {
+                        crate::agents::parse_agent_label(&session.agent) == Some(agent)
+                            && exited_process
+                                .is_some_and(|exited| self.session_reporter.contains(&exited))
+                    })
+                    .map(|session| session.session_ref.value.clone())
+                    .or_else(|| {
+                        self.recent_agent_process_exit
+                            .as_ref()
+                            .filter(|exit| exit.agent == agent)
+                            .and_then(|exit| exit.confirmed_session.clone())
+                    });
                 self.recent_agent_process_exit = Some(RecentAgentProcessExit {
                     agent,
                     observed_at: now,
+                    confirmed_session,
                 });
             }
             // An exit names its leader only once that process is gone. Then it

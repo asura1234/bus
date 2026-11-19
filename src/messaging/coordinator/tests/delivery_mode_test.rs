@@ -589,3 +589,30 @@ fn the_room_composer_interrupts_the_running_turn_for_either_key() {
         }
     }
 }
+
+#[test]
+fn developer_send_keeps_interrupt_intent_and_reports_native_retirement_result() {
+    let mut fixture = Fixture::new(Provider::ClaudeDs);
+    let lead = running(&mut fixture, "old work", "1");
+    let params = send_params(&fixture, "developer correction");
+    let response = send(&mut fixture, params);
+    assert!(response.ok, "{response:?}");
+    let follower = sent_request(&response);
+    assert!(fixture.request(follower).queue_only);
+    assert_eq!(fixture.request(follower).group, None);
+    assert_eq!(
+        fixture.worker.state.queued_requests(fixture.agent),
+        &[follower]
+    );
+    assert_eq!(stop_keys(&fixture), [vec!["esc".to_owned()]]);
+    assert_eq!(
+        response.result["interrupts"][0]["agent_id"],
+        fixture.agent.0
+    );
+    assert_eq!(response.result["interrupts"][0]["outcome"], "interrupting");
+    fixture.status(RuntimeStatus::Idle);
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("interrupted")
+    );
+}

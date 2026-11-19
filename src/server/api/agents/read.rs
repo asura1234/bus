@@ -114,6 +114,7 @@ impl App {
             }
             if expected_agent == crate::agents::AgentKind::Claude {
                 let sender = runtime.submission_handle(true);
+                sender.bind_claude_session(&expected.expected_session_id);
                 let expected = expected.clone();
                 let completion_path = expected.retirement_request_id.map(|request| {
                     use sha2::{Digest, Sha256};

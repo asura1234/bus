@@ -299,9 +299,29 @@ impl BusState {
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
+                let runtime = self
+                    .agents
+                    .get(&callback.agent_id)
+                    .map(|agent| &agent.runtime_identity);
                 let Some(request) = self.requests.get_mut(&request_id) else {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 };
+                if let (Some(origin), Some(runtime)) =
+                    (request.native_delivery_identity.as_mut(), runtime)
+                {
+                    if provider.uses_claude_harness()
+                        && origin.session_id.is_none()
+                        && origin.launch_id == runtime.launch_id
+                        && origin.terminal_id == runtime.terminal_id
+                        && origin.pane_id == runtime.pane_id
+                        && callback.provider_session_id == runtime.session_id
+                    {
+                        if request.interrupt_retirement_identity.as_ref() == Some(&*origin) {
+                            request.interrupt_retirement_identity = Some(runtime.clone());
+                        }
+                        origin.session_id = runtime.session_id.clone();
+                    }
+                }
                 request.provider_session_id = callback.provider_session_id;
                 request.provider_turn_id = callback.provider_turn_id;
                 request.provider_prompt_id = callback.provider_prompt_id;

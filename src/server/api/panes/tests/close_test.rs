@@ -296,3 +296,43 @@ async fn guarded_close_of_an_exited_provider_closes_its_busy_shell_only_on_exit_
         "the exited provider's busy shell must be closed; response: {response}"
     );
 }
+
+#[tokio::test]
+async fn terminal_absence_proof_refuses_a_live_runtime_without_a_pane() {
+    let (mut app, params, original, replacement) = guarded_close_fixture();
+    let terminal_id = app.state.terminal_id_for_pane(0, original).unwrap();
+    let target = crate::protocol::api::schema::TerminalTarget {
+        terminal_id: params.expected_terminal_id,
+    };
+    let (runtime, _writes) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 2);
+    app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+    let check = |app: &crate::server::app::App| {
+        app.handle_terminal_require_absent("proof".into(), target.clone())
+    };
+    let initial = check(&app);
+    assert_eq!(
+        serde_json::from_str::<ErrorResponse>(&initial)
+            .unwrap()
+            .error
+            .code,
+        "terminal_present"
+    );
+
+    app.state.terminals.remove(&terminal_id);
+    let detached = check(&app);
+    assert_eq!(
+        serde_json::from_str::<ErrorResponse>(&detached)
+            .unwrap()
+            .error
+            .code,
+        "terminal_present"
+    );
+
+    app.terminal_runtimes.remove(&terminal_id);
+    assert!(matches!(
+        serde_json::from_str::<SuccessResponse>(&check(&app)).unwrap().result,
+        ResponseResult::TerminalAbsent { terminal_id } if terminal_id == target.terminal_id
+    ));
+    assert!(app.state.workspaces[0].pane_state(replacement).is_some());
+}

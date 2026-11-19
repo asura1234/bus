@@ -90,6 +90,22 @@ impl Worker {
                 .map(|observation| observation_json(observation, cells))
                 .map_err(|error| error.to_string());
         }
+        if self.state.agents().any(|agent| {
+            self.state
+                .interrupt_retirement_owner(agent.id)
+                .is_some_and(|owner| {
+                    agent.runtime_identity.pane_id.as_deref() == Some(target.as_str())
+                        || self
+                            .state
+                            .interrupt_retirement_origin(owner)
+                            .and_then(|identity| identity.pane_id.as_deref())
+                            == Some(target.as_str())
+                })
+        }) {
+            return Err(
+                crate::messaging::model::ModelError::InterruptRetirementPending.to_string(),
+            );
+        }
         let explicit_terminal = optional_text(p, "terminal_id")?;
         if explicit_terminal.is_some_and(|expected| {
             managed_terminal

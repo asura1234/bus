@@ -97,6 +97,9 @@ pub enum ResponseResult {
     TerminalPressed {
         press: super::agents::TerminalPressResult,
     },
+    TerminalAbsent {
+        terminal_id: String,
+    },
     PaneInfo {
         pane: PaneInfo,
     },
