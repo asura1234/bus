@@ -58,6 +58,12 @@ pub struct AgentSendKeysParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NativeInterruptIdentity {
+    /// Exact current Bus inputs eligible for Claude restored-draft retirement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expected_payloads: Vec<String>,
+    /// Stable coordinator request identity for idempotent Claude retirement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retirement_request_id: Option<u64>,
     pub expected_terminal_id: String,
     pub expected_session_id: String,
 }

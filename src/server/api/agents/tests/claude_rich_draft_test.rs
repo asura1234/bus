@@ -20,6 +20,369 @@ async fn key(writes: &mut tokio::sync::mpsc::Receiver<Bytes>) -> Bytes {
         .unwrap()
 }
 
+async fn clear_restored(
+    runtime: &TerminalRuntime,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    initial: &str,
+) {
+    let mut body = initial.to_owned();
+    let mut cursor = body.len();
+    for _ in 0..30 {
+        if body.is_empty() {
+            return;
+        }
+        let start = body[..cursor].rfind('\n').map_or(0, |at| at + 1);
+        let end = body[cursor..]
+            .find('\n')
+            .map_or(body.len(), |at| cursor + at);
+        match key(writes).await.as_ref() {
+            b"\x01" => cursor = start,
+            b"\x0b" => {
+                let end = if cursor == end && end < body.len() {
+                    end + 1
+                } else {
+                    end
+                };
+                body.replace_range(cursor..end, "");
+            }
+            b"\x15" => {
+                let start = if cursor == start {
+                    start.saturating_sub(1)
+                } else {
+                    start
+                };
+                body.replace_range(start..cursor, "");
+                cursor = start;
+            }
+            other => panic!("retirement sent paste, Enter, or stash: {other:?}"),
+        }
+        paint(runtime, &body, false, "retiring owned prompt");
+    }
+    panic!("retirement did not finish");
+}
+
+async fn confirmed_plain(
+    runtime: &TerminalRuntime,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+    directory: &std::path::Path,
+    payload: &str,
+) {
+    runtime
+        .submission_handle(true)
+        .bind_claude_session("session");
+    paint(runtime, "", false, "idle");
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::copy_from_slice(payload.as_bytes()),
+            Bytes::from_static(b"\r"),
+            vec![
+                Bytes::from_static(b"\x01"),
+                Bytes::from_static(b"\x0b"),
+                Bytes::from_static(b"\x15"),
+            ],
+            Duration::ZERO,
+            None,
+            Box::new(PreservingComposer::new(
+                AgentKind::Claude,
+                payload.into(),
+                directory.to_owned(),
+                vec![
+                    Bytes::from_static(b"\x13"),
+                    Bytes::from_static(b"\x07"),
+                    Bytes::from_static(b"\x7f"),
+                ],
+            )),
+        )
+        .unwrap();
+    assert_eq!(key(writes).await.as_ref(), payload.as_bytes());
+    paint(runtime, payload, false, "owned");
+    assert_eq!(key(writes).await.as_ref(), b"\r");
+    paint(runtime, "", false, "working");
+    completion
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn claude_interrupt_retirement_preserves_foreign_and_whitespace_edited_drafts() {
+    for body in ["other developer draft", "from  bus", "from bus edited"] {
+        let directory = crate::utils::test_temp::unique_temp_path("claude-foreign-retirement");
+        let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+        let sender = runtime.submission_handle(true);
+        let stopped = tokio::task::spawn_blocking(move || {
+            sender.retire_claude_interrupt(
+                "session",
+                &["from bus".into()],
+                Bytes::from_static(b"\x1b"),
+            )
+        });
+        assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+        paint(&runtime, body, false, "restored changed input");
+        assert!(stopped.await.unwrap().is_err());
+        assert!(
+            writes.try_recv().is_err(),
+            "foreign input received editing keys"
+        );
+    }
+}
+
+#[tokio::test]
+async fn claude_interrupt_retirement_rejects_session_or_payload_replacement_and_developer_input() {
+    for case in ["session", "payload", "developer"] {
+        let directory = crate::utils::test_temp::unique_temp_path("claude-retirement-identity");
+        let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+        if case == "developer" {
+            runtime
+                .submission_handle(true)
+                .try_send_developer_bytes(Bytes::from_static(b"x"))
+                .unwrap();
+            assert_eq!(key(&mut writes).await.as_ref(), b"x");
+        }
+        let result = runtime.submission_handle(true).retire_claude_interrupt(
+            if case == "session" {
+                "other-session"
+            } else {
+                "session"
+            },
+            &[if case == "payload" {
+                "new request".into()
+            } else {
+                "from bus".into()
+            }],
+            Bytes::from_static(b"\x1b"),
+        );
+        assert!(result.is_err());
+        assert!(
+            writes.try_recv().is_err(),
+            "identity mismatch must not press stop or clear"
+        );
+    }
+}
+
+#[tokio::test]
+async fn claude_interrupt_empty_repaint_is_unconfirmed_and_retry_never_represses_stop() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-empty-retirement");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+    let sender = runtime.submission_handle(true);
+    let stopped = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    paint(&runtime, "", false, "idle; no restoration yet");
+    assert!(
+        stopped.await.unwrap().is_err(),
+        "empty is not retirement proof"
+    );
+    assert!(writes.try_recv().is_err());
+    let sender = runtime.submission_handle(true);
+    let retried = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+    });
+    paint(&runtime, "from bus", false, "late restoration");
+    clear_restored(&runtime, &mut writes, "from bus").await;
+    retried.await.unwrap().unwrap();
+    assert!(writes.try_recv().is_err(), "one Esc; no paste or Enter");
+}
+
+#[tokio::test]
+async fn claude_interrupt_lost_stop_receipt_preserves_ownership_without_replaying_esc() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-lost-stop-receipt");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+    let release = runtime
+        .test_submission_clock()
+        .unwrap()
+        .fail_next_write_completion(std::io::ErrorKind::BrokenPipe);
+    let sender = runtime.submission_handle(true);
+    let stopped = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    paint(
+        &runtime,
+        "from bus",
+        false,
+        "stop restored input but acknowledgement lost",
+    );
+    release.send(()).unwrap();
+    assert!(stopped.await.unwrap().is_err());
+    assert!(writes.try_recv().is_err());
+    let sender = runtime.submission_handle(true);
+    let retry = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+    });
+    clear_restored(&runtime, &mut writes, "from bus").await;
+    retry.await.unwrap().unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "lost acknowledgement must not replay stop, paste or Enter"
+    );
+}
+
+#[tokio::test]
+async fn claude_interrupt_buffers_developer_input_and_revokes_retirement() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-edit-during-retirement");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+    let release = runtime
+        .test_submission_clock()
+        .unwrap()
+        .hold_next_write_completion();
+    let sender = runtime.submission_handle(true);
+    let stopped = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    runtime
+        .submission_handle(true)
+        .try_send_developer_bytes(Bytes::from_static(b"x"))
+        .unwrap();
+    paint(&runtime, "from bus", false, "restored input");
+    release.send(()).unwrap();
+    assert!(stopped.await.unwrap().is_err());
+    assert_eq!(key(&mut writes).await.as_ref(), b"x");
+    assert!(
+        writes.try_recv().is_err(),
+        "developer input must revoke all cleanup keys"
+    );
+}
+
+#[tokio::test]
+async fn claude_interrupt_cannot_retire_an_inflight_submission_before_its_receipt() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-submit-inflight-retirement");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime
+        .submission_handle(true)
+        .bind_claude_session("session");
+    paint(&runtime, "", false, "idle");
+    let completion = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(b"from bus"),
+            Bytes::from_static(b"\r"),
+            vec![
+                Bytes::from_static(b"\x01"),
+                Bytes::from_static(b"\x0b"),
+                Bytes::from_static(b"\x15"),
+            ],
+            Duration::ZERO,
+            None,
+            Box::new(PreservingComposer::new(
+                AgentKind::Claude,
+                "from bus".into(),
+                directory,
+                vec![
+                    Bytes::from_static(b"\x13"),
+                    Bytes::from_static(b"\x07"),
+                    Bytes::from_static(b"\x7f"),
+                ],
+            )),
+        )
+        .unwrap();
+    assert_eq!(key(&mut writes).await.as_ref(), b"from bus");
+    assert!(runtime
+        .submission_handle(true)
+        .retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+        .is_err());
+    assert!(
+        writes.try_recv().is_err(),
+        "no stop while another input lease owns the pane"
+    );
+    paint(&runtime, "from bus", false, "owned");
+    assert_eq!(key(&mut writes).await.as_ref(), b"\r");
+    paint(&runtime, "", false, "working");
+    completion
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(writes.try_recv().is_err());
+}
+
+/// Incident 50780/50781: Esc restores an accepted Bus prompt. A later send
+/// must retire that owned prompt instead of stashing/restoring it as a draft.
+#[tokio::test]
+async fn claude_ds_interrupted_bus_draft_is_retired_before_a_followup_can_restore_it() {
+    assert!(crate::agents::providers::ProviderKind::ClaudeDs.uses_claude_harness());
+    let directory = crate::utils::test_temp::unique_temp_path("claude-ds-interrupted-draft");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime
+        .submission_handle(true)
+        .bind_claude_session("session");
+    let old = "[Bus message 50780 from you]\nwhat's going on with the playhead center?";
+    let submit = |text: &str| {
+        runtime
+            .queue_observed_input_with_inspector(
+                Bytes::copy_from_slice(text.as_bytes()),
+                Bytes::from_static(b"\r"),
+                vec![
+                    Bytes::from_static(b"\x01"),
+                    Bytes::from_static(b"\x0b"),
+                    Bytes::from_static(b"\x15"),
+                ],
+                Duration::ZERO,
+                None,
+                Box::new(PreservingComposer::new(
+                    AgentKind::Claude,
+                    text.into(),
+                    directory.clone(),
+                    vec![
+                        Bytes::from_static(b"\x13"),
+                        Bytes::from_static(b"\x07"),
+                        Bytes::from_static(b"\x7f"),
+                    ],
+                )),
+            )
+            .unwrap()
+    };
+    paint(&runtime, "", false, "idle");
+    let first = submit(old);
+    assert_eq!(key(&mut writes).await.as_ref(), old.as_bytes());
+    paint(&runtime, old, false, "paste rendered");
+    assert_eq!(key(&mut writes).await.as_ref(), b"\r");
+    paint(&runtime, "", false, "working");
+    first.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+
+    // Bus stop is a fenced transaction; a developer Esc remains editing.
+    let sender = runtime.submission_handle(true);
+    let payload = old.to_owned();
+    let stopping = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &[payload], Bytes::from_static(b"\x1b"))
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    paint(
+        &runtime,
+        old,
+        false,
+        "interrupted; original prompt restored",
+    );
+    clear_restored(&runtime, &mut writes, old).await;
+    stopping.await.unwrap().unwrap();
+    let followup = submit("[Bus message 50782 from you]\nis that one merged?");
+    assert_eq!(
+        key(&mut writes).await.as_ref(),
+        b"[Bus message 50782 from you]\nis that one merged?"
+    );
+    paint(
+        &runtime,
+        "[Bus message 50782 from you]\nis that one merged?",
+        false,
+        "followup",
+    );
+    assert_eq!(key(&mut writes).await.as_ref(), b"\r");
+    paint(&runtime, "", false, "working");
+    followup
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "no old paste, extra Enter, or stash toggle"
+    );
+}
+
 #[tokio::test]
 async fn claude_plain_paste_held_frame_cannot_submit_a_restored_native_draft() {
     let mut retries = Vec::new();
@@ -408,4 +771,152 @@ async fn claude_existing_stash_waits_for_rich_paste_materialization() {
         !ready_while_empty,
         "retained-stash recovery bypassed rich-paste readiness and Enter reached the empty frame"
     );
+}
+
+#[tokio::test]
+async fn lost_retirement_response_is_idempotent() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-lost-retirement-response");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+    let sender = runtime.submission_handle(true);
+    let stopped = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    paint(&runtime, "from bus", false, "restored");
+    clear_restored(&runtime, &mut writes, "from bus").await;
+    stopped.await.unwrap().unwrap();
+    // The coordinator did not receive the result. A retry must prove completion.
+    runtime
+        .submission_handle(true)
+        .retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+        .unwrap();
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn partial_retirement_resumes_only_an_owned_remainder() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-lost-partial-clear");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let payload = "first\nsecond";
+    confirmed_plain(&runtime, &mut writes, &directory, payload).await;
+    let sender = runtime.submission_handle(true);
+    let clock = runtime.test_submission_clock().unwrap();
+    let esc = clock.hold_next_write_completion();
+    let stopped = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &[payload.into()], Bytes::from_static(b"\x1b"))
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    paint(&runtime, payload, false, "restored");
+    let start = clock.hold_next_write_completion();
+    esc.send(()).unwrap();
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x01");
+    let lost = clock.fail_next_write_completion(std::io::ErrorKind::BrokenPipe);
+    start.send(()).unwrap();
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x0b");
+    paint(&runtime, "first\n", false, "partly cleared");
+    lost.send(()).unwrap();
+    assert!(stopped.await.unwrap().is_err());
+    let sender = runtime.submission_handle(true);
+    let retry = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &[payload.into()], Bytes::from_static(b"\x1b"))
+    });
+    // The fake provider's cursor is still on the empty second line.
+    clear_restored(&runtime, &mut writes, "first\n").await;
+    retry.await.unwrap().unwrap();
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn completed_retirement_receipt_survives_a_new_runtime() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-completion-restart");
+    let receipt = directory.join("completion");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+    let sender = runtime.submission_handle(true);
+    let path = receipt.clone();
+    let stopped = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt_with_receipt(
+            "session",
+            &["from bus".into()],
+            Bytes::from_static(b"\x1b"),
+            Some(&path),
+        )
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    paint(&runtime, "from bus", false, "restored");
+    clear_restored(&runtime, &mut writes, "from bus").await;
+    stopped.await.unwrap().unwrap();
+    drop(runtime);
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let sender = runtime.submission_handle(true);
+    sender.bind_claude_session("session");
+    assert!(sender
+        .retire_claude_interrupt_with_receipt(
+            "session",
+            &["other request".into()],
+            Bytes::from_static(b"\x1b"),
+            Some(&directory.join("different-retirement"))
+        )
+        .is_err());
+    sender
+        .retire_claude_interrupt_with_receipt(
+            "session",
+            &["from bus".into()],
+            Bytes::from_static(b"\x1b"),
+            Some(&receipt),
+        )
+        .unwrap();
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn claude_retirement_rejects_empty_frame_after_cursor_motion_alone() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-transient-clear-frame");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+    let sender = runtime.submission_handle(true);
+    let clock = runtime.test_submission_clock().unwrap();
+    let esc = clock.hold_next_write_completion();
+    let stopped = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    paint(&runtime, "from bus", false, "restored");
+    let cursor = clock.hold_next_write_completion();
+    esc.send(()).unwrap();
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x01");
+    paint(&runtime, "", false, "transient blank frame");
+    cursor.send(()).unwrap();
+    assert!(stopped.await.unwrap().is_err());
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn lost_final_clear_receipt_uses_fresh_empty_without_another_key() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-lost-final-clear");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    confirmed_plain(&runtime, &mut writes, &directory, "from bus").await;
+    let sender = runtime.submission_handle(true);
+    let clock = runtime.test_submission_clock().unwrap();
+    let esc = clock.hold_next_write_completion();
+    let stopped = tokio::task::spawn_blocking(move || {
+        sender.retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+    });
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x1b");
+    paint(&runtime, "from bus", false, "restored");
+    let cursor = clock.hold_next_write_completion();
+    esc.send(()).unwrap();
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x01");
+    let lost = clock.fail_next_write_completion(std::io::ErrorKind::BrokenPipe);
+    cursor.send(()).unwrap();
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x0b");
+    paint(&runtime, "", false, "cleared");
+    lost.send(()).unwrap();
+    assert!(stopped.await.unwrap().is_err());
+    runtime
+        .submission_handle(true)
+        .retire_claude_interrupt("session", &["from bus".into()], Bytes::from_static(b"\x1b"))
+        .unwrap();
+    assert!(writes.try_recv().is_err());
 }

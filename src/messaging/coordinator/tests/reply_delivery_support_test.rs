@@ -51,8 +51,38 @@ struct Terminal {
     submitted_images: Vec<Vec<String>>,
     /// Provider stop keys (`esc`/`ctrl+c`) the interrupt path pressed.
     stops: u32,
+    restore_on_stop: bool,
+    restored_cursor: Option<usize>,
     captured_screen: Option<String>,
     clock: crate::terminal::runtime::SubmissionClock,
+}
+
+impl Terminal {
+    fn edit_restored_draft(&mut self, key: &str, cursor: usize) {
+        let start = self.draft[..cursor].rfind('\n').map_or(0, |at| at + 1);
+        let end = self.draft[cursor..]
+            .find('\n')
+            .map_or(self.draft.len(), |at| cursor + at);
+        let cursor = match key {
+            "\x01" => start,
+            "\x0b" => {
+                let end = end + usize::from(cursor == end && end < self.draft.len());
+                self.draft.replace_range(cursor..end, "");
+                cursor
+            }
+            "\x15" => {
+                let start = if start == cursor {
+                    start.saturating_sub(1)
+                } else {
+                    start
+                };
+                self.draft.replace_range(start..cursor, "");
+                start
+            }
+            other => panic!("unexpected restored-draft input: {other:?}"),
+        };
+        self.restored_cursor = (!self.draft.is_empty()).then_some(cursor);
+    }
 }
 
 struct NativeServer {
@@ -132,6 +162,8 @@ impl NativeServer {
                 submitted: Vec::new(),
                 submitted_images: Vec::new(),
                 stops: 0,
+                restore_on_stop: false,
+                restored_cursor: None,
                 captured_screen: None,
                 clock,
             },
@@ -175,12 +207,18 @@ impl NativeServer {
                         .submitted
                         .push(format!("{chips}{}", std::mem::take(&mut terminal.draft)));
                     terminal.submitted_images.push(images);
+                } else if let Some(cursor) = terminal.restored_cursor {
+                    terminal.edit_restored_draft(text, cursor);
                 } else if text == "\x0b" {
                     terminal.draft.clear();
                     terminal.images.clear();
                 } else if text == "\x1b" || text == "\x03" {
                     // The provider's stop key: `bus send --mode interrupt`.
                     terminal.stops += 1;
+                    if terminal.restore_on_stop && text == "\x1b" {
+                        terminal.draft = terminal.submitted.last().unwrap().clone();
+                        terminal.restored_cursor = Some(terminal.draft.len());
+                    }
                 } else {
                     assert_eq!(text, "\x01", "unexpected terminal input");
                 }
@@ -654,6 +692,16 @@ impl Delivery {
             .unwrap()
             .set_detected_state(Some(kind), status);
     }
+    pub(crate) fn restore_claude_input_on_stop(&self, agent: AgentId) {
+        self.native
+            .lock()
+            .unwrap()
+            .terminals
+            .get_mut(&agent)
+            .unwrap()
+            .restore_on_stop = true;
+    }
+
     /// Drain terminal input so stop keys pressed by an interrupt are visible.
     pub(crate) fn pump(&self) {
         self.native.lock().unwrap().pump();

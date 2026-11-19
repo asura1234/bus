@@ -96,6 +96,19 @@ mod tests;
 mod claude_rich_draft_tests;
 
 impl SubmissionInspector for PreservingComposer {
+    fn interrupt_receipt(&self) -> Option<(String, String)> {
+        self.owned.interrupt_receipt()
+    }
+    fn interrupted_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> Option<String> {
+        self.owned.interrupted_input(screen, cursor)
+    }
+    fn interrupted_remainder(&self, body: &str) -> bool {
+        self.owned.interrupted_remainder(body)
+    }
+    fn cleanup_expects_empty(&self) -> bool {
+        self.owned.cleanup_expects_empty()
+    }
+
     fn retry_owned_enter(&self) -> bool {
         self.owned.retry_owned_enter()
     }

@@ -920,6 +920,7 @@ fn late_unconfirmed_native_interrupt_preserves_a_successor_stop_wait() {
 fn queued_messages_survive_an_interrupt_closed_turn_and_deliver_next() {
     for provider in [
         Provider::ClaudeCode,
+        Provider::ClaudeDs,
         Provider::Codex,
         Provider::Cursor,
         Provider::Grok,

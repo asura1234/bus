@@ -484,6 +484,14 @@ fn queue_prompt_submission(
 > {
     let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
     let _entered = span.enter();
+    if expected_agent == crate::agents::AgentKind::Claude {
+        if let Some(session) = &agent.agent_session {
+            runtime
+                .submission_handle(true)
+                .bind_claude_session(&session.value);
+        }
+    }
+
     #[cfg(unix)]
     if let Some(completion) = super::codex_native::queue(
         runtime,

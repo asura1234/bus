@@ -574,6 +574,11 @@ fn commands_route_to_exact_methods_with_string_selectors() {
             json!({"request": "64", "confirm": true, "as": "codex1"}),
         ),
         (
+            &["request", "recover", "64", "--confirm", "--retire-terminal"],
+            "request.recover",
+            json!({"request": "64", "confirm": true, "retire_terminal": true}),
+        ),
+        (
             &["history", "--room", "Planning"],
             "room.history",
             json!({"room": "Planning"}),

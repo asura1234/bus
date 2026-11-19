@@ -37,6 +37,66 @@ impl SendDelivery {
 }
 
 impl Worker {
+    pub(in crate::messaging::coordinator) fn recover_interrupt_by_terminal_close(
+        &mut self,
+        id: RequestId,
+        confirmed_original: &crate::messaging::model::AgentRuntimeIdentity,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        use crate::protocol::api::schema::{Method, PaneCloseIfIdentityParams, ResponseResult};
+        let request = self.state.request(id).ok_or("Unknown request ID")?;
+        let agent = self.state.agent(request.agent_id).ok_or("Unknown agent")?;
+        let agent_id = agent.id;
+        if request.native_delivery_identity.as_ref() != Some(confirmed_original) {
+            return Err("The original delivery terminal changed since confirmation".into());
+        }
+        if request.interrupt_retirement_resolved {
+            return Ok(());
+        }
+        if self.state.interrupt_retirement_owner(agent.id) != Some(id) {
+            return Err("Request has no unresolved interrupt retirement".into());
+        }
+        let identity = self
+            .state
+            .interrupt_retirement_origin(id)
+            .cloned()
+            .ok_or("Cannot establish one original delivery terminal for this request group")?;
+        let (Some(pane), Some(terminal), Some(session)) = (
+            &identity.pane_id,
+            &identity.terminal_id,
+            &identity.session_id,
+        ) else {
+            return Err("Original terminal identity is incomplete".into());
+        };
+        let params = PaneCloseIfIdentityParams {
+            pane_id: pane.clone(),
+            expected_terminal_id: terminal.clone(),
+            expected_agent: crate::messaging::identity::provider_kind(agent.provider)
+                .label()
+                .into(),
+            expected_managed_name: crate::messaging::identity::managed_name(
+                agent.room_id,
+                agent.id,
+            ),
+            expected_session_id: Some(session.clone()),
+            close_exited_shell: false,
+            allow_busy_shell: false,
+        };
+        self.require_retirement_ui_process()?;
+        match self.transport.request(Method::PaneCloseIfIdentity(params)) {
+            Ok(ResponseResult::Ok {}) => {}
+            Ok(_) => return Err("Original terminal closure is unconfirmed".into()),
+            Err(error) => return Err(format!("Original terminal closure is unconfirmed: {}. If its ownership changed, close the original terminal explicitly and retry.", error.message)),
+        }
+        let callbacks = self.retirement_callback_evidence(&self.state, agent_id)?;
+        let mut state = self.state.clone();
+        state.reconcile_retirement_answers(agent_id, &callbacks);
+        state
+            .resolve_closed_interrupt_terminal(id, &identity, now_ms)
+            .map_err(|error| error.to_string())?;
+        self.save(state)
+    }
+
     pub(super) fn execute_messages(
         &mut self,
         method: &str,
@@ -80,6 +140,16 @@ impl Worker {
                     actor,
                     at_ms: crate::messaging::storage::io::now_ms(),
                 };
+                if let Some(retire) = p.get("retire_terminal") {
+                    if retire != &Value::Bool(true) {
+                        return Err("retire_terminal must be true".into());
+                    }
+                    if recovery.actor != Author::Developer {
+                        return Err("Only the developer can retire the original terminal".into());
+                    }
+                    self.require_retirement_peer(p)?;
+                    return Err("In the Bus TUI, choose Retire terminal under the recipient and confirm the original terminal shown there.".into());
+                }
                 let mut state = self.state.clone();
                 state
                     .manually_recover_idle_request(request, recovery)
@@ -630,10 +700,14 @@ impl Worker {
                 .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
             let submission = if r.submission_notice().is_some() { r } else { r.group.and_then(|lead| self.state.request(lead)).unwrap_or(r) };
             let failure_detail = self.state.steered_turn_failure(r);
-            let detail = failure_detail.as_ref()
+            let hold = agent.and_then(|a| self.state.interrupt_retirement_owner(a.id))
+                .and_then(|id| self.state.request(id))
+                .filter(|lead| r.id == lead.id || r.group == Some(lead.id) || r.phase == RequestPhase::Queued)
+                .and_then(Request::submission_notice);
+            let detail = hold.as_ref().or_else(|| failure_detail.as_ref()
                 .or_else(|| r.manual_recovery.as_ref().and(r.submission_error.as_ref()))
                 .or_else(|| submission.manual_recovery.as_ref().and(submission.submission_error.as_ref()))
-                .or_else(|| submission.submission_notice().and(submission.submission_error.as_ref()));
+                .or_else(|| submission.submission_notice().and(submission.submission_error.as_ref())));
             json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"reason":reason,"manual_recovery":r.manual_recovery,"status":agent.map(|a| if a.provider_retry.is_some() { RuntimeStatus::Working } else { a.status }),"delivery_error":(!matches!(r.phase, RequestPhase::Completed | RequestPhase::Abandoned)).then(|| agent.and_then(|a| a.delivery_error())).flatten(),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"latency":r.latency,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":r.reply()})
         }).collect::<Vec<_>>()}),
         )

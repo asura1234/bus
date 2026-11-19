@@ -583,6 +583,18 @@ pub(crate) struct Request {
     #[serde(default)]
     pub(crate) trusted_start_bound: bool,
     pub(crate) uncertain_outcome: bool,
+    /// Native interrupt cannot settle until its restored Bus draft is retired.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) interrupt_retirement_pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) interrupt_retirement_identity: Option<AgentRuntimeIdentity>,
+    /// Exact runtime targeted at native admission, never reconstructed by polling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) native_delivery_identity: Option<AgentRuntimeIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) native_delivery_callback_boundary: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) interrupt_retirement_resolved: bool,
     /// Native launch/draft/recovery detail belongs to this send, beyond agent changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) submission_error: Option<String>,

@@ -18,6 +18,13 @@ impl Worker {
             C::RenameAgent(id, name) => state.rename_agent(id, &name),
             C::DeleteRoom(id) => return self.delete_room(id, events),
             C::DeleteAgent(id) => return self.delete_agent(id, events),
+            C::ConfirmTerminalRetirement { request, original } => {
+                return self.recover_interrupt_by_terminal_close(
+                    request,
+                    &original,
+                    super::io::now_ms(),
+                );
+            }
             C::SelectRoom(id) => state.select_room(id),
             C::LeaveRoom => {
                 state.leave_room_view();

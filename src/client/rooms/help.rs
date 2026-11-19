@@ -44,6 +44,7 @@ Esc / Tab      Close the picker
 
 Rooms and agents
 Ctrl+Shift+R   Add a room
+               If the terminal sends both R shortcuts alike, use ROOMS +.
 Ctrl+N         Add an agent
 F2             Rename selected room or agent
 Double-click   Rename a room or agent name
@@ -66,6 +67,7 @@ Esc            Cancel
 Quit and restart
 Ctrl+R         Restart Bus with the current session and launch flags (--dev only)
                Build failures keep Bus running; keypress confirms
+               On legacy input, Ctrl+Shift+R may arrive as Ctrl+R and restart.
 Ctrl+Q         Save, stop the agents and the server, quit
                After an unsaved warning: press again within 5s to force quit
                and risk losing edits; wait 5s, then Ctrl+Q retries saving";

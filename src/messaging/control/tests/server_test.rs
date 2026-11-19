@@ -1255,3 +1255,35 @@ fn shell_launch_control_deadline_encloses_startup_and_preserves_queue_age() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn round2_terminal_recovery_uses_the_socket_peer_and_ignores_wire_caller() {
+    let dir = TestDir::new();
+    let (tx, rx) = mpsc::sync_channel(1);
+    let _server = start(&dir.0, tx).unwrap();
+    let worker = thread::spawn(move || {
+        let (_, BusCommand::Control(call)) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("expected a control call");
+        };
+        let peer = crate::platform::process_instance(std::process::id()).unwrap();
+        let actual = call.request.params["caller"]["process"].clone();
+        call.reply
+            .send(Response::success(&call.request.id, actual.clone()))
+            .unwrap();
+        assert_eq!(actual, json!({"pid":peer.pid,"birth":peer.birth}));
+    });
+    let response = request(
+        &dir.0,
+        &Request {
+            id: "retirement-auth".into(),
+            method: "request.recover".into(),
+            params: json!({"request":"64","confirm":true,"retire_terminal":true,
+            "caller":{"process":{"pid":1,"birth":0},"interrupt_request_id":"forged"}}),
+        },
+    )
+    .unwrap();
+    assert_eq!(response.result["pid"], std::process::id());
+    worker.join().unwrap();
+}

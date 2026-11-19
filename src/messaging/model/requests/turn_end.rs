@@ -8,6 +8,9 @@ impl BusState {
     /// its latest provider progress. Re-reading the pre-Started Idle frame
     /// does not prove completion. A captured provider final also counts.
     pub(crate) fn turn_ended(&self, request: &Request) -> bool {
+        if request.interrupt_retirement_pending {
+            return false;
+        }
         if request.phase == RequestPhase::Completed {
             return true;
         }

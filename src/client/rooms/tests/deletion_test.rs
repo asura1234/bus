@@ -419,3 +419,122 @@ fn recipient_menu_enter_does_not_select_all_after_the_highlighted_agent_disappea
         "only the explicitly highlighted All row may select every surviving agent"
     );
 }
+
+#[test]
+fn terminal_retirement_dialog_confirms_only_the_rendered_original_and_queues_once() {
+    use crate::messaging::model::{AgentRuntimeIdentity, Author, DeliveryEpoch};
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let (mut ui, room, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let state = &mut snapshot.state;
+    let agent = state
+        .create_agent(room, "builder", Provider::ClaudeDs, "/project".into(), None)
+        .unwrap();
+    let original = AgentRuntimeIdentity {
+        launch_id: Some("original-launch".into()),
+        terminal_id: Some("original-terminal".into()),
+        pane_id: Some("original-pane".into()),
+        session_id: Some("original-session".into()),
+    };
+    state
+        .set_agent_runtime_identity(agent, original.clone())
+        .unwrap();
+    let request = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "held input".into(),
+                recipient_ids: [agent].into(),
+                ..Draft::default()
+            },
+            Author::Developer,
+            1,
+            true,
+        )
+        .unwrap()[0];
+    state
+        .begin_submission(request, "original-launch", 0)
+        .unwrap();
+    state
+        .stamp_native_delivery_epoch(
+            request,
+            DeliveryEpoch {
+                generation: 1,
+                terminal_id: "original-terminal".into(),
+                pane_id: "original-pane".into(),
+            },
+            None,
+        )
+        .unwrap();
+    state.set_interrupt_retirement(agent, true).unwrap();
+    let mut replacement = original.clone();
+    replacement.terminal_id = Some("replacement-terminal".into());
+    replacement.pane_id = Some("replacement-pane".into());
+    state
+        .set_agent_runtime_identity(agent, replacement)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+
+    ui.compute_view(100, 40);
+    let entry = ui.view.hits.iter().find(|hit| {
+        matches!(&hit.action, render::Action::Delete(deletion::DeleteTarget::TerminalRetirement { agent: target, .. }) if *target == agent)
+    }).expect("retirement entry for the held recipient").rect;
+    mouse(
+        &mut ui,
+        MouseEventKind::Down(MouseButton::Left),
+        entry.x,
+        entry.y,
+    );
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(
+        ui.pending.is_empty(),
+        "the new dialog must be laid out first"
+    );
+
+    let narrow = room_screen(&mut ui, 30, 10);
+    assert!(narrow.contains("Enlarge the window"));
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(
+        ui.pending.is_empty(),
+        "a clipped target cannot be confirmed"
+    );
+
+    let screen = room_screen(&mut ui, 100, 40);
+    assert!(
+        screen.contains("Retire original terminal?") && screen.contains("original-terminal"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("original-pane") && screen.contains("discards"),
+        "{screen}"
+    );
+    assert!(!screen.contains("replacement-terminal"));
+    ui.input(
+        &RawInputEvent::Paste("\n".into()),
+        false,
+        &mut Default::default(),
+    );
+    assert!(ui.pending.is_empty());
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(ui.deletion.is_none() && ui.pending.is_empty());
+
+    ui.compute_view(100, 40);
+    mouse(
+        &mut ui,
+        MouseEventKind::Down(MouseButton::Left),
+        entry.x,
+        entry.y,
+    );
+    ui.compute_view(100, 40);
+    let (handle, commands) = BusHandle::test_channel(Arc::clone(&ui.snapshot));
+    ui.handle = Some(handle);
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    ui.tick();
+    let (_, command) = commands.try_recv().expect("one trusted UI command");
+    assert!(matches!(command, BusCommand::ConfirmTerminalRetirement {
+        request: id, original: identity
+    } if id == request && identity == original));
+    assert!(commands.try_recv().is_err());
+}

@@ -103,6 +103,11 @@ impl Worker {
     }
 
     fn resume_saved_agent(&mut self, agent: &RoomAgent) -> Result<(), String> {
+        if self.state.interrupt_retirement_owner(agent.id).is_some() {
+            return Err(
+                crate::messaging::model::ModelError::InterruptRetirementPending.to_string(),
+            );
+        }
         if let Err(error) = self.ensure_provider_binary(agent.room_id, agent.provider) {
             let recovery = agent.startup.as_ref().and_then(|s| s.recovery.as_ref());
             let tracked = !matches!(recovery, Some(StartupRecovery::Requested));

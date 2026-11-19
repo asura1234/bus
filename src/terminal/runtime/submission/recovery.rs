@@ -1,7 +1,13 @@
 //! A flushed paste may render after the attempt that wrote it has timed out.
 use super::{ClearOutcome, InputObservation, ObservedSubmission, PromptNotShown};
+use crate::protocol::api::submission::{CLEAR_KEY_DELAY, WITHDRAW_GRACE};
 use crate::terminal::runtime::draft_input::DraftInputLease;
-use std::{io, time::Duration};
+use bytes::Bytes;
+use std::{
+    io,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 // The incidents rendered about two seconds late on a saturated machine. Keep
 // ownership far beyond that window, but do not let a provider that drops input
@@ -10,7 +16,165 @@ use std::{io, time::Duration};
 // an exact owned match over expiry, and preserve foreign drafts after expiry.
 const STALE_PASTE_MAX_AGE: Duration = Duration::from_secs(60);
 
+struct ClearProgress {
+    revision: u64,
+    expires: Instant,
+}
+
 impl ObservedSubmission {
+    pub(super) fn clear_draft_with_lease(
+        &self,
+        lease: Option<&DraftInputLease>,
+    ) -> io::Result<ClearOutcome> {
+        self.clear_draft(lease, None)
+    }
+
+    pub(super) fn clear_draft(
+        &self,
+        lease: Option<&DraftInputLease>,
+        retirement: Option<&std::cell::Cell<Option<u64>>>,
+    ) -> io::Result<ClearOutcome> {
+        let mut sent = false;
+        let mut progress = ClearProgress {
+            revision: self.inspect.cleanup_progress(),
+            expires: self.clock.now() + WITHDRAW_GRACE,
+        };
+        loop {
+            for (index, key) in self.clear.iter().enumerate() {
+                if let Some(outcome) = self.clear_step(
+                    key.clone(),
+                    index,
+                    &mut sent,
+                    &mut progress,
+                    lease,
+                    retirement,
+                )? {
+                    return Ok(outcome);
+                }
+            }
+        }
+    }
+
+    fn clear_step(
+        &self,
+        key: Bytes,
+        index: usize,
+        sent: &mut bool,
+        progress: &mut ClearProgress,
+        lease: Option<&DraftInputLease>,
+        retirement: Option<&std::cell::Cell<Option<u64>>>,
+    ) -> io::Result<Option<ClearOutcome>> {
+        let generation = self.clock.generation();
+        let guard = self
+            .content_lock
+            .lock()
+            .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+        if let Some(retirement) = retirement {
+            let screen = self
+                .terminal
+                .active_ansi_if_complete()
+                .ok_or_else(|| io::Error::other("Incomplete Claude clear readback"))?;
+            let cursor = self
+                .terminal
+                .cursor_state()
+                .map(|cursor| (cursor.x, cursor.y));
+            let body = self.inspect.interrupted_input(&screen, cursor);
+            if self.inspect.native_draft_restored(&screen)
+                || self.inspect.native_stash_visible(&screen)
+                || !self.inspect.submission_available(&screen)
+            {
+                return Err(io::Error::other("Claude clear readback changed"));
+            }
+            if body.as_deref() == Some("") {
+                return Ok(Some(
+                    if retirement
+                        .get()
+                        .is_some_and(|before| before != self.content_seq.load(Ordering::Acquire))
+                    {
+                        ClearOutcome::Cleared
+                    } else {
+                        ClearOutcome::AlreadyEmpty
+                    },
+                ));
+            }
+            // A nonempty readback invalidates an earlier expected empty frame.
+            retirement.set(None);
+            if !body
+                .as_deref()
+                .is_some_and(|body| self.inspect.interrupted_remainder(body))
+            {
+                return Err(io::Error::other(
+                    "Claude clear remainder is no longer owned",
+                ));
+            }
+        }
+        match self.observe("clear_preflight") {
+            InputObservation::Empty => {
+                return Ok(Some(if *sent {
+                    ClearOutcome::Cleared
+                } else {
+                    ClearOutcome::AlreadyEmpty
+                }))
+            }
+            InputObservation::Accepted => return Ok(Some(ClearOutcome::Accepted)),
+            InputObservation::Pending => {}
+            _ => {
+                return Err(io::Error::other(
+                    "Provider composer changed or is unavailable; draft was not cleared",
+                ))
+            }
+        }
+        let revision = self.inspect.cleanup_progress();
+        if progress.revision != revision {
+            progress.revision = revision;
+            progress.expires = self.clock.now() + WITHDRAW_GRACE;
+        }
+        if self.clock.now() >= progress.expires {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Provider made no owned-draft withdrawal progress",
+            ));
+        }
+        self.check_deadline()?;
+        let write_deadline = self.deadline.get().min(progress.expires);
+        tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.clear", key = ?key, owned_only = true);
+        let queue = || {
+            self.io.queue_input_write_scoped(
+                key,
+                Bytes::new(),
+                Duration::ZERO,
+                Some(write_deadline),
+                &self.scope,
+            )
+        };
+        let completion = match lease {
+            Some(lease)
+                if retirement.is_some()
+                    || self.inspect.confirm_consumption()
+                    || self.inspect.retry_owned_enter() =>
+            {
+                lease.with_unedited(queue)
+            }
+            Some(lease) => lease.with_uninvalidated(queue),
+            None => queue(),
+        }?;
+        self.inspect.clearing(index);
+        if let Some(retirement) = retirement {
+            if index != 0 && self.inspect.cleanup_expects_empty() {
+                retirement.set(Some(self.content_seq.load(Ordering::Acquire)));
+            }
+        }
+        drop(guard);
+        completion
+            .recv_timeout(self.clock.remaining(write_deadline))
+            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
+        // Keep editing keys in separate input events for Ink providers. Check
+        // for emptiness again before sending the next key or another line kill.
+        self.clock.sleep(CLEAR_KEY_DELAY, generation);
+        *sent = true;
+        Ok(None)
+    }
+
     pub(super) fn recover_pending_paste(
         &mut self,
         delay: Duration,

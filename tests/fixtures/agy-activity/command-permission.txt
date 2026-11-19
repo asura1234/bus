@@ -1,0 +1,16 @@
+Command
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Reason: The command connects to a pre-existing local Bus server socket in /private/tmp/agy-project/data that was not
+spawned in this session and sends a reply message that mutates the running server's state.
+Requesting permission for:
+   /private/tmp/agy-project/bin/sbus send --reply-to 6 --as 2 --text REPLY_MARKER
+
+Run this command?
+> 1. Yes, run command
+  2. Yes, and always allow in this conversation for commands that start with '/private/tmp/agy-project/bin/sbus'
+  3. Yes, and always allow for commands that start with '/private/tmp/agy-project/bin/sbus' (Persist to settings.json)
+  4. No, cancel
+
+  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command
+esc to cancel                                                                                       auto · Gemini 4 Carbon · medium

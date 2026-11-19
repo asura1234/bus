@@ -186,7 +186,11 @@ impl Worker {
 
     fn delivery_route(&self, agent: &RoomAgent) -> Option<DeliveryRoute> {
         let now_ms = io::now_ms();
-        if self.native_submissions.contains_key(&agent.id)
+        if agent
+            .current_request
+            .and_then(|id| self.state.request(id))
+            .is_some_and(|r| r.interrupt_retirement_pending)
+            || self.native_submissions.contains_key(&agent.id)
             || self.submission_rechecks.contains(&agent.id)
             || self.withdrawn_at.contains_key(&agent.id)
             || agent.provider_retry.as_ref().is_some_and(|hold| {
@@ -596,13 +600,14 @@ impl Worker {
             .begin_submission(request, launch, boundary)
             .map_err(|e| e.to_string())?;
         state
-            .stamp_delivery_epoch(
+            .stamp_native_delivery_epoch(
                 request,
                 crate::messaging::model::DeliveryEpoch {
                     generation: self.serving_generation,
                     terminal_id: terminal.to_owned(),
                     pane_id: pane.to_owned(),
                 },
+                None,
             )
             .map_err(|e| e.to_string())?;
         state
@@ -752,16 +757,7 @@ impl Worker {
         state
             .begin_steering(request, lead)
             .map_err(|e| e.to_string())?;
-        state
-            .stamp_delivery_epoch(
-                request,
-                crate::messaging::model::DeliveryEpoch {
-                    generation: self.serving_generation,
-                    terminal_id: terminal.clone(),
-                    pane_id: pane.clone(),
-                },
-            )
-            .map_err(|e| e.to_string())?;
+        self.stamp_steering_origin(&mut state, agent, request, terminal, pane)?;
         state
             .record_picked(request, io::now_ms(), true)
             .map_err(|e| e.to_string())?;

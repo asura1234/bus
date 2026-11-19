@@ -153,31 +153,9 @@ fn connected_peer_pid(stream: &LocalStream) -> Option<u32> {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(unix)]
 fn peer_pid(stream: &LocalStream) -> Option<u32> {
-    use std::os::fd::AsRawFd;
-    let interprocess::local_socket::Stream::UdSocket(inner) = stream;
-    let mut pid: libc::pid_t = -1;
-    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
-    // SAFETY: fd is the connected socket, pid and len are writable, and
-    // LOCAL_PEERPID writes a pid_t on success.
-    let rc = unsafe {
-        libc::getsockopt(
-            inner.inner().as_raw_fd(),
-            libc::SOL_LOCAL,
-            libc::LOCAL_PEERPID,
-            &mut pid as *mut libc::pid_t as *mut libc::c_void,
-            &mut len,
-        )
-    };
-    u32::try_from(pid).ok().filter(|_| rc == 0 && pid > 0)
-}
-
-#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
-fn peer_pid(stream: &LocalStream) -> Option<u32> {
-    use interprocess::local_socket::traits::Stream as _;
-    let pid = stream.peer_creds().ok()?.pid()?;
-    u32::try_from(pid).ok().filter(|pid| *pid > 0)
+    crate::platform::ipc::local_stream_peer_pid(stream)
 }
 
 #[cfg(not(unix))]

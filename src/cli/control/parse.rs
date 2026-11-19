@@ -117,6 +117,9 @@ pub(super) fn cli() -> Command {
                 .arg_required_else_help(true)
                 .subcommand(
                     subcommand("recover")
+                        .arg(flag("retire-terminal").help(
+                            "Show the Bus TUI confirmation path for closing the original terminal",
+                        ))
                         .arg(value_arg("request").required(true))
                         .arg(value_arg("as").long("as"))
                         .arg(flag("confirm")),
@@ -244,6 +247,9 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
                     json!({"request": required(args, "request")?, "confirm": confirmed(args)?});
                 if let Some(author) = args.get_one::<String>("as") {
                     params["as"] = author.clone().into();
+                }
+                if args.get_flag("retire-terminal") {
+                    params["retire_terminal"] = true.into();
                 }
                 ("request.recover", params)
             }
