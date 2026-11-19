@@ -1110,6 +1110,28 @@ fn rename_preview_keeps_the_field_cursor_when_the_pane_has_none() {
 }
 
 #[test]
+fn legacy_r_control_byte_restarts_but_reported_shift_opens_new_room() {
+    let (ui, _, _) = fixture();
+    let mut shell = shell_with(ui);
+    let legacy = shell.handle_input_bytes(b"\x12");
+    assert!(matches!(
+        legacy.actions.as_slice(),
+        [crate::client::compositor::ClientShellAction::RestartBus]
+    ));
+    assert!(shell.bus.as_ref().unwrap().form.is_none());
+
+    for shifted in [b"\x1b[114;6u".as_slice(), b"\x1b[27;6;82~"] {
+        let (ui, _, _) = fixture();
+        let mut shell = shell_with(ui);
+        assert!(shell.handle_input_bytes(shifted).actions.is_empty());
+        assert!(matches!(
+            shell.bus.as_ref().unwrap().form,
+            Some(forms::Form::Room(_))
+        ));
+    }
+}
+
+#[test]
 fn ctrl_r_is_global_in_room_terminal_and_overlays_without_forwarding() {
     for view in ["room", "terminal", "help", "rename", "deletion"] {
         let (mut ui, room, agent) = fixture();
