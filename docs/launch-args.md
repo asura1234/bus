@@ -80,7 +80,10 @@ resumes: Codex gets `-c check_for_update_on_startup=false`, Cursor gets
 environment setting is absent, AGY gets `AGY_CLI_DISABLE_AUTO_UPDATE=1` when
 that environment setting is absent, and Kimi's Bus-owned `tui.toml` gets
 `upgrade.auto_install = false`. An explicit inherited Claude or AGY setting is
-retained; user/project settings can override the inherited environment. Kimi's
+retained; user/project settings can override the inherited environment. Managed
+AGY launches also default `AGY_CLI_OSC7501` to `on`; an explicit inherited value
+is preserved on launch and resume. This requests AGY's OSC 7501 terminal output
+independently of the auto-update setting. Kimi's
 private `tui.toml` also sets `cache_expiry_hint = false`; if its Cache expired
 chooser still appears, Bus exposes it as a dialog. Bus does not modify global
 user configuration or the shared provider installation.
