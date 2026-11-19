@@ -1,8 +1,8 @@
 //! Bounded durable retries and transcript-backed completion settlement for AGY workers.
 use super::{
-    callback, callbacks,
+    callback,
     callback_observations::{claim_with_policy, observation_paths_with_ext, Claim},
-    AgentId, BusState, CallbackEventKind, CallbackRecordResult, ControlFlow, Path,
+    callbacks, AgentId, BusState, CallbackEventKind, CallbackRecordResult, ControlFlow, Path,
     ProviderCallback, Worker,
 };
 use crate::agents::providers::agy::{
@@ -39,7 +39,8 @@ fn transcript_error_callback(
         turn,
         None,
         CallbackEventKind::Error {
-            message: "AGY transcript completion could not be verified; inspect its terminal.".into(),
+            message: "AGY transcript completion could not be verified; inspect its terminal."
+                .into(),
             provider_error: Some(error),
         },
     )
@@ -174,7 +175,20 @@ impl Worker {
                 cb.callback_id = format!("{}:agy-transcript-error:{turn}", record.id);
                 self.apply_request_callback(id, state, cb)?;
             }
-            AgyTranscriptOutcome::Pending => {}
+            AgyTranscriptOutcome::Pending => {
+                if record
+                    .value
+                    .get("transcriptPath")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|path| !path.is_empty())
+                {
+                    if let Some(turn) = Self::owned_agy_turn(state, id, record, session) {
+                        tracing::debug!(event = "bus.callback.deferred", reason = "agy_transcript_pending",
+                            phase = "before_start", agent_id = id.0, session_id = %session, turn_id = %turn,
+                            "Prior AGY turn has no committed transcript final before new start");
+                    }
+                }
+            }
         }
         Ok(())
     }

@@ -725,3 +725,40 @@ fn agy_git_exclude_does_not_interpret_grok_global_registry_files() {
         String::from_utf8_lossy(&status.stdout)
     );
 }
+
+#[test]
+fn agy_bounded_child_search_never_accepts_an_unregistered_session() {
+    let temp = TestTemp::new("agy-child-search-budget");
+    let brain = temp.path().join("brain");
+    for index in 0..35 {
+        let dir = brain
+            .join(format!("s{index}"))
+            .join(".system_generated/subagents");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("s{}.json", index + 1)), b"{}").unwrap();
+    }
+    let value = json!({"artifactDirectoryPath":brain.join("s34")});
+    assert!(!super::agy::hooks::is_descendant_subagent(
+        "s0", "s34", &value
+    ));
+    let value = json!({"artifactDirectoryPath":brain.join("foreign")});
+    assert!(!super::agy::hooks::is_descendant_subagent(
+        "s0", "foreign", &value
+    ));
+    for index in 0..520 {
+        std::fs::create_dir_all(brain.join(format!("unrelated-{index}"))).unwrap();
+    }
+    let unregistered = json!({"hookEventName":"SessionStart", "conversationId":"foreign",
+        "artifactDirectoryPath":brain.join("foreign")});
+    assert_eq!(
+        parse(ProviderKind::Agy, &unregistered).unwrap(),
+        Parsed::Session {
+            session: "foreign".into(),
+            source: Some("startup".into())
+        }
+    );
+    let value = json!({"artifactDirectoryPath":brain.join("s1")});
+    assert!(super::agy::hooks::is_descendant_subagent(
+        "s0", "s1", &value
+    ));
+}

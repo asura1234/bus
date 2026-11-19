@@ -90,11 +90,17 @@ pub(crate) fn is_descendant_subagent(root_session: &str, candidate: &str, value:
         return false;
     };
     let mut visited = BTreeSet::new();
+    let mut truncated = false;
     let mut queue = VecDeque::from([root_session.to_owned()]);
     while let Some(current) = queue.pop_front() {
-        if visited.len() >= 32 || !visited.insert(current.clone()) {
+        if visited.contains(&current) {
             continue;
         }
+        if visited.len() >= 32 {
+            truncated = true;
+            continue;
+        }
+        visited.insert(current.clone());
         let subagents_dir = brain.join(&current).join(".system_generated/subagents");
         if subagents_dir.join(format!("{candidate}.json")).is_file() {
             return true;
@@ -102,7 +108,11 @@ pub(crate) fn is_descendant_subagent(root_session: &str, candidate: &str, value:
         let Ok(entries) = std::fs::read_dir(&subagents_dir) else {
             continue;
         };
-        for entry in entries.flatten().take(32) {
+        for (index, entry) in entries.flatten().take(33).enumerate() {
+            if index == 32 {
+                truncated = true;
+                break;
+            }
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -110,6 +120,17 @@ pub(crate) fn is_descendant_subagent(root_session: &str, candidate: &str, value:
                 }
             }
         }
+    }
+    if truncated {
+        tracing::debug!(
+            event = "bus.callback.subagent_search_truncated",
+            parent_session_id = root_session,
+            candidate_session_id = candidate,
+            visited = visited.len(),
+            session_limit = 32,
+            entries_per_session_limit = 32,
+            "AGY descendant search reached its bounded inventory limit without ownership proof"
+        );
     }
     false
 }
@@ -140,7 +161,13 @@ fn is_registered_subagent_any_parent(brain: &Path, candidate: &str) -> bool {
     let Ok(entries) = std::fs::read_dir(brain) else {
         return false;
     };
-    for entry in entries.flatten().take(512) {
+    for (index, entry) in entries.flatten().take(513).enumerate() {
+        if index == 512 {
+            tracing::debug!(event = "bus.callback.subagent_search_truncated",
+                candidate_session_id = candidate, parent_limit = 512,
+                "AGY registration search reached its parent inventory limit without ownership proof");
+            break;
+        }
         if entry
             .path()
             .join(".system_generated/subagents")
