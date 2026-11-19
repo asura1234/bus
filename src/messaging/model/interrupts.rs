@@ -2,8 +2,8 @@
 //! closes instead of running on. A message that never joined that turn stays
 //! queued for the next one.
 use super::{
-    AgentId, AgentRuntimeIdentity, Author, BusState, ModelError, Prompt, PromptId, RequestId,
-    RequestPhase, RoomId, RuntimeStatus,
+    AgentId, AgentRuntimeIdentity, Author, BusState, CallbackEventKind, ModelError, Prompt,
+    PromptId, Request, RequestId, RequestPhase, RoomId, RuntimeStatus,
 };
 use serde::{Deserialize, Serialize};
 
@@ -95,6 +95,10 @@ impl SendInterrupt {
     }
 }
 
+fn is_provisional_stop_owner(request: &Request) -> bool {
+    request.phase == RequestPhase::Submitting && !request.trusted_start_bound
+}
+
 impl BusState {
     pub(crate) fn send_interrupt_target(&self, recipient: AgentId) -> Option<SendInterrupt> {
         let owner = self.agent(recipient)?;
@@ -106,13 +110,20 @@ impl BusState {
                 .needs_interrupt_stop(owner)
                 .then(|| SendInterrupt::autonomous(owner));
         };
+        // A request-scoped stop on a provisional head still needs the
+        // observed provider turn to distinguish consecutive autonomous episodes.
+        let observed_turn = if is_provisional_stop_owner(target) {
+            owner.autonomous_stop.provider_turn_id.as_ref()
+        } else {
+            None
+        };
         Some(SendInterrupt {
             target: Some(target.id),
             activity: None,
             identity: owner.runtime_identity.clone(),
             submission_boundary: target.submission_boundary,
             submission_status_revision: target.submission_status_revision,
-            provider_turn_id: target.provider_turn_id.clone(),
+            provider_turn_id: observed_turn.or(target.provider_turn_id.as_ref()).cloned(),
         })
     }
 
@@ -160,12 +171,35 @@ impl BusState {
         callback: &super::ProviderCallback,
     ) -> Option<String> {
         let owner = self.agent(callback.agent_id)?;
-        if owner.current_request.is_some()
+        let session = owner
+            .runtime_identity
+            .session_id
+            .as_deref()
+            .filter(|session| !session.is_empty())?;
+        if owner.deletion_pending
             || owner.runtime_identity.launch_id.as_deref() != Some(&callback.launch_id)
-            || owner.runtime_identity.session_id.is_none()
-            || owner.runtime_identity.session_id != callback.provider_session_id
+            || callback.provider_session_id.as_deref() != Some(session)
         {
             return None;
+        }
+        if let Some(head) = owner.current_request {
+            let request = self.request(head)?;
+            let payload = callback
+                .prompt_payload
+                .as_deref()
+                .filter(|payload| !payload.trim().is_empty())?;
+            // Only an unrelated Started after this reservation can advance the
+            // autonomous episode alongside a still-provisional Bus owner.
+            if !is_provisional_stop_owner(request)
+                || !matches!(callback.kind, CallbackEventKind::PromptStarted)
+                || request.expected_launch_id.as_deref() != Some(&callback.launch_id)
+                || request
+                    .submission_boundary
+                    .is_none_or(|boundary| callback.sequence <= boundary)
+                || request.matches_callback_payload(payload, owner.provider)
+            {
+                return None;
+            }
         }
         callback
             .provider_turn_id
@@ -250,8 +284,7 @@ impl BusState {
         }
         // A provisional join may still be in the autonomous episode that
         // already received a stop. A lost native receipt leaves it provisional.
-        row.phase == RequestPhase::Submitting
-            && !row.trusted_start_bound
+        is_provisional_stop_owner(row)
             && owner
                 .filter(|owner| owner.current_request == Some(id))
                 .is_some_and(|owner| {

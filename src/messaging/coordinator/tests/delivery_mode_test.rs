@@ -1588,3 +1588,175 @@ fn uncertain_busy_join_allows_a_stop_after_a_new_turn_binds() {
     assert_eq!(stop_keys(&f).len(), 1);
     assert_later_autonomous_send(&mut f, autonomous);
 }
+
+fn assert_head_stays_provisional(f: &Fixture, agent: AgentId, head: RequestId) {
+    assert_eq!(
+        f.worker.state.agent(agent).unwrap().current_request,
+        Some(head)
+    );
+    let request = f.request(head);
+    assert_eq!(request.phase, RequestPhase::Submitting);
+    assert!(!request.trusted_start_bound);
+    assert!(
+        request.provider_turn_id.is_none(),
+        "the provider turn does not own the Bus prompt"
+    );
+}
+
+fn provider_started_during_provisional_join(uncertain: bool) {
+    let (mut f, autonomous, head, original) = claimed_busy_join();
+    let pending = if uncertain {
+        uncertain_busy_join(&mut f, head);
+        None
+    } else {
+        Some(defer_busy_join(&mut f, head).0)
+    };
+    autonomous_started_with_prompt(
+        &mut f,
+        autonomous,
+        "autonomous-turn",
+        "more of the same turn",
+    );
+    let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"same episode"});
+    let same_episode = send(&mut f, params);
+    assert!(same_episode.ok, "{same_episode:?}");
+    assert_eq!(same_episode.result["stage"], "queued");
+    assert_eq!(same_episode.result["interrupts"][0]["outcome"], "unknown");
+    assert_eq!(stop_keys(&f).len(), 1);
+
+    autonomous_started_with_prompt(&mut f, autonomous, "provider-turn-b", "provider work B");
+    if uncertain {
+        reopen_after_interrupt(&mut f);
+    }
+    poll_autonomous(&mut f, "working", 11, false, None);
+    assert_head_stays_provisional(&f, autonomous, head);
+    assert_eq!(f.request(head).uncertain_outcome, uncertain);
+    assert!(saved_autonomous_claim(&f, autonomous, &original));
+    assert_later_autonomous_send(&mut f, autonomous);
+    assert_head_stays_provisional(&f, autonomous, head);
+    assert!(saved_autonomous_claim(&f, autonomous, &original));
+
+    if let Some(reply) = pending {
+        reply.send(busy_join_error(None, true)).unwrap();
+        f.worker.finish_native_submissions(false);
+        assert_eq!(f.request(head).phase, RequestPhase::Queued);
+    }
+}
+
+#[test]
+fn provider_started_while_join_is_in_flight_allows_one_pinned_stop() {
+    provider_started_during_provisional_join(false);
+}
+
+#[test]
+fn provider_started_after_uncertain_join_survives_reopen_and_allows_one_pinned_stop() {
+    provider_started_during_provisional_join(true);
+}
+
+#[test]
+fn provider_started_claim_deduplicates_its_turn_and_allows_the_next_foreign_turn() {
+    let (mut f, autonomous, head, original) = claimed_busy_join();
+    uncertain_busy_join(&mut f, head);
+    autonomous_started_with_prompt(&mut f, autonomous, "provider-turn-b", "provider work B");
+    poll_autonomous(&mut f, "working", 11, false, None);
+
+    f.worker.transport = Box::new(FailAtFirstStop(f.native.clone()));
+    let params = json!({"room": f.room.0.to_string(),"to":["autonomous"],"text":"stop B"});
+    let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send(&mut f, params)));
+    assert!(
+        crash.is_err(),
+        "the new provider episode should reach native"
+    );
+    assert_eq!(stop_keys(&f).len(), 2);
+
+    reopen_after_interrupt(&mut f);
+    poll_autonomous(&mut f, "working", 11, false, None);
+    let params =
+        json!({"room": f.room.0.to_string(),"to":["autonomous"],"text":"retry while B runs"});
+    let duplicate = send(&mut f, params);
+    assert!(duplicate.ok, "{duplicate:?}");
+    assert_eq!(duplicate.result["stage"], "queued");
+    assert_eq!(duplicate.result["interrupts"][0]["outcome"], "unknown");
+    assert_eq!(stop_keys(&f).len(), 2);
+
+    autonomous_started_with_prompt(&mut f, autonomous, "provider-turn-c", "provider work C");
+    poll_autonomous(&mut f, "working", 12, false, None);
+    let params = json!({"room": f.room.0.to_string(),"to":["autonomous"],"text":"stop C"});
+    let next = send(&mut f, params);
+    assert!(next.ok, "{next:?}");
+    assert_eq!(next.result["stage"], "queued");
+    assert_eq!(next.result["interrupts"][0]["outcome"], "interrupting");
+    assert_eq!(stop_keys(&f).len(), 3);
+    assert_eq!(recorded_stop_terminals(&f), ["autonomous-terminal"; 3]);
+    assert_head_stays_provisional(&f, autonomous, head);
+    assert!(saved_autonomous_claim(&f, autonomous, &original));
+}
+
+#[test]
+fn provider_started_without_proof_does_not_advance_a_provisional_episode() {
+    use crate::messaging::model::{CallbackEventKind, ProviderCallback};
+
+    let (mut f, autonomous, head, original) = claimed_busy_join();
+    let payload = uncertain_busy_join(&mut f, head);
+    let boundary = f.request(head).submission_boundary.unwrap();
+    let fresh = ProviderCallback {
+        callback_id: "provider-start".into(),
+        sequence: boundary + 1,
+        occurred_at_ms: f.now,
+        agent_id: autonomous,
+        launch_id: "autonomous-launch".into(),
+        provider_session_id: Some("autonomous-session".into()),
+        provider_turn_id: Some("different-turn".into()),
+        provider_prompt_id: None,
+        prompt_payload: Some("different payload".into()),
+        kind: CallbackEventKind::PromptStarted,
+    };
+    for callback in [
+        ProviderCallback {
+            provider_turn_id: None,
+            ..fresh.clone()
+        },
+        ProviderCallback {
+            provider_turn_id: Some(String::new()),
+            ..fresh.clone()
+        },
+        ProviderCallback {
+            prompt_payload: None,
+            ..fresh.clone()
+        },
+        ProviderCallback {
+            prompt_payload: Some(payload),
+            ..fresh.clone()
+        },
+        ProviderCallback {
+            provider_session_id: None,
+            ..fresh.clone()
+        },
+        ProviderCallback {
+            provider_session_id: Some("other-session".into()),
+            ..fresh.clone()
+        },
+        ProviderCallback {
+            launch_id: "other-launch".into(),
+            ..fresh.clone()
+        },
+        ProviderCallback {
+            sequence: boundary,
+            ..fresh
+        },
+    ] {
+        assert!(
+            f.worker.state.autonomous_callback_turn(&callback).is_none(),
+            "{callback:?}"
+        );
+        let params =
+            json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"no new episode"});
+        let result = send(&mut f, params);
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.result["stage"], "queued");
+        assert_eq!(result.result["interrupts"][0]["outcome"], "unknown");
+        assert_eq!(stop_keys(&f).len(), 1);
+    }
+    assert_head_stays_provisional(&f, autonomous, head);
+    assert!(saved_autonomous_claim(&f, autonomous, &original));
+}
