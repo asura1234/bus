@@ -708,8 +708,26 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     let rooms = bus_state(&session)["rooms"].as_array().unwrap().len();
     assert_eq!(rooms, 3);
 
-    // The sent message is the history row. A drag copies it through OSC 52.
-    let found = session.ok(&["find", "hello from"]);
+    // A visible optimistic row does not yet provide stable copy coordinates.
+    // Wait for its canonical request, then the provider's completion receipt.
+    session.ok(&["wait", "--text", "[pending]", "--gone", "--timeout", "20s"]);
+    let (code, history) = parse(scratch_bus(
+        &session,
+        &["history", "--room", "bus", "--limit", "20"],
+    ));
+    assert_eq!(code, 0, "{history}");
+    let message = history["result"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["prompt"]["text"] == "hello from the driver")
+        .expect("the acknowledged composer submission is persisted")["prompt"]["id"]
+        .to_string();
+    let settled = session.ok(&["wait", "--message", &message, "--timeout", "30s"]);
+    assert_turn_ended(&settled);
+    // History rebuilds asynchronously after the request settles. Read the
+    // copy coordinates from the frame that actually contains the sent text.
+    let found = session.ok(&["wait", "--text", "hello from", "--timeout", "20s"]);
     let row = found["matches"][0]["row"].as_u64().unwrap().to_string();
     let col = found["matches"][0]["col"].as_u64().unwrap();
     let dragged = session.ok(&["drag", &row, &col.to_string(), &row, &(col + 9).to_string()]);
