@@ -2,11 +2,12 @@
 #[cfg(test)]
 use super::client::{request, request_with_timeout};
 use super::protocol::{
-    encode, poll_write, worker_timeout, ControlledStream, Frame, FrameError, IO_TIMEOUT, LOCK_NAME,
-    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, RESPONSE_WRITE_TIMEOUT, SOCKET_NAME,
-    WAIT_SOCKET_NAME,
+    encode, poll_write, worker_timeout, ControlledStream, Frame, FrameError, ASYNC_SEND_FOLLOWER,
+    IO_TIMEOUT, LOCK_NAME, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL,
+    RESPONSE_WRITE_TIMEOUT, SOCKET_NAME, WAIT_SOCKET_NAME,
 };
 pub(crate) use super::protocol::{ControlCall, Request, Response};
+use crate::messaging::coordinator::FollowerStatus;
 use crate::messaging::{coordinator::BusCommand, storage::io as storage_io};
 use crate::platform::ipc;
 use interprocess::local_socket::{traits::Listener as _, ListenerNonblockingMode};
@@ -56,9 +57,26 @@ impl Drop for Server {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn start(
     data_dir: &Path,
     commands: SyncSender<(u64, BusCommand)>,
+) -> Result<Server, String> {
+    start_inner(data_dir, commands, None)
+}
+
+pub(crate) fn start_with_follower_status(
+    data_dir: &Path,
+    commands: SyncSender<(u64, BusCommand)>,
+    follower_status: FollowerStatus,
+) -> Result<Server, String> {
+    start_inner(data_dir, commands, Some(follower_status))
+}
+
+fn start_inner(
+    data_dir: &Path,
+    commands: SyncSender<(u64, BusCommand)>,
+    follower_status: Option<FollowerStatus>,
 ) -> Result<Server, String> {
     storage_io::private_dir(data_dir).map_err(|e| e.to_string())?;
     ipc::validate_private_socket_directory(data_dir)
@@ -71,7 +89,7 @@ pub(crate) fn start(
     let stop = Arc::clone(&stopped);
     let thread = thread::Builder::new()
         .name("bus-control".into())
-        .spawn(move || serve([interactive, waiters], commands, stop))
+        .spawn(move || serve([interactive, waiters], commands, stop, follower_status))
         .map_err(|e| e.to_string())?;
     Ok(Server {
         stopped,
@@ -103,12 +121,14 @@ struct Endpoint {
     clients: Vec<Client>,
     poll_budget: Option<Arc<()>>,
     last_overload_log: Option<Instant>,
+    follower_status: Option<FollowerStatus>,
 }
 
 fn serve(
     listeners: [ipc::LocalListener; 2],
     commands: SyncSender<(u64, BusCommand)>,
     stopped: Arc<AtomicBool>,
+    follower_status: Option<FollowerStatus>,
 ) {
     crate::platform::set_current_thread_priority(crate::platform::ThreadPriority::Interactive);
     let mut endpoints = listeners
@@ -119,6 +139,7 @@ fn serve(
             clients: Vec::new(),
             poll_budget: (index == 1).then(|| Arc::new(())),
             last_overload_log: None,
+            follower_status: (index == 1).then(|| follower_status.clone()).flatten(),
         })
         .collect::<Vec<_>>();
     let mut next_id = CONTROL_COMMAND_BIT;
@@ -161,7 +182,11 @@ impl Endpoint {
                         }
                     }
                 }
-                Ok(stream) => self.clients.push(Client::new(stream)),
+                Ok(stream) => {
+                    let mut client = Client::new(stream);
+                    client.follower_status.clone_from(&self.follower_status);
+                    self.clients.push(client);
+                }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(_) => {
@@ -228,6 +253,8 @@ struct Client {
     accepted: Instant,
     /// Retained through writing/closing so slow reply readers are attributable.
     request: Option<(String, &'static str)>,
+    async_send_follower: bool,
+    follower_status: Option<FollowerStatus>,
 }
 
 enum State {
@@ -255,6 +282,8 @@ impl Client {
             deadline: Instant::now() + IO_TIMEOUT,
             accepted: Instant::now(),
             request: None,
+            async_send_follower: false,
+            follower_status: None,
         }
     }
 
@@ -441,6 +470,22 @@ impl Client {
             .request
             .as_ref()
             .map_or(("", "unread"), |(id, method)| (id.as_str(), *method));
+        // Cancelling a long-lived `send --async` can close a status socket
+        // while its poll is in flight. Keep partial writes and other errors
+        // at WARN so failed transfers remain visible.
+        if self.async_send_follower && reason == "BrokenPipe" && written_bytes == 0 {
+            tracing::debug!(
+                event = "bus.control.response.failed",
+                control_request_id = id,
+                method,
+                stage = "write",
+                reason,
+                response_bytes,
+                written_bytes,
+                "Async send follower disconnected before the status response"
+            );
+            return;
+        }
         tracing::warn!(
             event = "bus.control.response.failed",
             control_request_id = id,
@@ -503,6 +548,25 @@ impl Client {
                 "Method belongs to the other control endpoint",
             ));
         }
+        self.async_send_follower = request.method == "message.status"
+            && matches!(
+                request
+                    .params
+                    .as_object_mut()
+                    .and_then(|params| params.remove(ASYNC_SEND_FOLLOWER)),
+                Some(serde_json::Value::Bool(true))
+            );
+        let id = request.id.clone();
+        let method = crate::messaging::perf::control_method_label(&request.method);
+        self.request = Some((id.chars().take(128).collect(), method));
+        if let Some(response) = self
+            .follower_status
+            .as_ref()
+            .filter(|_| self.async_send_follower)
+            .and_then(|status| status.response(&request))
+        {
+            return self.respond(response);
+        }
         // A timed-out transport must not release a queued poll's capacity.
         // At most MAX_CLIENTS polls can occupy the shared coordinator queue.
         if poll_budget.is_some_and(|budget| Arc::strong_count(budget) > MAX_CLIENTS) {
@@ -512,9 +576,6 @@ impl Client {
                 "Status poll budget reached",
             ));
         }
-        let id = request.id.clone();
-        let method = crate::messaging::perf::control_method_label(&request.method);
-        self.request = Some((id.chars().take(128).collect(), method));
         let (reply, receiver) = mpsc::sync_channel(1);
         let command_id = *next_id;
         *next_id = next_id.wrapping_add(1) | CONTROL_COMMAND_BIT;

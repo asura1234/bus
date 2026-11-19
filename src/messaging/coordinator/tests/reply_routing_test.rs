@@ -406,6 +406,54 @@ fn reply_waiter_lease_keeps_the_reply_until_exactly_three_seconds() {
 }
 
 #[test]
+fn reply_routing_honors_a_waiter_registered_by_the_follower_snapshot() {
+    let mut f = Fixture::new();
+    let source = f.send(Author::Agent(f.orch), "build this");
+    let mut state = f.worker.state.clone();
+    state
+        .set_agent_runtime_identity(
+            f.agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("worker-launch".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    state.begin_submission(source, "worker-launch", 0).unwrap();
+    f.worker.save(state).unwrap();
+    let message = f.worker.state.request(source).unwrap().prompt.id;
+    let snapshot = Arc::new(Mutex::new(Arc::new(f.worker.snapshot())));
+    let follower = FollowerStatus::new(snapshot, &f.worker);
+    assert!(follower
+        .response(&ControlRequest {
+            id: "pending-follower".into(),
+            method: "message.status".into(),
+            params: json!({"message":message.0.to_string(),"as":f.orch.0.to_string()}),
+        })
+        .is_some());
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    state
+        .recover_idle_request(source, io::now_ms() - 4_000)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.notices().is_empty(),
+        "live follower lease must hold the outcome wake"
+    );
+    f.worker.test_reply_waiter_now = Some(std::time::Instant::now() + Duration::from_secs(3));
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.worker.reply_waiters.lock().unwrap().is_empty(),
+        "expired follower lease must be pruned"
+    );
+    assert_eq!(f.notices().len(), 1);
+}
+
+#[test]
 fn reply_routing_an_expired_waiter_lease_releases_the_reply() {
     let mut f = Fixture::new();
     let source = f.send(Author::Agent(f.orch), "build this");
@@ -413,6 +461,8 @@ fn reply_routing_an_expired_waiter_lease_releases_the_reply() {
     let message = f.worker.state.request(source).unwrap().prompt.id;
     f.worker
         .reply_waiters
+        .lock()
+        .unwrap()
         .insert(message, std::time::Instant::now() - Duration::from_secs(4));
     f.worker.submit_ready().unwrap();
     assert_eq!(

@@ -14,6 +14,8 @@ mod error_pipe_tests;
 mod exit_snapshot;
 mod expiry;
 mod first_message;
+mod follower_status;
+pub(crate) use follower_status::FollowerStatus;
 mod launch_metrics;
 mod native_delivery;
 #[cfg(test)]
@@ -363,7 +365,12 @@ impl BusHandle {
         let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
         // Every session runs the control socket; `dev_enabled` only gates
         // the dev-tier methods.
-        let control = control::start(&data_dir, commands.clone())?;
+        let follower_status = FollowerStatus::new(Arc::clone(&snapshots), &worker);
+        let control = crate::messaging::control::server::start_with_follower_status(
+            &data_dir,
+            commands.clone(),
+            follower_status,
+        )?;
         let (event_tx, events) = mpsc::channel();
         let shared = Arc::clone(&snapshots);
         std::thread::Builder::new()

@@ -131,7 +131,7 @@ fn reply_seen_send_async_preserves_the_author_and_prints_the_reply() {
         Ok(Response::success(&request.id, match request.method.as_str() {
             "message.send" => json!({"message_id":19,"request_ids":[20]}),
             "message.status" => {
-                assert_eq!(request.params, json!({"message":"19","as":"orch"}));
+                assert_eq!(request.params, json!({"message":"19","as":"orch","_async_send_follower":true}));
                 json!({"message_id":19,"complete":true,"requests":[{"request_id":20,"stage":"replied","turn_ended":true,"reply_ack":true,"reply":{"text":"built successfully"}}]})
             },
             "message.seen" => json!({"seen":true}),

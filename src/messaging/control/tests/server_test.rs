@@ -49,6 +49,86 @@ fn read_response(mut stream: ipc::LocalStream) -> Response {
     read_response_open(&mut stream)
 }
 
+#[cfg(unix)]
+#[test]
+fn abandoned_status_follower_keeps_only_unexpected_write_failures_at_warn() {
+    for (method, follower, written, expected_level) in [
+        ("message.status", true, 0, "DEBUG"),
+        ("message.status", false, 0, "WARN"),
+        ("message.status", true, 1, "WARN"),
+        ("state.get", true, 0, "WARN"),
+        ("unread", false, 0, "WARN"),
+    ] {
+        let dir = TestDir::new();
+        storage_io::private_dir(&dir.0).unwrap();
+        let is_status = method == "message.status";
+        let endpoint = if is_status {
+            WAIT_SOCKET_NAME
+        } else {
+            SOCKET_NAME
+        };
+        let (listener, _socket) = bind_endpoint(&dir.0, endpoint).unwrap();
+        let mut peer = ipc::connect_local_stream(&dir.0.join(endpoint)).unwrap();
+        let mut client = Client::new(listener.accept().unwrap());
+        let (commands, receiver) = mpsc::sync_channel(1);
+        let budget = is_status.then(|| Arc::new(()));
+        let mut next = CONTROL_COMMAND_BIT;
+        let response = Response::success("abandoned-poll", json!("x".repeat(2400)));
+        if method == "unread" {
+            peer.write_all(b"{\"callback_wake\":\"test-launch\"}\n")
+                .unwrap();
+            assert!(client.poll(&commands, &mut next, budget.as_ref()));
+            assert!(matches!(
+                receiver.try_recv().unwrap().1,
+                BusCommand::CallbackReady(launch) if launch == "test-launch"
+            ));
+        } else {
+            let params = if follower {
+                json!({"_async_send_follower": true})
+            } else {
+                Value::Null
+            };
+            let request = Request {
+                id: response.id.clone(),
+                method: method.into(),
+                params,
+            };
+            peer.write_all(&encode(&request, MAX_REQUEST_BYTES).unwrap())
+                .unwrap();
+            assert!(client.poll(&commands, &mut next, budget.as_ref()));
+            let (_, BusCommand::Control(call)) = receiver.try_recv().unwrap() else {
+                panic!("expected a dispatched control request");
+            };
+            call.reply.send(response).unwrap();
+            assert!(client.poll(&commands, &mut next, budget.as_ref()));
+        }
+        let State::Writing { bytes, offset, .. } = &mut client.state else {
+            panic!("expected response ready for writing");
+        };
+        if written > 0 {
+            client.stream.0.write_all(&bytes[..written]).unwrap();
+            let mut received = [0; 1];
+            std::io::Read::read_exact(&mut peer, &mut received).unwrap();
+            *offset = written;
+        }
+        drop(peer);
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run_filtered("debug", || {
+            assert!(!client.poll(&commands, &mut next, budget.as_ref()))
+        });
+        let log = capture.text();
+        assert!(log.contains("BrokenPipe"), "{method}: {log}");
+        assert!(
+            log.contains(&format!("written_bytes={written}")),
+            "{method}: {log}"
+        );
+        assert!(
+            log.trim_start().starts_with(expected_level),
+            "{method}: expected {expected_level}, got {log}"
+        );
+    }
+}
+
 fn read_response_open(stream: &mut ipc::LocalStream) -> Response {
     stream.set_nonblocking(true).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -337,6 +417,7 @@ fn overload_logs_the_endpoint_and_requests_holding_its_slots() {
         clients: vec![],
         poll_budget: None,
         last_overload_log: None,
+        follower_status: None,
     };
     let (tx, _rx) = mpsc::sync_channel(MAX_CLIENTS);
     let mut next = CONTROL_COMMAND_BIT;
@@ -918,7 +999,7 @@ fn failed_waiter_accept_keeps_the_interactive_endpoint_serving() {
     let (tx, rx) = mpsc::sync_channel(2);
     let stopped = Arc::new(AtomicBool::new(false));
     let stop = stopped.clone();
-    let thread = thread::spawn(move || serve([interactive, failed], tx, stop));
+    let thread = thread::spawn(move || serve([interactive, failed], tx, stop, None));
     let _server = Server {
         stopped,
         thread: Some(thread),

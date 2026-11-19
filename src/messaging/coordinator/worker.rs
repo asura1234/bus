@@ -82,7 +82,7 @@ pub(super) struct Worker {
     pub(super) unstamped_replies: BTreeSet<RequestId>,
     /// Author waiters renew these leases without acknowledging any reply.
     /// A dead waiter cannot hold routing across restart or lease expiry.
-    pub(super) reply_waiters: BTreeMap<super::PromptId, std::time::Instant>,
+    pub(super) reply_waiters: super::follower_status::ReplyWaiters,
     #[cfg(test)]
     pub(super) test_reply_waiter_now: Option<std::time::Instant>,
     #[cfg(test)]
@@ -208,7 +208,7 @@ impl Worker {
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
             unstamped_replies: BTreeSet::new(),
-            reply_waiters: BTreeMap::new(),
+            reply_waiters: super::follower_status::ReplyWaiters::default(),
             #[cfg(test)]
             test_reply_waiter_now: None,
             #[cfg(test)]

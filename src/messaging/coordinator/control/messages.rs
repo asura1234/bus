@@ -116,7 +116,9 @@ impl Worker {
                         let author = self.control_author(source.room_id, selector)?;
                         if source.prompt.author == Author::Agent(author) {
                             let now = self.reply_waiter_now();
-                            self.reply_waiters.insert(message, now);
+                            if let Ok(mut waiters) = self.reply_waiters.lock() {
+                                waiters.insert(message, now);
+                            }
                         }
                     }
                 }

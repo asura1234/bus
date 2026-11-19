@@ -193,7 +193,10 @@ pub(super) fn follow_message(
     let mut poll_delay = Duration::from_millis(200);
     let mut restart = RestartReconnect::new();
     loop {
-        let mut params = json!({ "message": message });
+        let mut params = json!({
+            "message": message,
+            (crate::messaging::control::ASYNC_SEND_FOLLOWER): true,
+        });
         if let Some(author) = &author {
             params["as"] = author.clone();
         }
