@@ -266,6 +266,7 @@ async fn claude_plain_bus_interrupt_api_retires_only_its_fenced_restored_prompt(
             target: p.target.clone(),
             keys: vec!["esc".into()],
             native_interrupt: Some(crate::protocol::api::schema::NativeInterruptIdentity {
+                claude_turn: None,
                 expected_terminal_id: p.expected_terminal_id.clone(),
                 expected_session_id: "session".into(),
                 expected_payloads: vec!["from bus".into()],

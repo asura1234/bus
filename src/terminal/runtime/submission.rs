@@ -96,6 +96,10 @@ pub(crate) trait SubmissionInspector: Send {
         self.observe(screen) != InputObservation::Unavailable
             && !crate::terminal::driver::has_input_controls(screen)
     }
+    /// Strict, raw composer geometry for transcript-backed Claude retirement.
+    fn claude_empty_editable_composer(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> bool {
+        false
+    }
     /// Some providers register pasted attachments asynchronously and swallow
     /// Enter until registration finishes. This is independent of pane focus
     /// and of the developer draft already saved by the input lease.

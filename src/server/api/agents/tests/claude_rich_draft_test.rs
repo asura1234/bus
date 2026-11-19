@@ -1026,3 +1026,7 @@ async fn a_busy_join_preserves_the_leads_exact_restoration_witness() {
     }
     retirement.await.unwrap().unwrap();
 }
+
+#[cfg(unix)]
+#[path = "claude_no_restoration_test.rs"]
+mod no_restoration;

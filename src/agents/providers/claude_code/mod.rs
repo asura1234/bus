@@ -3,5 +3,6 @@
 pub(crate) mod hooks;
 pub(crate) mod launch;
 pub(crate) mod resume;
+pub(crate) mod retirement;
 pub(crate) mod statusline;
 pub(crate) mod system_prompt;

@@ -133,6 +133,9 @@ impl SubmissionInspector for PreservingComposer {
     fn submission_available(&self, screen: &str) -> bool {
         super::submission_available(self.kind, screen)
     }
+    fn claude_empty_editable_composer(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
+        self.kind == AgentKind::Claude && super::claude_empty_editable_composer(screen, cursor)
+    }
     fn paste_ready(&self, screen: &str) -> bool {
         if !super::paste_ready(self.kind, screen, &self.expected) {
             return false;

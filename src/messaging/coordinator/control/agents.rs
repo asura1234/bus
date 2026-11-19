@@ -634,6 +634,13 @@ impl Worker {
         } else {
             Vec::new()
         };
+        let claude_turn = if claude && expected_payloads.len() == 1 {
+            current.and_then(|request| {
+                super::super::callback_runtime::claude_retirement_turn(state, id, request)
+            })
+        } else {
+            None
+        };
         self.admit_interrupt_attempt(id)?;
         let fence = self.native_interrupt_fence(state, id);
         // One press only: a second Esc opens Claude's rewind or
@@ -649,6 +656,7 @@ impl Worker {
                     expected_terminal_id,
                     expected_session_id,
                     expected_payloads,
+                    claude_turn,
                     retirement_request_id: current.filter(|_| claude).map(|id| id.0),
                 }
             }),
