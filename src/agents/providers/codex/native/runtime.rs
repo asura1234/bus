@@ -1,5 +1,5 @@
 //! Prepare a shell-owned shared runtime; Bus owns only its lifetime channel.
-use super::rpc::Rpc;
+use super::{is_standalone, rpc::Rpc};
 use std::{
     fs, io,
     os::unix::{fs::DirBuilderExt, net::UnixListener},
@@ -89,7 +89,7 @@ impl Runtime {
         expected_turn: Option<&str>,
     ) -> Option<io::Result<()>> {
         let session = self.session.as_mut()?;
-        if session.standalone() {
+        if is_standalone(&session.directory) {
             return None;
         }
         let started = Instant::now();
@@ -130,7 +130,7 @@ impl Runtime {
         deadline: Instant,
     ) -> Option<io::Result<Option<String>>> {
         let session = self.session.as_mut()?;
-        if session.standalone() {
+        if is_standalone(&session.directory) {
             return None;
         }
         let result = session
@@ -237,10 +237,6 @@ impl Session {
             lifetime: Some(stop),
             watcher: Some(watcher),
         })
-    }
-
-    fn standalone(&self) -> bool {
-        fs::read(self.directory.join("mode")).is_ok_and(|mode| mode == b"standalone")
     }
 
     fn connection(&mut self, deadline: Instant) -> io::Result<&mut Rpc> {

@@ -45,12 +45,10 @@ impl App {
         else {
             return identity_changed();
         };
-        let input_error = self
-            .lookup_runtime_sender(ws_idx, pane_id)
-            .and_then(|runtime| runtime.launch_input_error());
-        let Some((screen, osc_title, osc_progress, content_revision)) = self
-            .lookup_runtime_sender(ws_idx, pane_id)
-            .and_then(|runtime| runtime.startup_snapshot())
+        let runtime = self.lookup_runtime_sender(ws_idx, pane_id);
+        let input_error = runtime.and_then(|runtime| runtime.launch_input_error());
+        let Some((screen, osc_title, osc_progress, content_revision)) =
+            runtime.and_then(|runtime| runtime.startup_snapshot())
         else {
             return encode_error(
                 id,
@@ -58,6 +56,17 @@ impl App {
                 "Startup screen is changing or runtime is unavailable; no screen captured",
             );
         };
+        let current = runtime.is_some_and(|runtime| {
+            runtime
+                .cached_screen_detection_facts(
+                    pane.agent
+                        .as_deref()
+                        .and_then(crate::agents::parse_agent_label),
+                )
+                .is_some_and(|(_, current)| current)
+        });
+        let readiness =
+            crate::server::terminals::agents::startup_readiness(terminal, runtime, &pane, current);
         encode_success(
             id,
             ResponseResult::AgentStartupSnapshot {
@@ -67,8 +76,8 @@ impl App {
                     native_agent: pane.agent,
                     native_name: terminal.agent_name.clone(),
                     native_status: pane.agent_status,
-                    launch_pending: terminal.managed_agent_launch_pending(),
-                    interactive_ready: terminal.managed_agent_interactive_ready(),
+                    launch_pending: readiness.launch_pending,
+                    interactive_ready: readiness.interactive_ready,
                     screen,
                     osc_title,
                     osc_progress,

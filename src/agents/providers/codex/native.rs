@@ -8,6 +8,13 @@ mod startup;
 pub(crate) use runtime::test_support;
 pub(crate) use runtime::Runtime;
 
+const MODE_FILE: &str = "mode";
+const STANDALONE_MODE: &[u8] = b"standalone";
+
+fn is_standalone(directory: &std::path::Path) -> bool {
+    std::fs::read(directory.join(MODE_FILE)).is_ok_and(|mode| mode == STANDALONE_MODE)
+}
+
 fn remote_argv(argv: &[String], endpoint: &str) -> Vec<String> {
     let args = &argv[1..];
     let removed: std::collections::HashSet<_> =

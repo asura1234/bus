@@ -62,6 +62,17 @@ pub(super) struct Rpc {
     deadline: Instant,
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub(super) enum StartupProbe {
+    Idle = 3,
+    EndpointUnavailable,
+    LoadedThreadUnavailable,
+    SessionMismatch,
+    ActiveTurn,
+    ThreadStatusUnavailable,
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 impl Rpc {
     pub(super) fn connect(path: &Path, deadline: Instant) -> io::Result<Self> {
@@ -272,12 +283,21 @@ impl Rpc {
     }
 
     /// Startup proof uses only bounded metadata, never input or thread resume.
-    pub(super) fn startup_ready(&mut self, expected: &str) -> io::Result<bool> {
-        let thread = self.loaded_thread()?;
+    pub(super) fn probe_startup(socket: &Path, deadline: Instant, expected: &str) -> StartupProbe {
+        let Ok(mut rpc) = Self::connect(socket, deadline) else {
+            return StartupProbe::EndpointUnavailable;
+        };
+        let Ok(thread) = rpc.loaded_thread() else {
+            return StartupProbe::LoadedThreadUnavailable;
+        };
         if !expected.is_empty() && expected != thread {
-            return Ok(false);
+            return StartupProbe::SessionMismatch;
         }
-        Ok(self.active_turn(&thread, false)?.is_none())
+        match rpc.active_turn(&thread, false) {
+            Ok(None) => StartupProbe::Idle,
+            Ok(Some(_)) => StartupProbe::ActiveTurn,
+            Err(_) => StartupProbe::ThreadStatusUnavailable,
+        }
     }
 
     pub(super) fn prompt(

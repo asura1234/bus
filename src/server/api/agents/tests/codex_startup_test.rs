@@ -58,6 +58,7 @@ impl StartupServer {
                         "thread/loaded/list" => match mode.load(Ordering::Acquire) {
                             0 => json!({"data":[],"nextCursor":null}),
                             1 => json!({"data":["session","other"],"nextCursor":null}),
+                            4 => json!({"data":["other"],"nextCursor":null}),
                             _ => json!({"data":["session"],"nextCursor":null}),
                         },
                         "thread/read" => json!({"thread":{"id":"session","status":
@@ -194,6 +195,69 @@ async fn codex_startup_waits_for_native_thread_before_reporting_ready_or_submitt
         cold_runtime(&app);
         assert!(!app.agent_info(0, pane).unwrap().interactive_ready);
     }
+}
+
+#[tokio::test]
+async fn codex_startup_waits_for_the_bound_thread_identity() {
+    let (app, _, _) = provider_fixture(AgentKind::Codex, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let server = StartupServer::new(&cold_runtime(&app));
+    server.state.store(4, Ordering::Release);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let info = app.agent_info(0, pane).unwrap();
+        assert!(info.launch_pending && !info.interactive_ready && !info.native_ready);
+        let calls = server.calls.lock().unwrap();
+        assert!(!calls.iter().any(|call| call["method"] == "thread/read"));
+        // A second list call proves the first foreign result settled and was retried.
+        if calls
+            .iter()
+            .filter(|call| call["method"] == "thread/loaded/list")
+            .count()
+            >= 2
+        {
+            break;
+        }
+        drop(calls);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "foreign thread probe did not retry"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server.state.store(3, Ordering::Release);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let info = app.agent_info(0, pane).unwrap();
+        if info.interactive_ready {
+            assert!(!info.launch_pending && info.native_ready);
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "bound thread never became ready"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[tokio::test]
+async fn codex_startup_snapshot_reports_the_native_readiness_gate() {
+    let (app, _, _) = provider_fixture(AgentKind::Codex, false, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    cold_runtime(&app);
+    let info = app.agent_info(0, pane).unwrap();
+    let response = app.handle_agent_startup_snapshot(
+        "diagnostics".into(),
+        crate::protocol::api::schema::AgentStartupSnapshotParams {
+            pane_id: info.pane_id,
+            expected_terminal_id: info.terminal_id,
+        },
+    );
+    let value: Value = serde_json::from_str(&response).unwrap();
+    let snapshot = &value["result"]["snapshot"];
+    assert_eq!(snapshot["launch_pending"], true, "{response}");
+    assert_eq!(snapshot["interactive_ready"], false, "{response}");
 }
 
 #[tokio::test]
