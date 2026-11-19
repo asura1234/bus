@@ -148,13 +148,10 @@ pub(crate) fn editable_composer_region(rows: &[String]) -> Option<Range<usize>> 
         let agy_padded_top = start >= 2
             && plain(&rows[start - 1]).is_empty()
             && border(plain(&rows[start - 2]))
-            && rows[end + 1..]
-                .iter()
-                .find(|row| !plain(row).is_empty())
-                .is_some_and(|row| {
-                    let lower = plain(row).to_ascii_lowercase();
-                    lower.starts_with("? for shortcuts") || lower.starts_with("esc to cancel")
-                });
+            && agy_footer_index(rows, start, end + 1).is_some_and(|index| {
+                let lower = plain(&rows[index]).to_ascii_lowercase();
+                lower.starts_with("? for shortcuts") || lower.starts_with("esc to cancel")
+            });
         let framed = start > 0
             && (border(plain(&rows[start - 1])) || agy_padded_top)
             && border(plain(&rows[end]));
@@ -162,6 +159,44 @@ pub(crate) fn editable_composer_region(rows: &[String]) -> Option<Range<usize>> 
     })?;
     let end = chrome_after(start)?;
     Some(start..end.saturating_add(1))
+}
+
+fn agy_task_row(row: &str) -> bool {
+    row.strip_prefix("● [")
+        .and_then(|rest| rest.split_once("] "))
+        .is_some_and(|(time, _)| {
+            time.len() == 8
+                && time.bytes().enumerate().all(|(column, byte)| {
+                    if matches!(column, 2 | 5) {
+                        byte == b':'
+                    } else {
+                        byte.is_ascii_digit()
+                    }
+                })
+        })
+}
+
+fn agy_footer_index(
+    rows: &[String],
+    composer_start: usize,
+    after_composer: usize,
+) -> Option<usize> {
+    let mut below = rows
+        .iter()
+        .enumerate()
+        .skip(after_composer)
+        .map(|(index, row)| (index, plain(row)))
+        .filter(|(_, row)| !row.is_empty());
+    let (index, row) = below.next()?;
+    if !plain(&rows[composer_start]).starts_with('>') || !agy_task_row(row) {
+        return Some(index);
+    }
+    // The background task tray has its own closing rule above the status bar.
+    let (_, rule) = below.find(|(_, row)| !agy_task_row(row))?;
+    if !rule.chars().all(|ch| ch == '─') {
+        return None;
+    }
+    below.next().map(|(index, _)| index)
 }
 
 fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
@@ -184,14 +219,10 @@ fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
         for row in &mut rows[region.start + 1..region.end.saturating_sub(1)] {
             row.clear();
         }
-        // AGY keeps its framed composer open while working and renders its
-        // non-interactive `esc to cancel` status bar (alone or paired with its
-        // right-aligned mode/model summary) on the first non-empty row beneath
-        // the closing horizontal rule.
+        // AGY keeps its framed composer open while working. Its status bar
+        // can follow either the composer rule or the background task tray.
         if closing_border {
-            if let Some(footer_idx) =
-                (region.end..rows.len()).find(|&idx| !plain(&rows[idx]).is_empty())
-            {
+            if let Some(footer_idx) = agy_footer_index(&rows, region.start, region.end) {
                 let lower = plain(&rows[footer_idx]).to_ascii_lowercase();
                 if let Some(rest) = lower.strip_prefix("esc to cancel") {
                     let status_only = rest.is_empty()
@@ -199,7 +230,7 @@ fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
                             && !rest.contains("enter")
                             && !rest.contains('↵')
                             && !rest.contains('⏎')
-                            && !rest.contains("[y/n]"));
+                            && !rest.split('·').any(|field| keyboard_hint(field).is_some()));
                     if status_only {
                         rows[footer_idx].clear();
                     }
