@@ -1112,8 +1112,8 @@ idle then deliver, and an approval card without `--yolo`.
   same project, and a hook file changed during identity validation.
 
 - **2026-11-19 — Codex native startup precedes usable input:** Screen Idle
-  and `bus.agent.ready` can precede the attached TUI's loaded thread. On Bus
-  `8a7abf847`, agent 20057 was reported ready at 03:31:32.607Z, but native
+  and `bus.agent.ready` can precede the attached TUI's loaded thread. Captured
+  logs show agent 20057 reported ready at 03:31:32.607Z, but native
   preflight rejected its first request because no unique loaded thread existed.
   Keep native startup in launch progress until bounded read-only metadata proves
   one idle loaded thread and the frontend is idle. Do not downgrade the raw

@@ -137,7 +137,30 @@ async fn codex_startup_waits_for_native_thread_before_reporting_ready_or_submitt
             .unwrap()
             .iter()
             .any(|v| v["method"] == "thread/queue/add"));
+        let terminal_id = app.agent_info(0, pane).unwrap().terminal_id;
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Codex), AgentState::Working);
         server.state.store(3, Ordering::Release);
+        // The second observed notice came from startup Working chrome, before
+        // any model turn. Native idle alone must not open that input window.
+        for _ in 0..5 {
+            let info = app.agent_info(0, pane).unwrap();
+            assert_eq!(
+                info.agent_status,
+                crate::protocol::api::schema::AgentStatus::Working
+            );
+            assert!(!info.interactive_ready);
+            assert!(info.launch_pending);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         loop {
             if app.agent_info(0, pane).unwrap().interactive_ready {
