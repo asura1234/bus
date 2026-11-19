@@ -9,7 +9,11 @@ pub(crate) mod codex;
 pub(crate) mod cursor;
 #[cfg(feature = "dev-tools")]
 pub(crate) mod fake;
+#[cfg(unix)]
+mod git_exclude;
 pub(crate) mod grok;
+#[cfg(unix)]
+mod hook_directory;
 pub(crate) mod hook_json;
 pub(crate) mod kimi;
 pub(crate) mod launch;

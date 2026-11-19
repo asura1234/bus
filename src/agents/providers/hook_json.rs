@@ -304,13 +304,15 @@ pub(crate) fn rebind_owned_hooks(
     contract: HookContract,
     binary: &Path,
 ) -> Result<(), String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let trimmed = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
-    let document: Value = serde_json::from_slice(trimmed).map_err(|e| e.to_string())?;
-    if !has_owned_hooks(&document, contract) {
-        return Err("Bus hooks are missing; existing configuration was kept".into());
-    }
-    install_hooks(path, contract, binary)
+    rebind_hooks_with_status(path, contract, binary).map(|_| ())
+}
+
+pub(super) fn rebind_hooks_with_status(
+    path: &Path,
+    contract: HookContract,
+    binary: &Path,
+) -> Result<bool, String> {
+    update_hooks(path, contract, binary, true).map(|update| update.changed)
 }
 
 /// Require an exact Bus-owned entry for every event before a resume rebind.
@@ -334,45 +336,78 @@ pub(crate) fn has_owned_hooks(document: &Value, contract: HookContract) -> bool 
     })
 }
 
+pub(super) struct HookUpdate {
+    pub(super) created: bool,
+    pub(super) changed: bool,
+}
+
 pub(crate) fn install_hooks(
     path: &Path,
     contract: HookContract,
     binary: &Path,
 ) -> Result<(), String> {
+    install_hooks_with_status(path, contract, binary).map(|_| ())
+}
+
+pub(super) fn install_hooks_with_status(
+    path: &Path,
+    contract: HookContract,
+    binary: &Path,
+) -> Result<HookUpdate, String> {
+    update_hooks(path, contract, binary, false)
+}
+
+fn update_hooks(
+    path: &Path,
+    contract: HookContract,
+    binary: &Path,
+    require_owned: bool,
+) -> Result<HookUpdate, String> {
     let parent = path.parent().ok_or("Missing hook config parent")?;
-    // A test binary written into a real project's hooks silently captures the
-    // callbacks of every live agent there; tests must use a temporary project.
     #[cfg(test)]
     assert!(
         is_temporary(path),
         "tests must not install hooks outside the temp directory: {}",
         path.display()
     );
-    files::private_dir(parent).map_err(|e| e.to_string())?;
+    if require_owned {
+        if !parent.is_dir() {
+            return Err("Bus resume hooks are missing; existing configuration was kept".into());
+        }
+    } else {
+        files::private_dir(parent).map_err(|e| e.to_string())?;
+    }
     let _lease = files::lock(&parent.join(".bus-hooks.lock")).map_err(|e| e.to_string())?;
-    let previous = match std::fs::read(path) {
-        Ok(bytes) => Some(bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.to_string()),
-    };
-    let document = match previous.as_ref() {
-        Some(bytes) => serde_json::from_slice(bytes).map_err(|e| e.to_string())?,
+    let previous = hook_snapshot(path, require_owned)?;
+    let document = match previous.as_deref() {
+        Some(bytes) => parse_hook_document(bytes)?,
         None => json!({}),
     };
-    let merged = merge_hooks(document, contract, binary)?;
-    let current = match std::fs::read(path) {
-        Ok(bytes) => Some(bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.to_string()),
-    };
+    if require_owned && !has_owned_hooks(&document, contract) {
+        return Err("Bus hooks are missing; existing configuration was kept".into());
+    }
+    let merged = merge_hooks(document.clone(), contract, binary)?;
+    let current = hook_snapshot(path, require_owned)?;
     if current != previous {
         return Err("Hook config changed during setup; retry confirmation".into());
     }
-    atomic_write(
-        path,
-        &serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+    let changed = previous.is_none() || merged != document;
+    if changed {
+        atomic_write(
+            path,
+            &serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(HookUpdate {
+        created: previous.is_none(),
+        changed,
+    })
+}
+
+fn parse_hook_document(bytes: &[u8]) -> Result<Value, String> {
+    serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes))
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -384,7 +419,23 @@ fn is_temporary(path: &Path) -> bool {
         || crate::utils::test_temp::is_fixture_path(path)
 }
 
+fn hook_snapshot(path: &Path, require_owned: bool) -> Result<Option<Vec<u8>>, String> {
+    if require_owned {
+        return read_resume_bytes(path).map(Some);
+    }
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 pub(crate) fn read_resume_json(path: &Path) -> Result<Value, String> {
+    parse_hook_document(&read_resume_bytes(path)?)
+        .map_err(|_| "Bus resume capture configuration is invalid".into())
+}
+
+fn read_resume_bytes(path: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
     if !path.metadata().is_ok_and(|metadata| metadata.is_file()) {
         return Err("Bus resume capture configuration is missing".into());
@@ -398,7 +449,7 @@ pub(crate) fn read_resume_json(path: &Path) -> Result<Value, String> {
     if bytes.len() > 2 * 1024 * 1024 {
         return Err("Bus resume capture configuration is too large".into());
     }
-    serde_json::from_slice(&bytes).map_err(|_| "Bus resume capture configuration is invalid".into())
+    Ok(bytes)
 }
 
 fn resume_entry_matches(entry: &Value, shape: HookEntryShape, command: &str) -> bool {

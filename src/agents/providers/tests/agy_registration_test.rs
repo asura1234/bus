@@ -645,3 +645,83 @@ fn agy_project_hooks_exclude_generated_artifacts_below_and_outside_home() {
         );
     }
 }
+
+#[test]
+fn agy_hook_transaction_reuses_current_files_and_rejects_unowned_or_oversized_resume() {
+    let temp = TestTemp::new("agy-hook-transaction");
+    let binary = std::path::Path::new("/opt/bus-a/bus");
+    let path = project_hooks::install(temp.path(), binary).unwrap();
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_times(
+        std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000000)),
+    )
+    .unwrap();
+    let modified = path.metadata().unwrap().modified().unwrap();
+    project_hooks::install(temp.path(), binary).unwrap();
+    assert_eq!(path.metadata().unwrap().modified().unwrap(), modified);
+    assert!(!project_hooks::rebind(temp.path(), binary).unwrap().1);
+    assert_eq!(path.metadata().unwrap().modified().unwrap(), modified);
+    std::fs::write(&path, br#"{"team":{"Stop":[]}}"#).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    assert!(project_hooks::rebind(temp.path(), binary).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    project_hooks::install(temp.path(), binary).unwrap();
+    let mut oversized = std::fs::read(&path).unwrap();
+    oversized.resize(2 * 1024 * 1024 + 1, b' ');
+    std::fs::write(&path, &oversized).unwrap();
+    assert!(project_hooks::rebind(temp.path(), binary)
+        .unwrap_err()
+        .contains("too large"));
+    assert_eq!(std::fs::read(&path).unwrap(), oversized);
+}
+
+#[cfg(unix)]
+#[test]
+fn agy_git_exclude_does_not_interpret_grok_global_registry_files() {
+    struct RestoreHome(Option<std::ffi::OsString>);
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _restore = RestoreHome(std::env::var_os("HOME"));
+    let temp = TestTemp::new("agy-exclude-policy");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(home.join(".gemini/antigravity-cli")).unwrap();
+    std::fs::write(
+        home.join(".gemini/hooks-paths"),
+        "/this/grok/registry/entry/does/not/exist\n",
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    assert!(std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&root)
+        .status()
+        .unwrap()
+        .success());
+    project_hooks::install(&root, std::path::Path::new("/opt/bus/bin/bus")).unwrap();
+    let excluded = std::fs::read_to_string(root.join(".git/info/exclude")).unwrap();
+    assert!(excluded.lines().any(|line| line == "/.agents/hooks.json"));
+    assert!(excluded
+        .lines()
+        .any(|line| line == "/.agents/.bus-hooks.lock"));
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert!(
+        status.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&status.stdout)
+    );
+}

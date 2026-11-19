@@ -12,22 +12,6 @@ pub(super) enum Mode {
 #[cfg(unix)]
 mod unix;
 
-pub(in crate::agents::providers) fn ensure_git_exclude(
-    root: &Path,
-    home: &Path,
-    entries: &[&str],
-) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        unix::ensure_exclude_entries(root, home, entries)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (root, home, entries);
-        Ok(())
-    }
-}
-
 pub(super) fn update<T>(
     project: &Path,
     binary: &Path,

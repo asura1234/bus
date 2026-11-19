@@ -1,26 +1,12 @@
 //! The complete global-discovery boundary for the project hook transaction.
 use super::dirs::Dir;
+use crate::agents::providers::git_exclude::{canonical, existing_directory, reject_shared};
 use std::{
     fs,
     io::Read,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
-
-// Resolve prospective paths through existing ancestors. Broken aliases refuse.
-pub(super) fn canonical(path: &Path) -> Result<PathBuf, String> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => path
-            .canonicalize()
-            .map_err(|e| format!("Cannot resolve Grok hook source: {e}")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let parent = path.parent().ok_or("Grok hook source has no parent")?;
-            let name = path.file_name().ok_or("Grok hook source has no filename")?;
-            Ok(canonical(parent)?.join(name))
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
 
 pub(super) fn home(cwd: &Path, saved: Option<&Path>) -> Result<PathBuf, String> {
     let path = saved
@@ -71,41 +57,6 @@ fn configured_paths(base: &Path) -> Result<Vec<PathBuf>, String> {
         .collect()
 }
 
-fn existing_directory(path: &Path) -> Result<Option<Dir>, String> {
-    match fs::metadata(path) {
-        Ok(metadata) if metadata.is_dir() => Dir::open(&canonical(path)?).map(Some),
-        Ok(_) => Ok(None),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Distinguish a missing source from a broken existing symlink.
-            canonical(path)?;
-            Ok(None)
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-// Compare opened objects, not resolved spellings (APFS may retain both names).
-fn reject_shared(path: &Path, leaf: Option<&fs::File>) -> Result<(), String> {
-    let Some(leaf) = leaf else {
-        return Ok(());
-    };
-    let entry = match fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-    {
-        Ok(entry) => entry,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.to_string()),
-    };
-    if super::dirs::same(&entry, leaf)? {
-        return Err(
-            "A global Grok hook resolves to the project hook; no capture authorized".into(),
-        );
-    }
-    Ok(())
-}
-
 pub(super) fn verify(root: &Dir, folder: Option<&Dir>, base: &Path) -> Result<(), String> {
     let home = std::env::home_dir().ok_or("HOME is required to protect global Grok hooks")?;
     if let Some(home) = existing_directory(&home)? {
@@ -127,7 +78,7 @@ pub(super) fn verify(root: &Dir, folder: Option<&Dir>, base: &Path) -> Result<()
     );
     let target = folder.unwrap_or(root);
     let leaf = match folder {
-        Some(folder) => folder.leaf()?,
+        Some(folder) => folder.leaf("bus.json")?,
         None => None,
     };
     for (source, scan) in sources {
@@ -170,20 +121,5 @@ pub(super) fn verify_exclude(
             .map(|path| path.join("hooks"))
             .filter(|path| path.is_dir()),
     );
-    for source in sources {
-        if let Some(directory) = existing_directory(&source)? {
-            if target.within(&directory)? {
-                return Err("Git exclude overlaps global provider configuration".into());
-            }
-            // Resolve even without an opened leaf. A dangling global alias
-            // must fail closed before creating the exclude it could target.
-            for entry in fs::read_dir(&source).map_err(|e| e.to_string())? {
-                let path = entry.map_err(|e| e.to_string())?.path();
-                reject_shared(&canonical(&path)?, leaf)?;
-            }
-        } else {
-            reject_shared(&source, leaf)?;
-        }
-    }
-    Ok(())
+    crate::agents::providers::git_exclude::verify_sources(target, sources, leaf)
 }
