@@ -14,6 +14,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "restart_hotkey_test.rs"]
+mod restart_hotkey;
+
 #[path = "native_restart_test.rs"]
 mod native_restart;
 

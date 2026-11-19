@@ -1108,3 +1108,51 @@ fn rename_preview_keeps_the_field_cursor_when_the_pane_has_none() {
         "a pane without a caret must not erase the rename field's"
     );
 }
+
+#[test]
+fn ctrl_r_is_global_in_room_terminal_and_overlays_without_forwarding() {
+    for view in ["room", "terminal", "help", "rename", "deletion"] {
+        let (mut ui, room, agent) = fixture();
+        ui.locals
+            .get_mut(&room)
+            .unwrap()
+            .text
+            .insert("untouched draft");
+        match view {
+            "terminal" => {
+                ui.open_terminal(agent);
+                ui.receive_event(BusEvent::TerminalFocused {
+                    agent,
+                    pane_id: "pane_1".into(),
+                });
+            }
+            "help" => ui.form = Some(forms::Form::Help { scroll: 0 }),
+            "rename" => key(&mut ui, KeyCode::F(2), KeyModifiers::NONE),
+            "deletion" => ui.action(render::Action::Delete(
+                super::deletion::DeleteTarget::Agent(agent),
+            )),
+            _ => {}
+        }
+        let mut shell = shell_with(ui);
+        let outcome = shell.handle_input_bytes(b"\x12");
+        assert!(
+            matches!(
+                outcome.actions.as_slice(),
+                [crate::client::compositor::ClientShellAction::RestartBus]
+            ),
+            "{view}"
+        );
+        assert!(!outcome.detach);
+        assert!(
+            !outcome.requests.iter().any(|r| matches!(
+                r,
+                crate::protocol::wire::ClientMessage::ClientShellPaneInput { .. }
+            )),
+            "{view}"
+        );
+        assert_eq!(
+            shell.bus.as_ref().unwrap().locals[&room].text.text,
+            "untouched draft"
+        );
+    }
+}

@@ -16,6 +16,7 @@ impl Host {
             token: self.token.clone(),
             graphics: self.info.graphics,
             yolo: self.info.yolo,
+            no_dev: self.info.no_dev,
         };
         let old_pid = self.info.bus_pid;
         let stopped = self.teardown();

@@ -1,5 +1,53 @@
-//! The TUI's own build receipt and an immutable executable for rollback.
+//! TUI restart entry, build receipt and immutable executable for rollback.
 use crate::utils::restart_record::{self, BuildStamp, LivePid, TuiBuild};
+use std::io;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static RESTART_PENDING: AtomicBool = AtomicBool::new(false);
+
+struct PendingRestart;
+
+impl Drop for PendingRestart {
+    fn drop(&mut self) {
+        RESTART_PENDING.store(false, Ordering::Release);
+    }
+}
+
+/// Run the public restart entry point off the UI thread. The CLI owns building,
+/// preflight, the receipt and helper; only its helper may request save-and-quit.
+/// Capture command output: the receipt and build errors must not enter the terminal.
+pub(super) fn start_handoff() -> io::Result<()> {
+    // The CLI locks after building; repeated keypresses must not start parallel builds.
+    if RESTART_PENDING.swap(true, Ordering::AcqRel) {
+        return Ok(());
+    }
+    let pending = PendingRestart;
+    let binary = crate::platform::fs::running_executable()?;
+    let mut command = Command::new(binary);
+    // Runtime --dev has the same meaning as for the public CLI, independently
+    // of debug assertions or the dev-tools Cargo feature.
+    if crate::messaging::diagnostics::dev_enabled() {
+        command.arg("--dev");
+    }
+    command.args(["restart", "--confirm"]).stdin(Stdio::null());
+    std::thread::Builder::new()
+        .name("bus-restart".into())
+        .spawn(move || {
+            let _pending = pending;
+            match command.output() {
+                Ok(output) if output.status.success() => {
+                    tracing::info!(event = "bus.restart.handoff", "Restart handoff queued");
+                }
+                Ok(output) => {
+                    tracing::warn!(event = "bus.restart.failed", status = %output.status,
+                        reason = %String::from_utf8_lossy(&output.stderr).trim());
+                }
+                Err(error) => tracing::warn!(event = "bus.restart.failed", %error),
+            }
+        })?;
+    Ok(())
+}
 
 pub(super) fn record_ready(server: Option<&BuildStamp>) {
     if let Err(error) = record_ready_inner(server) {

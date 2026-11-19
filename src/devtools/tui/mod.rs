@@ -225,6 +225,7 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         .transpose()?
         .unwrap_or_default();
     let yolo = parsed.take_switch("--yolo");
+    let no_dev = parsed.take_switch("--no-dev");
     parsed.finish()?;
     if let Some(message) = effects::unsupported_os(std::env::consts::OS) {
         return Ok(failure("refused", message));
@@ -256,7 +257,7 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
     }
     let run_dir = run_root
         .unwrap_or_else(|| session::default_runs_root(&cwd))
-        .join(format!("{name}-{}", timestamp()));
+        .join(format!("{name}-{}", session::timestamp()));
 
     let log = std::fs::File::create(paths.host_log()).map_err(|e| e.to_string())?;
     let mut host = std::process::Command::new(&binary);
@@ -266,6 +267,7 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         .args(["--token", &claim.token])
         .args(["--graphics", graphics.as_str()])
         .args(if yolo { &["--yolo"][..] } else { &[] })
+        .args(if no_dev { &["--no-dev"][..] } else { &[] })
         .arg("--run-dir")
         .arg(&run_dir)
         .stdin(Stdio::null())
@@ -728,6 +730,7 @@ fn run_host(args: &[String]) -> i32 {
             .transpose()?
             .unwrap_or_default();
         let yolo = parsed.take_switch("--yolo");
+        let no_dev = parsed.take_switch("--no-dev");
         parsed.finish()?;
         Ok(host::HostOptions {
             name,
@@ -737,6 +740,7 @@ fn run_host(args: &[String]) -> i32 {
             token,
             graphics,
             yolo,
+            no_dev,
         })
     })();
     match options {
@@ -784,17 +788,4 @@ fn run_replay(args: &[String]) -> i32 {
         Ok((cols, rows)) => mirror::replay(Path::new(&raw), Path::new(&ready), cols, rows),
         Err(message) => usage(message),
     }
-}
-
-fn timestamp() -> String {
-    let now = time::OffsetDateTime::now_utc();
-    format!(
-        "{:04}{:02}{:02}-{:02}{:02}{:02}",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second()
-    )
 }

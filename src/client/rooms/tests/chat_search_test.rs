@@ -325,7 +325,7 @@ fn cancelling_recall_after_switching_rooms_preserves_the_destination_draft() {
     local
         .recall
         .push(Recalled::now("first older prompt".into()));
-    key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
     assert_eq!(ui.locals[&first].text.text, "first older prompt");
 
     ui.open_room(second);

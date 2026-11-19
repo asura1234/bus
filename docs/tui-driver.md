@@ -216,7 +216,7 @@ first), in reading order: top to bottom, then left to right.
 Run `bus --dev tui VERB --help` for one verb.
 
 ### start
-`start [--name NAME] [--size COLSxROWS] [--run-dir DIR] [--graphics kitty|none] [--yolo]`
+`start [--name NAME] [--size COLSxROWS] [--run-dir DIR] [--graphics kitty|none] [--yolo] [--no-dev]`
 
 Starts a fresh scratch Bus (default size 160x45) and waits until it answers
 `bus state` and has drawn its first room. Prints the session status with
@@ -230,6 +230,9 @@ graphics protocol, which the driver's screen and `screenshot --real` show;
 `none` makes Bus show attachments as file names. `--yolo` starts the scratch
 Bus with `--yolo`, so the run shows what a permission-bypass session shows
 (the sidebar's `YOLO` badge); `status` reports it as `yolo`.
+`--no-dev` launches the scratch Bus without the runtime `--dev` flag, for
+testing normal-session refusals such as Ctrl+R restart. The driver itself
+still requires `bus --dev tui`. The mode survives the driver’s `restart`.
 Refused when the session name is running or still starting, when 4 sessions
 run, when the target belongs to a live Bus, when inherited
 `BUS_*`/`HERDR_*` variables point at it, or when the binary is

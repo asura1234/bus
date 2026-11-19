@@ -67,6 +67,8 @@ pub(super) struct HostOptions {
     pub graphics: super::session::Graphics,
     /// Start the scratch Bus with `--yolo`, as a developer would.
     pub yolo: bool,
+    /// Exercise a normal runtime session with dev commands disabled.
+    pub no_dev: bool,
 }
 
 /// Entry of the hidden `bus --dev tui __host` process.
@@ -144,7 +146,9 @@ fn start(
         .openpty(pty_size(options.cols, options.rows))
         .map_err(|e| e.to_string())?;
     let mut command = CommandBuilder::new(&binary);
-    command.arg("--dev");
+    if !options.no_dev {
+        command.arg("--dev");
+    }
     if options.yolo {
         command.arg("--yolo");
     }
@@ -205,6 +209,7 @@ fn start(
         home: paths.home_dir(),
         graphics: options.graphics,
         yolo: options.yolo,
+        no_dev: options.no_dev,
     };
     Ok(Host {
         paths: paths.clone(),
