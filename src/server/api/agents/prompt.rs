@@ -1,6 +1,6 @@
 //! Agent prompt API operations.
 use super::{agent_not_found, agent_not_ready};
-use crate::protocol::api::schema::{AgentPromptParams, ResponseResult};
+use crate::protocol::api::schema::{AgentInfo, AgentPromptParams, ResponseResult};
 use crate::server::api::errors::{encode_error, encode_error_body, encode_success};
 use crate::server::app::App;
 use crate::terminal::pty::actor::InputCompletion;
@@ -368,14 +368,7 @@ impl App {
         id: String,
         params: crate::protocol::api::schema::AgentPromptIfUnboundParams,
         hard_deadline: std::time::Instant,
-    ) -> Result<
-        (
-            String,
-            crate::protocol::api::schema::AgentInfo,
-            InputCompletion,
-        ),
-        String,
-    > {
+    ) -> Result<(String, AgentInfo, InputCompletion), String> {
         self.reconcile_managed_agent_target(&params.target);
         let agent = self
             .agent_info_for_target(&params.target)
