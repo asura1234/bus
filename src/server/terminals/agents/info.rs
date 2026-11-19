@@ -32,6 +32,14 @@ impl App {
         let quota = screen.as_ref().is_some_and(|s| s.provider_quota);
         let current = screen.as_ref().is_some_and(|s| s.current);
         let compaction_observed = pane.agent.as_deref() == Some("grok") && screen.is_some();
+        let native_startup_ready = native_startup_ready(
+            self.lookup_runtime_sender(ws_idx, pane_id),
+            pane.agent.as_deref(),
+            pane.agent_session
+                .as_ref()
+                .map(|session| session.value.as_str()),
+            pane.agent_status,
+        );
         Some(crate::protocol::api::schema::AgentInfo {
             generation: self.state.generation,
             launch_input_error: self
@@ -87,11 +95,14 @@ impl App {
             tab_id: pane.tab_id,
             pane_id: pane.pane_id,
             focused: pane.focused,
-            launch_pending: terminal.pending_agent_resume_plan.is_some()
+            launch_pending: !native_startup_ready
+                || terminal.pending_agent_resume_plan.is_some()
                 || terminal.managed_agent_launch_pending(),
-            interactive_ready: terminal.pending_agent_resume_plan.is_none()
+            interactive_ready: native_startup_ready
+                && terminal.pending_agent_resume_plan.is_none()
                 && terminal.managed_agent_interactive_ready(),
-            native_ready: terminal.pending_agent_resume_plan.is_none()
+            native_ready: native_startup_ready
+                && terminal.pending_agent_resume_plan.is_none()
                 && !terminal.managed_agent_launch_pending()
                 && terminal.effective_known_agent().is_some_and(|expected| {
                     self.lookup_runtime_sender(ws_idx, pane_id)
@@ -145,4 +156,32 @@ fn screen_metadata(
             && crate::agents::providers::cursor::usage::is_restored_monthly_usage_limit(&text),
         dialog: crate::terminal::driver::blocker(&grid, working),
     })
+}
+
+// Screen Idle can precede Codex's native thread load. Keep that interval in
+// launch progress, before either coordinator readiness or native input admission.
+fn native_startup_ready(
+    runtime: Option<&crate::terminal::TerminalRuntime>,
+    agent: Option<&str>,
+    session: Option<&str>,
+    status: crate::protocol::api::schema::AgentStatus,
+) -> bool {
+    #[cfg(unix)]
+    if agent == Some("codex") {
+        return runtime
+            .and_then(|runtime| runtime.native_input())
+            .is_none_or(|native| {
+                native.startup_ready(
+                    session.unwrap_or(""),
+                    matches!(
+                        status,
+                        crate::protocol::api::schema::AgentStatus::Idle
+                            | crate::protocol::api::schema::AgentStatus::Done
+                    ),
+                )
+            });
+    }
+    #[cfg(not(unix))]
+    let _ = (runtime, agent, session, status);
+    true
 }

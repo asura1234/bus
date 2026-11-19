@@ -254,6 +254,32 @@ impl Rpc {
         }
     }
 
+    fn loaded_thread(&mut self) -> io::Result<String> {
+        let loaded = self.call("thread/loaded/list", json!({"limit":2}))?;
+        let threads = loaded["data"]
+            .as_array()
+            .ok_or_else(|| io::Error::other("Codex loaded thread list is invalid"))?;
+        if threads.len() != 1 || !loaded["nextCursor"].is_null() {
+            return Err(io::Error::other(
+                "Codex initial input requires exactly one loaded TUI thread",
+            ));
+        }
+        threads[0]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| io::Error::other("Codex loaded thread has no identity"))
+    }
+
+    /// Startup proof uses only bounded metadata, never input or thread resume.
+    pub(super) fn startup_ready(&mut self, expected: &str) -> io::Result<bool> {
+        let thread = self.loaded_thread()?;
+        if !expected.is_empty() && expected != thread {
+            return Ok(false);
+        }
+        Ok(self.active_turn(&thread, false)?.is_none())
+    }
+
     pub(super) fn prompt(
         &mut self,
         thread: &str,
@@ -264,20 +290,7 @@ impl Rpc {
     ) -> io::Result<Value> {
         let (thread, active) = (|| -> io::Result<_> {
             let thread = if thread.is_empty() {
-                let loaded = self.call("thread/loaded/list", json!({"limit":2}))?;
-                let threads = loaded["data"]
-                    .as_array()
-                    .ok_or_else(|| io::Error::other("Codex loaded thread list is invalid"))?;
-                if threads.len() != 1 || !loaded["nextCursor"].is_null() {
-                    return Err(io::Error::other(
-                        "Codex initial input requires exactly one loaded TUI thread",
-                    ));
-                }
-                threads[0]
-                    .as_str()
-                    .filter(|id| !id.is_empty())
-                    .ok_or_else(|| io::Error::other("Codex loaded thread has no identity"))?
-                    .to_owned()
+                self.loaded_thread()?
             } else {
                 thread.to_owned()
             };

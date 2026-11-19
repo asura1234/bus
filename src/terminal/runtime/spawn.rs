@@ -786,6 +786,8 @@ impl TerminalRuntime {
             kimi_code_home,
             #[cfg(unix)]
             shared_codex: Arc::new(Mutex::new(None)),
+            #[cfg(unix)]
+            native_startup_confirmed: Arc::new(AtomicBool::new(false)),
             #[cfg(all(test, unix))]
             native_input_override: Mutex::new(None),
             preserve_processes_on_drop: false,

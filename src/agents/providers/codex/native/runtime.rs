@@ -24,6 +24,7 @@ struct Session {
     directory: PathBuf,
     socket: PathBuf,
     rpc: Option<Rpc>,
+    startup: super::startup::Readiness,
     lifetime: Option<mpsc::Sender<()>>,
     watcher: Option<std::thread::JoinHandle<()>>,
 }
@@ -107,6 +108,15 @@ impl Runtime {
         );
         session.rpc.take();
         Some(result)
+    }
+
+    /// Nonblocking startup admission; native metadata is read on a worker.
+    pub(crate) fn startup_ready(&self, thread: &str, frontend_idle: bool) -> bool {
+        self.session.as_ref().is_none_or(|session| {
+            session
+                .startup
+                .ready(&session.socket, &session.directory, thread, frontend_idle)
+        })
     }
 
     pub(crate) fn has_session(&self) -> bool {
@@ -223,6 +233,7 @@ impl Session {
             socket: directory.join("s"),
             directory,
             rpc: None,
+            startup: Default::default(),
             lifetime: Some(stop),
             watcher: Some(watcher),
         })
@@ -271,6 +282,7 @@ pub(crate) mod test_support {
                 directory: socket.parent().unwrap().to_owned(),
                 socket,
                 rpc: None,
+                startup: super::super::startup::Readiness::confirmed(),
                 lifetime: None,
                 watcher: None,
             }),

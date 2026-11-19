@@ -2,6 +2,7 @@
 pub(crate) mod launcher;
 mod rpc;
 mod runtime;
+mod startup;
 #[cfg(test)]
 #[allow(unused_imports)] // Used by the admission slice's runtime fixtures.
 pub(crate) use runtime::test_support;

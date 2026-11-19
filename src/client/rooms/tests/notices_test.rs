@@ -503,3 +503,32 @@ fn coalesced_snapshot_keeps_the_original_command_error_single() {
     assert!(logs.contains(&format!("command_id={rejected}")), "{logs}");
     assert!(logs.contains("bus.command.failed"), "{logs}");
 }
+
+#[test]
+fn confirmed_ready_submission_failures_still_raise_warn_notices() {
+    let (mut ui, _, agent) = fixture();
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        for error in [
+            crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE,
+            "Agent is not idle; prompt was not sent",
+        ] {
+            let mut snapshot = (*ui.snapshot).clone();
+            snapshot.state.confirm_hook_setup(agent).unwrap();
+            snapshot
+                .state
+                .observe_status(agent, RuntimeStatus::Idle, 1)
+                .unwrap();
+            snapshot
+                .state
+                .set_agent_error(agent, Some(error.into()))
+                .unwrap();
+            snapshot.revision += 1;
+            ui.receive_snapshot(Arc::new(snapshot));
+        }
+    });
+    let logs = capture.text();
+    assert_eq!(logs.matches("bus.agent.notice").count(), 2, "{logs}");
+    assert_eq!(logs.matches("WARN").count(), 2, "{logs}");
+    assert!(!logs.contains("bus.agent.launch_wait"), "{logs}");
+}
