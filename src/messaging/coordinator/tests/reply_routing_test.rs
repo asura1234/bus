@@ -431,9 +431,26 @@ fn reply_routing_honors_a_waiter_registered_by_the_follower_snapshot() {
             params: json!({"message":message.0.to_string(),"as":f.orch.0.to_string()}),
         })
         .is_some());
-    f.finish(source, "Reply for the live follower");
+    let mut state = f.worker.state.clone();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    state
+        .recover_idle_request(source, io::now_ms() - 4_000)
+        .unwrap();
+    f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
-    assert_no_reply_wake(&f, "Reply for the live follower");
+    assert!(
+        f.notices().is_empty(),
+        "live follower lease must hold the outcome wake"
+    );
+    f.worker.test_reply_waiter_now = Some(std::time::Instant::now() + Duration::from_secs(3));
+    f.worker.submit_ready().unwrap();
+    assert!(
+        f.worker.reply_waiters.lock().unwrap().is_empty(),
+        "expired follower lease must be pruned"
+    );
+    assert_eq!(f.notices().len(), 1);
 }
 
 #[test]

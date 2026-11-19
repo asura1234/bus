@@ -2,11 +2,11 @@ use super::*;
 use crate::messaging::{
     control::{self, ASYNC_SEND_FOLLOWER},
     coordinator::{BusCommand, Draft, Provider},
-    model::{AgentRuntimeIdentity, RequestId},
+    model::{AgentRuntimeIdentity, RequestId, SubmissionOutcome},
 };
 use std::{sync::mpsc, time::Duration};
 
-fn fixture() -> (BusState, RequestId, AgentId, AgentId) {
+fn fixture(two_recipients: bool) -> (BusState, RequestId, AgentId, AgentId) {
     let mut state = BusState::new();
     let room = state.create_room("work").unwrap();
     let author = state
@@ -24,18 +24,36 @@ fn fixture() -> (BusState, RequestId, AgentId, AgentId) {
             },
         )
         .unwrap();
-    let request = state
+    let mut recipient_ids = vec![recipient];
+    if two_recipients {
+        recipient_ids.push(
+            state
+                .create_agent(
+                    room,
+                    "second-recipient",
+                    Provider::Codex,
+                    "/tmp".into(),
+                    None,
+                )
+                .unwrap(),
+        );
+    }
+    let requests = state
         .submit_message_from(
             room,
             Draft {
                 text: "build".into(),
-                recipient_ids: [recipient].into(),
+                recipient_ids: recipient_ids.into_iter().collect(),
                 ..Default::default()
             },
             Author::Agent(author),
             crate::messaging::storage::io::now_ms(),
         )
-        .unwrap()[0];
+        .unwrap();
+    let request = requests
+        .into_iter()
+        .find(|id| state.request(*id).unwrap().agent_id == recipient)
+        .unwrap();
     (state, request, author, recipient)
 }
 
@@ -61,7 +79,7 @@ fn status(message: PromptId, selector: &str) -> Request {
 
 #[test]
 fn marked_follower_gets_pending_status_while_an_older_command_occupies_the_queue() {
-    let (mut state, request, author, _) = fixture();
+    let (mut state, request, author, _) = fixture(false);
     state
         .begin_submission(request, "fixture-launch", 0)
         .unwrap();
@@ -114,7 +132,7 @@ fn marked_follower_gets_pending_status_while_an_older_command_occupies_the_queue
 
 #[test]
 fn follower_snapshot_defers_live_status_and_rejects_an_invalid_waiter() {
-    let (mut state, request, author, recipient) = fixture();
+    let (mut state, request, author, recipient) = fixture(false);
     let id = state.request(request).unwrap().prompt.id;
     let waiters = ReplyWaiters::default();
     assert!(view(state.clone(), &waiters)
@@ -143,4 +161,83 @@ fn follower_snapshot_defers_live_status_and_rejects_an_invalid_waiter() {
         .is_none());
     drop(waiters);
     assert!(ready.response(&status(id, "sender")).is_none());
+}
+
+#[test]
+fn follower_snapshot_defers_delivery_errors_deletion_and_explicit_replies() {
+    let (mut state, request, author, recipient) = fixture(false);
+    state
+        .begin_submission(request, "fixture-launch", 0)
+        .unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let id = state.request(request).unwrap().prompt.id;
+    let poll = status(id, "sender");
+
+    let mut failed = state.clone();
+    failed.block_missing_binary(recipient, "codex", 1).unwrap();
+    assert!(failed.agent(recipient).unwrap().delivery_error().is_some());
+
+    let mut deleting_recipient = state.clone();
+    deleting_recipient.prepare_delete_agent(recipient).unwrap();
+    let mut deleting_author = state.clone();
+    deleting_author.prepare_delete_agent(author).unwrap();
+
+    let mut answered = state.clone();
+    answered
+        .answer_message(id, recipient, "explicit reply".into(), 2)
+        .unwrap();
+    let answered_request = answered.request(request).unwrap();
+    assert_eq!(answered_request.phase, RequestPhase::Active);
+    assert!(answered_request.completed_reply.is_some());
+
+    let baseline_waiters = ReplyWaiters::default();
+    assert!(view(state, &baseline_waiters).response(&poll).is_some());
+    let waiters = ReplyWaiters::default();
+    assert!(
+        view(failed, &waiters).response(&poll).is_none(),
+        "delivery error"
+    );
+    assert!(
+        view(deleting_recipient, &waiters).response(&poll).is_none(),
+        "recipient deletion"
+    );
+    assert!(
+        view(deleting_author, &waiters).response(&poll).is_none(),
+        "author deletion"
+    );
+    assert!(
+        view(answered, &waiters).response(&poll).is_none(),
+        "explicit reply"
+    );
+    assert!(waiters.lock().unwrap().is_empty());
+}
+
+#[test]
+fn follower_snapshot_defers_when_one_recipient_is_still_queued() {
+    let (mut state, request, _, _) = fixture(true);
+    state
+        .begin_submission(request, "fixture-launch", 0)
+        .unwrap();
+    let id = state.request(request).unwrap().prompt.id;
+    let phases: Vec<_> = state
+        .requests_for_message(id)
+        .map(|recipient| recipient.phase)
+        .collect();
+    assert_eq!(phases.len(), 2);
+    assert!(phases.contains(&RequestPhase::Submitting));
+    assert!(phases.contains(&RequestPhase::Queued));
+
+    let waiters = ReplyWaiters::default();
+    assert!(view(state, &waiters)
+        .response(&status(id, "sender"))
+        .is_none());
+    assert!(waiters.lock().unwrap().is_empty());
 }
