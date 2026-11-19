@@ -1102,6 +1102,24 @@ fn claude_single_input_native_retirement_releases_exact_follower_on_verified_idl
     assert!(load("old-launch", "terminal", lead.0).is_none());
     assert!(load(&turn.launch_id, "replacement", lead.0).is_none());
     assert!(load(&turn.launch_id, "terminal", follower.0).is_none());
+    assert!(TranscriptAnchor::load(
+        &f.dir,
+        &turn.launch_id,
+        "session",
+        "foreign-prompt",
+        "terminal",
+        lead.0,
+    )
+    .is_none());
+    assert!(TranscriptAnchor::load(
+        &f.dir,
+        &turn.launch_id,
+        "foreign-session",
+        &turn.prompt_id,
+        "terminal",
+        lead.0,
+    )
+    .is_none());
     drop(calls);
     assert_eq!(f.request(follower).phase, RequestPhase::Queued);
     retirement_idle_tick(&mut f);
@@ -1124,16 +1142,33 @@ fn claude_single_input_native_retirement_releases_exact_follower_on_verified_idl
 fn start_claude_retirement_anchor_fixture(f: &mut Fixture) -> RequestId {
     let lead = f.send("original input", false);
     f.deliver();
+    assert_eq!(f.request(lead).phase, RequestPhase::Active);
+    assert!(!f.request(lead).uncertain_outcome);
+    assert!(f.request(lead).provider_turn_id.is_none());
+    assert!(!f.request(lead).trusted_start_bound);
     let path = f.dir.join("session.jsonl");
     std::fs::write(&path, "").unwrap();
-    f.record(json!({
+    let started = json!({
         "hook_event_name": "UserPromptSubmit",
         "session_id": "session",
         "prompt_id": "turn-1",
         "prompt": "original input",
         "transcript_path": path,
-    }));
+    });
+    let spool = f.dir.join("callbacks/launch");
+    let mut nested = started.clone();
+    nested["prompt"] = json!(delivered_test_prompt(&f.worker.state, "original input"));
+    callbacks::append(&spool, "launch", f.provider, nested, &[], true).unwrap();
     f.consume();
+    assert!(!f.request(lead).trusted_start_bound);
+    assert!(!spool.join("retirement-anchor").exists());
+    f.record(started);
+    f.consume();
+    assert!(f.request(lead).trusted_start_bound);
+    assert_eq!(
+        f.request(lead).provider_prompt_id.as_deref(),
+        Some("turn-1")
+    );
     f.status(RuntimeStatus::Working);
     lead
 }

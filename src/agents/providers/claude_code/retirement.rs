@@ -110,6 +110,7 @@ impl TranscriptAnchor {
             file,
             offset,
             prefix_digest: Sha256::digest(&prefix).into(),
+            pre_stop: None,
             checked: None,
         })
     }
@@ -135,6 +136,7 @@ pub(crate) struct CancelWatermark<'a> {
     file: File,
     offset: u64,
     prefix_digest: [u8; 32],
+    pre_stop: Option<(u64, [u8; 32])>,
     checked: Option<(u64, bool)>,
 }
 
@@ -146,7 +148,14 @@ struct Row {
     value: Value,
 }
 
-impl CancelWatermark<'_> {
+impl<'a> CancelWatermark<'a> {
+    pub(crate) fn with_pre_stop(mut self, pre_stop: Option<Self>) -> Self {
+        self.pre_stop = pre_stop
+            .filter(|before| before.offset <= self.offset)
+            .map(|before| (before.offset, before.prefix_digest));
+        self
+    }
+
     pub(crate) fn has_cancellation(&mut self) -> bool {
         let Some(length) = self.file.metadata().ok().map(|metadata| metadata.len()) else {
             return false;
@@ -217,6 +226,7 @@ impl CancelWatermark<'_> {
         }
         let mut parent = field(&cancel.value, "parentUuid")?;
         let mut walked = BTreeSet::new();
+        let mut chain = Vec::new();
         let mut tool_result = None;
         let mut progressed = false;
         for row in rows.iter().filter(main).rev().skip(1) {
@@ -227,14 +237,29 @@ impl CancelWatermark<'_> {
             }
             // Any newer typed turn in the main transcript makes the cancel ambiguous.
             if field(value, "type") == Some("user") && field(value, "promptSource").is_some() {
+                let stream = self.pre_stop.and_then(|(pre_stop, digest)| {
+                    let prefix = transcript.get(..usize::try_from(pre_stop).ok()?)?;
+                    if Sha256::digest(prefix)[..] != digest {
+                        return None;
+                    }
+                    cancelled_tool_stream(&chain, pre_stop, self.offset, message_id)
+                });
                 return (matches_parent
                     && field(value, "version") == Some(VERSION)
                     && field(value, "promptId") == Some(self.anchor.prompt.as_str())
                     && field(value, "promptSource") == Some("typed")
                     && field(value, "turnOrigin") == Some("human")
                     && row.offset < self.offset
-                    && progressed
-                    && unambiguous_transcript(history, &rows, cancel, uuid, message_id, &walked)
+                    && (progressed || stream.is_some())
+                    && unambiguous_transcript(
+                        history,
+                        &rows,
+                        cancel,
+                        uuid,
+                        message_id,
+                        &walked,
+                        stream.as_ref(),
+                    )
                     && self.file.metadata().ok()?.len() == end)
                     .then_some(ToolProgressCancellation);
             }
@@ -247,6 +272,7 @@ impl CancelWatermark<'_> {
             {
                 return None;
             }
+            chain.push(row);
             if row.offset < self.offset {
                 if field(value, "type") == Some("user") {
                     tool_result = field(value, "sourceToolAssistantUUID").and_then(|uuid| {
@@ -264,9 +290,71 @@ impl CancelWatermark<'_> {
     }
 }
 
+/// Claude may persist the cancelled API stream as adjacent assistant
+/// fragments. Only the stream immediately before the cancel can attest a tool.
+fn cancelled_tool_stream<'a>(
+    chain: &[&'a Row],
+    pre_stop: u64,
+    watermark: u64,
+    message_id: &str,
+) -> Option<BTreeSet<&'a str>> {
+    let first = chain.first()?;
+    let assistants = if field(&first.value, "type") == Some("user") {
+        let tool = chain.get(1)?;
+        if first.offset < watermark || tool.offset >= pre_stop || !cancel_result_links(first, tool)
+        {
+            return None;
+        }
+        &chain[1..]
+    } else {
+        chain
+    };
+    let mut stream = BTreeSet::new();
+    let mut has_tool = false;
+    for row in assistants {
+        let value = &row.value;
+        if field(value, "type") != Some("assistant") {
+            break;
+        }
+        if assistant_message_id(value) != Some(message_id) {
+            return None;
+        }
+        stream.insert(field(value, "uuid")?);
+        has_tool |= row.offset < pre_stop && block_id(value, "tool_use", "id").is_some();
+    }
+    has_tool.then_some(stream)
+}
+
+fn cancel_result_links(result: &Row, tool: &Row) -> bool {
+    let value = &result.value;
+    let Some(uuid) = field(&tool.value, "uuid") else {
+        return false;
+    };
+    let Some(blocks) = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    let [block] = blocks.as_slice() else {
+        return false;
+    };
+    field(value, "parentUuid") == Some(uuid)
+        && field(value, "sourceToolAssistantUUID") == Some(uuid)
+        && field(block, "type") == Some("tool_result")
+        && block.get("is_error").and_then(Value::as_bool) == Some(true)
+        && field(block, "tool_use_id")
+            .is_some_and(|id| block_id(&tool.value, "tool_use", "id") == Some(id))
+}
+
+fn assistant_message_id(row: &Value) -> Option<&str> {
+    field(row.get("message")?, "id")
+}
+
 /// Claude 2.1.316 fills interruptedMessageId from the in-flight API stream.
-/// That stream may leave no assistant row with its message.id. Bind the
-/// novel ID to the anchored parent chain of this fresh cancellation row.
+/// Permit a novel stream ID or exactly the assistant fragments identified
+/// by the immediate cancelled-tool chain. Every other reuse is ambiguous.
 fn unambiguous_transcript(
     history: &[u8],
     rows: &[Row],
@@ -274,6 +362,7 @@ fn unambiguous_transcript(
     cancel_uuid: &str,
     message_id: &str,
     walked: &BTreeSet<&str>,
+    stream: Option<&BTreeSet<&str>>,
 ) -> bool {
     let session = field(&cancel.value, "sessionId");
     let mut seen = BTreeSet::new();
@@ -302,7 +391,8 @@ fn unambiguous_transcript(
             ]
             .iter()
             .any(|key| field(row, key) == Some(message_id))
-            || row.get("message").and_then(|message| field(message, "id")) == Some(message_id)
+            || (assistant_message_id(row) == Some(message_id)
+                && !stream.is_some_and(|stream| uuid.is_some_and(|id| stream.contains(id))))
     };
     !rows
         .iter()

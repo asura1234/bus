@@ -318,3 +318,80 @@ async fn claude_plain_bus_interrupt_api_retires_only_its_fenced_restored_prompt(
         "retirement sent no paste, Enter, or stash toggle"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn claude_ds_native_retirement_loads_the_accepted_anchor_from_the_bus_root() {
+    use crate::agents::providers::claude_code::retirement::TranscriptAnchor;
+    use crate::protocol::api::schema::{
+        AgentSendKeysParams, ClaudeRetirementTurn, NativeInterruptIdentity,
+    };
+    use std::io::Write;
+
+    let lock = crate::utils::test_env::mutex().lock().unwrap();
+    let _restore = crate::utils::config::test_without_bus_env(&lock);
+    let root = crate::utils::test_temp::unique_temp_path("claude-ds-native-anchor-root");
+    std::fs::create_dir_all(root.join("callbacks/launch")).unwrap();
+    std::env::set_var("BUS_DATA_DIR", &root);
+    assert_ne!(crate::utils::paths::data_dir(), root);
+    let transcript = root.join("session.jsonl");
+    std::fs::write(&transcript, concat!(
+        r#"{"type":"user","uuid":"prompt-row","promptId":"prompt","sessionId":"session","version":"2.1.316","isSidechain":false,"promptSource":"typed","turnOrigin":"human"}"#, "\n",
+        r#"{"type":"assistant","uuid":"tool","parentUuid":"prompt-row","sessionId":"session","version":"2.1.316","isSidechain":false,"message":{"content":[{"type":"tool_use","id":"tool-id"}]}}"#, "\n",
+        r#"{"type":"user","uuid":"result","parentUuid":"tool","sessionId":"session","version":"2.1.316","isSidechain":false,"sourceToolAssistantUUID":"tool","message":{"content":[{"type":"tool_result","tool_use_id":"tool-id"}]}}"#, "\n",
+    )).unwrap();
+
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+        let Method::AgentPromptIfIdle(ref prompt) = method else { panic!("unguarded fixture") };
+        assert!(prompt.expected_turn_id.is_none());
+        TranscriptAnchor::from_hook(&transcript, "session", "prompt").unwrap()
+            .save(&root, "launch", &prompt.expected_terminal_id, 51874).unwrap();
+        let params = AgentSendKeysParams {
+            target: prompt.target.clone(),
+            expected_terminal_id: Some(prompt.expected_terminal_id.clone()),
+            expected_activity: None,
+            keys: vec!["esc".into()],
+            native_interrupt: Some(NativeInterruptIdentity {
+                expected_terminal_id: prompt.expected_terminal_id.clone(),
+                expected_session_id: "session".into(),
+                expected_payloads: vec!["from bus".into()],
+                retirement_request_id: Some(51874),
+                claude_turn: Some(ClaudeRetirementTurn { launch_id: "launch".into(), prompt_id: "prompt".into() }),
+            }),
+        };
+        let unconfirmed = app.prepare_agent_send_keys("unconfirmed".into(), params.clone()).unwrap()();
+        assert!(unconfirmed.contains("agent_interrupt_unconfirmed"), "{unconfirmed}");
+        assert!(writes.try_recv().is_err(), "the anchor alone cannot authorize a stop");
+        let response = start(&mut app, method);
+        assert_eq!(next_write(&mut writes).await.as_ref(), b"\x1b[200~from bus\x1b[201~");
+        redraw(&app, AgentKind::Claude, "from bus");
+        assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+        redraw(&app, AgentKind::Claude, "");
+        assert!(response.recv_timeout(WAIT).unwrap().contains("agent_prompted"));
+
+        let clock = clock(&app);
+        let generation = clock.advance(Duration::ZERO);
+        let job = app.prepare_agent_send_keys("cancel".into(), params.clone()).unwrap();
+        let stopped = tokio::task::spawn_blocking(job);
+        assert_eq!(next_write(&mut writes).await.as_ref(), b"\x1b");
+        clock.wait_for_submission_check(generation);
+        clock.resume();
+        std::fs::OpenOptions::new().append(true).open(&transcript).unwrap()
+            .write_all(concat!(
+                r#"{"type":"user","uuid":"cancel","parentUuid":"result","promptId":"prompt","sessionId":"session","version":"2.1.316","isSidechain":false,"interruptedMessageId":"unpersisted-api-id"}"#,
+                "\n",
+            ).as_bytes()).unwrap();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        app.lookup_runtime_sender(0, pane).unwrap().test_process_pty_bytes(
+            "\x1b[2J\x1b[H────────────────\r\n❯ \r\n────────────────\x1b[2;3H".as_bytes()
+        );
+        let result = stopped.await.unwrap();
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(result["result"]["type"], "ok", "{result}");
+        assert!(writes.try_recv().is_err(), "the stop must send no editing keys");
+        let retry = app.prepare_agent_send_keys("retry".into(), params).unwrap()();
+        assert!(retry.contains(r#""type":"ok""#), "{retry}");
+        assert!(writes.try_recv().is_err(), "receipt retry must send no keys");
+    });
+}

@@ -154,8 +154,12 @@ impl App {
                 return Ok(Box::new(move || {
                     use crate::agents::providers::claude_code::retirement::TranscriptAnchor;
                     let anchor = expected.claude_turn.as_ref().and_then(|turn| {
+                        // The coordinator writes anchors outside the native session's
+                        // herdr-config tree. Completion receipts stay at their native key.
+                        let root =
+                            crate::utils::env::bus_data_dir().filter(|root| root.is_absolute())?;
                         TranscriptAnchor::load(
-                            &crate::utils::paths::data_dir(),
+                            &root,
                             &turn.launch_id,
                             &expected.expected_session_id,
                             &turn.prompt_id,
