@@ -1667,3 +1667,120 @@ fn agy_corrupt_completed_transcript_fails_closed_and_preexisting_error_keeps_pen
     assert_eq!(pending.request(steered).phase, RequestPhase::Completed);
     assert!(pending.request(steered).trusted_start_bound);
 }
+
+fn agy_pending_stop_fixture(working: bool) -> (Fixture, RequestId, PathBuf, PathBuf) {
+    let mut fixture = Fixture::new(Provider::Agy);
+    let lead = fixture.send("lead prompt", false);
+    fixture.deliver();
+    fixture.started("1", "lead prompt");
+    fixture.consume();
+    if working {
+        fixture.status(RuntimeStatus::Working);
+    }
+
+    // The transcript has the owned prompt but never a terminal MODEL row.
+    let logs = fixture.dir.join("agy-brain/session/.system_generated/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let transcript = logs.join("transcript_full.jsonl");
+    let payload = fixture.worker.state.render_request_payload(lead).unwrap();
+    std::fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            json!({
+                "step_index": 1,
+                "source": "USER_EXPLICIT",
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "content": format!("<USER_REQUEST>\n{payload}\n</USER_REQUEST>"),
+            })
+        ),
+    )
+    .unwrap();
+    fixture.record(json!({
+        "hookEventName": "Stop",
+        "conversationId": "session",
+        "terminationReason": "NO_TOOL_CALL",
+        "fullyIdle": true,
+        "transcriptPath": transcript,
+    }));
+
+    fixture.consume();
+    let marker = std::fs::read_dir(fixture.dir.join("callbacks/launch"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|e| e.to_str()) == Some("agy-retry"))
+        .expect("pending Stop must persist its retry marker");
+    (fixture, lead, transcript, marker)
+}
+
+#[test]
+fn agy_exhausted_stop_retries_do_not_leave_the_turn_active() {
+    let (mut fixture, lead, _, marker) = agy_pending_stop_fixture(true);
+    let queued = fixture.send("next turn", true);
+    std::fs::write(&marker, br#"{"attempts":16,"next_at":0}"#).unwrap();
+    fixture.consume();
+    assert_ne!(
+        fixture.request(lead).phase,
+        RequestPhase::Active,
+        "an exhausted AGY Stop budget must not leave the request Active forever"
+    );
+    assert!(
+        fixture.error().is_some(),
+        "an exhausted AGY Stop budget must surface an actionable error"
+    );
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Abandoned);
+    assert!(fixture
+        .request(lead)
+        .failure_reason
+        .as_ref()
+        .unwrap()
+        .contains("retry budget expired"));
+    assert!(fixture.request(lead).completed_reply.is_none());
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    assert!(fixture
+        .worker
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .current_request
+        .is_none());
+    assert!(!marker.exists());
+}
+
+#[test]
+fn agy_pending_stop_survives_idle_settlement_window() {
+    for working in [false, true] {
+        let (mut fixture, lead, transcript, marker) = agy_pending_stop_fixture(working);
+        fixture.status(RuntimeStatus::Idle);
+        let mut state = fixture.worker.state.clone();
+        for elapsed in [6000, 31000] {
+            state
+                .observe_status(fixture.agent, RuntimeStatus::Idle, fixture.now + elapsed)
+                .unwrap();
+            state.settle_ended_request(fixture.agent, fixture.now + elapsed, |_| None);
+            assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Active,
+                "an idle screen must not silently retire an AGY turn whose Stop still awaits its transcript");
+        }
+        fixture.worker.save(state).unwrap();
+        let final_row = json!({"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"late owned final"});
+        let mut bytes = std::fs::read_to_string(&transcript).unwrap();
+        bytes.push_str(&format!("{final_row}\n"));
+        std::fs::write(&transcript, bytes).unwrap();
+        std::fs::write(&marker, br#"{"attempts":1,"next_at":0}"#).unwrap();
+        fixture.consume();
+        assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture
+                .request(lead)
+                .completed_reply
+                .as_ref()
+                .unwrap()
+                .content
+                .text,
+            "late owned final"
+        );
+        assert!(!marker.exists());
+    }
+}

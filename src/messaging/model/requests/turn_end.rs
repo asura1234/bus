@@ -19,13 +19,12 @@ impl BusState {
         {
             return false;
         }
-        // Kimi can briefly paint an empty, idle composer while its bound
-        // turn is still executing tools. Only its owned terminal wire (or a
-        // captured reply) can establish that the turn actually finished.
+        // Kimi and AGY can paint Idle before their owned completion record
+        // is committed. Screen inference must not outrun that evidence.
         if self
             .agents
             .get(&request.agent_id)
-            .is_some_and(|agent| agent.provider == Provider::Kimi)
+            .is_some_and(|agent| matches!(agent.provider, Provider::Kimi | Provider::Agy))
         {
             let lead = request
                 .group

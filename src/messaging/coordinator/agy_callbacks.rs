@@ -39,7 +39,7 @@ fn transcript_error_callback(
         turn,
         None,
         CallbackEventKind::Error {
-            message: "AGY transcript could not be read; inspect its terminal.".into(),
+            message: "AGY transcript completion could not be verified; inspect its terminal.".into(),
             provider_error: Some(error),
         },
     )
@@ -316,11 +316,15 @@ impl Worker {
                                     session_id = %session,
                                     turn_id = %turn,
                                     attempts = AGY_RETRY_ATTEMPTS,
-                                    "AGY Stop retired without committed transcript final"
+                                    "AGY completion retries exhausted; failing the owned turn without publishing a reply"
+                                );
+                                let cb = transcript_error_callback(
+                                    record, id, session, turn,
+                                    "AGY transcript final was not committed before the completion retry budget expired".into(),
                                 );
                                 Ok(ControlFlow::Continue((
                                     state,
-                                    None,
+                                    Some(cb),
                                     agy_observation_paths(path),
                                 )))
                             }
