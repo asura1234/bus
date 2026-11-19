@@ -3,16 +3,36 @@ use super::{render::Action, BusUi, Effect};
 use crate::{
     messaging::{
         coordinator::BusCommand,
-        model::{AgentId, BusState, ModelError, RoomId},
+        model::{AgentId, AgentRuntimeIdentity, BusState, ModelError, RequestId, RoomId},
     },
     protocol::keys::host::RawInputEvent,
 };
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum DeleteTarget {
     Room(RoomId),
     Agent(AgentId),
+    TerminalRetirement {
+        agent: AgentId,
+        request: RequestId,
+        original: AgentRuntimeIdentity,
+    },
+}
+
+impl DeleteTarget {
+    pub(super) fn terminal_retirement(state: &BusState, agent: AgentId) -> Option<Self> {
+        let request = state.interrupt_retirement_owner(agent)?;
+        let original = state.interrupt_retirement_origin(request)?;
+        original.terminal_id.as_deref()?;
+        original.pane_id.as_deref()?;
+        original.session_id.as_deref()?;
+        Some(Self::TerminalRetirement {
+            agent,
+            request,
+            original: original.clone(),
+        })
+    }
 }
 
 pub(super) struct DeleteDialog {
@@ -22,9 +42,13 @@ pub(super) struct DeleteDialog {
 
 impl BusUi {
     pub(super) fn start_delete(&mut self, target: DeleteTarget) {
-        let exists = match target {
-            DeleteTarget::Room(id) => self.snapshot.state.room(id).is_some(),
-            DeleteTarget::Agent(id) => self.snapshot.state.agent(id).is_some(),
+        let state = &self.snapshot.state;
+        let exists = match &target {
+            DeleteTarget::Room(id) => state.room(*id).is_some(),
+            DeleteTarget::Agent(id) => state.agent(*id).is_some(),
+            DeleteTarget::TerminalRetirement { agent, .. } => {
+                DeleteTarget::terminal_retirement(state, *agent).as_ref() == Some(&target)
+            }
         };
         if !exists || self.deletion.is_some() {
             return;
@@ -40,6 +64,11 @@ impl BusUi {
                 );
                 return;
             }
+        }
+        if matches!(target, DeleteTarget::TerminalRetirement { .. }) {
+            // A stale button or another event in this input batch cannot
+            // confirm before the new target and warning have been laid out.
+            self.view.hits.clear();
         }
         self.deletion = Some(DeleteDialog {
             target,
@@ -67,27 +96,46 @@ impl BusUi {
         else {
             return;
         };
-        let target = dialog.target;
-        let room = match target {
-            DeleteTarget::Room(id) => Some(id),
-            DeleteTarget::Agent(id) => self.snapshot.state.agent(id).map(|agent| agent.room_id),
-        };
-        // Once confirmed, a not-yet-dispatched room prompt must not outrun deletion.
-        self.pending.retain(|pending| {
-            pending.enqueued
-                || !matches!(pending.command, BusCommand::Submit(id, _) | BusCommand::SubmitQueued(id, _) if Some(id) == room)
-        });
-        self.submissions.retain(|submission| {
-            Some(submission.room) != room
-                || self
-                    .pending
+        let (command, discard_submissions_in) = match &dialog.target {
+            DeleteTarget::Room(id) => (BusCommand::DeleteRoom(*id), Some(*id)),
+            DeleteTarget::Agent(id) => (
+                BusCommand::DeleteAgent(*id),
+                self.snapshot.state.agent(*id).map(|agent| agent.room_id),
+            ),
+            DeleteTarget::TerminalRetirement {
+                request, original, ..
+            } => {
+                if !self
+                    .view
+                    .hits
                     .iter()
-                    .any(|pending| pending.id == submission.command_id)
-        });
-        let command = match target {
-            DeleteTarget::Room(id) => BusCommand::DeleteRoom(id),
-            DeleteTarget::Agent(id) => BusCommand::DeleteAgent(id),
+                    .any(|hit| hit.action == Action::ConfirmDelete)
+                {
+                    return;
+                }
+                (
+                    BusCommand::ConfirmTerminalRetirement {
+                        request: *request,
+                        original: original.clone(),
+                    },
+                    None,
+                )
+            }
         };
+        if let Some(room) = discard_submissions_in {
+            // A not-yet-dispatched room prompt must not outrun deletion.
+            self.pending.retain(|pending| {
+                pending.enqueued
+                    || !matches!(pending.command, BusCommand::Submit(id, _) | BusCommand::SubmitQueued(id, _) if id == room)
+            });
+            self.submissions.retain(|submission| {
+                submission.room != room
+                    || self
+                        .pending
+                        .iter()
+                        .any(|pending| pending.id == submission.command_id)
+            });
+        }
         let id = self.queue(command, Effect::None);
         if let Some(dialog) = &mut self.deletion {
             dialog.command_id = Some(id);

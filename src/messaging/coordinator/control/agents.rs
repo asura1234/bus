@@ -422,7 +422,7 @@ impl Worker {
                 .state
                 .agents()
                 .filter(|a| a.room_id == room && Some(a.id) != author && !a.deletion_pending)
-                .filter(|a| a.provider_retry.is_some() || needs_stop(&self.state, a))
+                .filter(|a| a.provider_retry.is_some() || self.state.needs_interrupt_stop(a))
                 .map(|a| a.id)
                 .collect(),
         };
@@ -457,6 +457,12 @@ impl Worker {
         let mut row = json!({"agent_id": id, "name": agent.name});
         let status = agent.activity_status();
         match status {
+            RuntimeStatus::Unavailable if state.interrupt_retirement_owner(id).is_some() => {
+                row["outcome"] = json!("failed");
+                row["reason"] = json!(
+                    crate::messaging::model::ModelError::InterruptRetirementPending.to_string()
+                );
+            }
             RuntimeStatus::Unavailable if agent.provider_retry.is_some() => {
                 state
                     .close_interrupted(id, now)
@@ -464,7 +470,7 @@ impl Worker {
                 self.interrupt_notice(state, id, room, interrupter, now, announce)?;
                 row["outcome"] = json!("already_idle");
             }
-            RuntimeStatus::Idle if !needs_stop(state, agent) => {
+            RuntimeStatus::Idle if !state.needs_interrupt_stop(agent) => {
                 // Nothing to stop. A turn Bus still holds (settling, or
                 // waiting on background shells) closes. Messages that never
                 // joined it stay queued.
@@ -549,6 +555,27 @@ impl Worker {
         Ok(())
     }
 
+    fn persist_claude_retirement_proof(
+        &mut self,
+        state: &mut crate::messaging::model::BusState,
+        id: AgentId,
+    ) -> Result<(), String> {
+        // The caller may journal only the follower send. A failed save leaves
+        // the old hold and a retryable native receipt.
+        let callbacks = self.retirement_callback_evidence(&self.state, id)?;
+        let mut durable = self.state.clone();
+        durable.reconcile_retirement_answers(id, &callbacks);
+        durable
+            .set_interrupt_retirement(id, false)
+            .map_err(|e| e.to_string())?;
+        durable.begin_interrupt(id).map_err(|e| e.to_string())?;
+        self.save(durable)?;
+        state.reconcile_retirement_answers(id, &callbacks);
+        state
+            .set_interrupt_retirement(id, false)
+            .map_err(|e| e.to_string())
+    }
+
     fn interrupt_running_agent(
         &mut self,
         state: &mut crate::messaging::model::BusState,
@@ -561,10 +588,54 @@ impl Worker {
         let agent = state.agent(id).ok_or("Unknown agent")?;
         let mut row = json!({"agent_id":id,"name":agent.name});
         let key = interrupt_key(agent.provider);
-        let Some(pane) = agent.runtime_identity.pane_id.clone() else {
+        let claude = agent.provider.uses_claude_harness();
+        let current = agent.current_request;
+        let runtime = agent.runtime_identity.clone();
+        let native_interrupt = (agent.provider == Provider::Codex || claude)
+            .then(|| Some((runtime.terminal_id.clone()?, runtime.session_id.clone()?)))
+            .flatten();
+        if let Some(request) = current.filter(|_| claude) {
+            // The caller may be staging a composer send that will be journaled
+            // once. Persist only the existing input's retirement obligation.
+            let mut durable = self.state.clone();
+            for target in [&mut *state, &mut durable] {
+                target
+                    .set_interrupt_retirement(id, true)
+                    .map_err(|e| e.to_string())?;
+                target
+                    .clear_native_interrupt_wait(id)
+                    .map_err(|e| e.to_string())?;
+            }
+            self.save(durable)?;
+            match state.interrupt_retirement_origin(request) {
+                Some(original) if *original == runtime => {}
+                Some(_) => {
+                    row["outcome"] = json!("failed");
+                    row["reason"] = json!("Original Claude terminal changed; resolve retirement of the original terminal first");
+                    return Ok(row);
+                }
+                None => {
+                    row["outcome"] = json!("failed");
+                    row["reason"] = json!(
+                        "Cannot establish one original delivery terminal for this request group"
+                    );
+                    return Ok(row);
+                }
+            }
+        }
+        let Some(pane) = runtime.pane_id else {
             row["outcome"] = json!("failed");
             row["reason"] = json!("The agent has no terminal yet");
             return Ok(row);
+        };
+        let expected_payloads = if claude {
+            current
+                .into_iter()
+                .chain(current.map_or_else(Vec::new, |id| state.group_members(id)))
+                .filter_map(|id| state.render_request_payload(id))
+                .collect()
+        } else {
+            Vec::new()
         };
         self.admit_interrupt_attempt(id)?;
         let fence = self.native_interrupt_fence(state, id);
@@ -576,15 +647,31 @@ impl Worker {
             .request(Method::AgentSendKeys(schema::AgentSendKeysParams {
                 target: pane,
                 keys: vec![key.into()],
-                native_interrupt: (agent.provider == Provider::Codex)
-                    .then(|| {
-                        Some(schema::NativeInterruptIdentity {
-                            expected_terminal_id: agent.runtime_identity.terminal_id.clone()?,
-                            expected_session_id: agent.runtime_identity.session_id.clone()?,
-                        })
-                    })
-                    .flatten(),
+                native_interrupt: native_interrupt.map(
+                    |(expected_terminal_id, expected_session_id)| schema::NativeInterruptIdentity {
+                        expected_terminal_id,
+                        expected_session_id,
+                        expected_payloads,
+                        retirement_request_id: current.filter(|_| claude).map(|id| id.0),
+                    },
+                ),
             }));
+        if claude {
+            let retired = matches!(&sent, Ok(ResponseResult::Ok {}));
+            if retired && current.is_some() {
+                self.persist_claude_retirement_proof(state, id)?;
+            }
+            if !retired {
+                state
+                    .clear_native_interrupt_wait(id)
+                    .map_err(|e| e.to_string())?;
+                row["outcome"] = json!("failed");
+                row["reason"] = json!(format!(
+                    "Claude interrupt retirement is unconfirmed; request remains tracked: {sent:?}"
+                ));
+                return Ok(row);
+            }
+        }
         match sent {
             Ok(ResponseResult::AgentInterrupted {
                 terminal_id,
@@ -650,37 +737,6 @@ impl Worker {
             }
         }
         Ok(row)
-    }
-}
-
-/// Screen status is a presentation observation, not proof that a bound turn
-/// stopped. An empty composer can be visible while foreground tools still run.
-/// A native final releases the current request; a background-pending Stop has
-/// already ended foreground work and needs only the ordinary request cleanup.
-fn needs_stop(
-    state: &crate::messaging::model::BusState,
-    agent: &crate::messaging::model::RoomAgent,
-) -> bool {
-    match agent.activity_status() {
-        RuntimeStatus::Working | RuntimeStatus::Blocked => true,
-        RuntimeStatus::Idle
-            if agent
-                .provider_retry
-                .as_ref()
-                .is_some_and(|h| agent.current_request.is_none_or(|id| id == h.lead)) =>
-        {
-            false
-        }
-        RuntimeStatus::Idle => agent
-            .current_request
-            .and_then(|id| state.request(id))
-            .is_some_and(|request| {
-                request.trusted_start_bound
-                    && request.phase != crate::messaging::model::RequestPhase::Abandoned
-                    && request.pending_final.is_none()
-                    && !request.awaiting_background
-            }),
-        _ => false,
     }
 }
 

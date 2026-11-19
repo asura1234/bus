@@ -1,6 +1,7 @@
 //! Save the native draft, submit guarded owned input, then restore it.
 mod consumption;
 mod diagnostics;
+mod interrupt;
 mod plain;
 mod preservation;
 mod recovery;
@@ -8,9 +9,9 @@ pub(crate) use preservation::{DraftPreservation, EditorSubmission};
 
 use super::submission_clock::SubmissionClock;
 use super::{io::PaneRuntimeIo, TerminalRuntime};
-use crate::protocol::api::submission::{
-    confirmation_budget, maximum_budget, withdrawal_budget, CLEAR_KEY_DELAY, WITHDRAW_GRACE,
-};
+#[cfg(test)]
+use crate::protocol::api::submission::WITHDRAW_GRACE;
+use crate::protocol::api::submission::{confirmation_budget, maximum_budget, withdrawal_budget};
 use crate::terminal::emulator::PaneTerminal;
 use crate::terminal::pty::actor::{InputCompletion, InputScope};
 use bytes::Bytes;
@@ -116,6 +117,19 @@ pub(crate) trait SubmissionInspector: Send {
     fn always_use_editor(&self) -> bool {
         false
     }
+    /// Complete plaintext captured before Enter; opaque chips cannot prove identity.
+    fn interrupt_receipt(&self) -> Option<(String, String)> {
+        None
+    }
+    fn interrupted_input(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> Option<String> {
+        None
+    }
+    fn interrupted_remainder(&self, _body: &str) -> bool {
+        false
+    }
+    fn cleanup_expects_empty(&self) -> bool {
+        false
+    }
     fn confirm_consumption(&self) -> bool {
         false
     }
@@ -187,11 +201,6 @@ enum ClearOutcome {
     AlreadyEmpty,
     Cleared,
     Accepted,
-}
-
-struct ClearProgress {
-    revision: u64,
-    expires: Instant,
 }
 
 struct ObservedSubmission {
@@ -274,6 +283,10 @@ impl TerminalRuntime {
 }
 
 impl SubmissionHandle {
+    pub(crate) fn bind_claude_session(&self, session: &str) {
+        super::draft_input::DraftInput::bind_session(&self.draft_input, session);
+    }
+
     pub(crate) fn try_send_developer_bytes(&self, bytes: Bytes) -> io::Result<()> {
         super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
             .map_err(io::Error::other)
@@ -358,6 +371,30 @@ impl SubmissionHandle {
                         } else {
                             submission.diagnostics.pending_paste(&result)
                         };
+                        if result.is_ok() {
+                            if let Some(((payload, body), session)) =
+                                submission.inspect.interrupt_receipt().zip(lease.session())
+                            {
+                                lease.retain_confirmed(super::draft_input::ConfirmedPaste {
+                                    session,
+                                    payload,
+                                    body,
+                                    stopped: false,
+                                    attempt: None,
+                                    final_clear_revision: None,
+                                    paste: super::draft_input::PendingPaste {
+                                        inspect: std::mem::replace(
+                                            &mut submission.inspect,
+                                            Box::new(|_: &str| InputObservation::Unavailable),
+                                        ),
+                                        clear: submission.clear.clone(),
+                                        since: submission.clock.now(),
+                                        entered: true,
+                                        withdraw_grace: submission.withdraw_grace,
+                                    },
+                                });
+                            }
+                        }
                         if let Some((since, entered)) = pending {
                             lease.retain_pending(super::draft_input::PendingPaste {
                                 inspect: std::mem::replace(
@@ -497,99 +534,6 @@ impl ObservedSubmission {
         }
         self.diagnostics.pasted(&result, self.clock.now());
         result
-    }
-
-    fn clear_draft_with_lease(
-        &self,
-        lease: Option<&super::draft_input::DraftInputLease>,
-    ) -> io::Result<ClearOutcome> {
-        let mut sent = false;
-        let mut progress = ClearProgress {
-            revision: self.inspect.cleanup_progress(),
-            expires: self.clock.now() + WITHDRAW_GRACE,
-        };
-        loop {
-            for (index, key) in self.clear.iter().enumerate() {
-                if let Some(outcome) =
-                    self.clear_step(key.clone(), index, &mut sent, &mut progress, lease)?
-                {
-                    return Ok(outcome);
-                }
-            }
-        }
-    }
-
-    fn clear_step(
-        &self,
-        key: Bytes,
-        index: usize,
-        sent: &mut bool,
-        progress: &mut ClearProgress,
-        lease: Option<&super::draft_input::DraftInputLease>,
-    ) -> io::Result<Option<ClearOutcome>> {
-        let generation = self.clock.generation();
-        let guard = self
-            .content_lock
-            .lock()
-            .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-        match self.observe("clear_preflight") {
-            InputObservation::Empty => {
-                return Ok(Some(if *sent {
-                    ClearOutcome::Cleared
-                } else {
-                    ClearOutcome::AlreadyEmpty
-                }))
-            }
-            InputObservation::Accepted => return Ok(Some(ClearOutcome::Accepted)),
-            InputObservation::Pending => {}
-            _ => {
-                return Err(io::Error::other(
-                    "Provider composer changed or is unavailable; draft was not cleared",
-                ))
-            }
-        }
-        let revision = self.inspect.cleanup_progress();
-        if progress.revision != revision {
-            progress.revision = revision;
-            progress.expires = self.clock.now() + WITHDRAW_GRACE;
-        }
-        if self.clock.now() >= progress.expires {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Provider made no owned-draft withdrawal progress",
-            ));
-        }
-        self.check_deadline()?;
-        let write_deadline = self.deadline.get().min(progress.expires);
-        tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.clear", key = ?key, owned_only = true);
-        let queue = || {
-            self.io.queue_input_write_scoped(
-                key,
-                Bytes::new(),
-                Duration::ZERO,
-                Some(write_deadline),
-                &self.scope,
-            )
-        };
-        let completion = match lease {
-            Some(lease)
-                if self.inspect.confirm_consumption() || self.inspect.retry_owned_enter() =>
-            {
-                lease.with_unedited(queue)
-            }
-            Some(lease) => lease.with_uninvalidated(queue),
-            None => queue(),
-        }?;
-        self.inspect.clearing(index);
-        drop(guard);
-        completion
-            .recv_timeout(self.clock.remaining(write_deadline))
-            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
-        // Keep editing keys in separate input events for Ink providers. Check
-        // for emptiness again before sending the next key or another line kill.
-        self.clock.sleep(CLEAR_KEY_DELAY, generation);
-        *sent = true;
-        Ok(None)
     }
 
     /// No Enter was sent. Withdraw the paste, including a draft first seen

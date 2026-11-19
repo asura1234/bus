@@ -10,6 +10,45 @@ use interprocess::local_socket::traits::Stream as _;
 pub(crate) type LocalListener = interprocess::local_socket::Listener;
 pub(crate) type LocalStream = interprocess::local_socket::Stream;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) fn local_stream_peer_pid(stream: &LocalStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let interprocess::local_socket::Stream::UdSocket(inner) = stream;
+    let mut pid: libc::pid_t = -1;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: fd is the connected socket, pid and len are writable, and
+    // LOCAL_PEERPID writes a pid_t on success.
+    let rc = unsafe {
+        libc::getsockopt(
+            inner.inner().as_raw_fd(),
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            &mut pid as *mut libc::pid_t as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    u32::try_from(pid).ok().filter(|_| rc == 0 && pid > 0)
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+pub(crate) fn local_stream_peer_pid(stream: &LocalStream) -> Option<u32> {
+    use interprocess::local_socket::traits::Stream as _;
+    let pid = stream.peer_creds().ok()?.pid()?;
+    u32::try_from(pid).ok().filter(|pid| *pid > 0)
+}
+
+#[cfg(windows)]
+pub(crate) fn local_stream_peer_pid(stream: &LocalStream) -> Option<u32> {
+    use std::os::windows::io::{AsHandle, AsRawHandle};
+    use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+
+    let LocalStream::NamedPipe(pipe) = stream;
+    let mut pid = 0;
+    // SAFETY: the connected server pipe remains borrowed and pid is writable.
+    let ok = unsafe { GetNamedPipeClientProcessId(pipe.as_handle().as_raw_handle(), &mut pid) };
+    (ok != 0 && pid > 0).then_some(pid)
+}
+
 pub(crate) enum LocalStreamRead {
     Data,
     Pending,

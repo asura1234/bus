@@ -46,6 +46,7 @@ impl Worker {
             } else {
                 polled_status(agent, info)
             };
+            self.reconcile_polled_claude_retirement(&mut state, agent.id, status)?;
             let (missing, exit_evidence) =
                 self.observe_missing_binary(&mut state, agent, status, info)?;
             if !missing {

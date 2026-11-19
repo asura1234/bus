@@ -1685,6 +1685,9 @@ async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_
 async fn developer_follow_up_interrupts_the_orchestrator_turn_without_blocking_the_inbox() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let orch = f.agents[0];
+    // Claude restores its accepted prompt on Esc. Keep the real native
+    // retirement guard and have this scripted provider render the restoration.
+    f.restore_claude_input_on_stop(orch);
     let lead = f.send(orch, f.master, "first", false, None);
     f.tick();
     f.start(orch, "shared", "first");

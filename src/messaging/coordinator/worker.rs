@@ -681,7 +681,9 @@ impl Worker {
         for (agent, observed_at_ms) in agents {
             // A native write still owns this recipient until its receipt.
             // Other recipients must keep reconciling on the readiness tick.
-            if self.native_submissions.contains_key(&agent) {
+            if self.native_submissions.contains_key(&agent)
+                || state.interrupt_retirement_owner(agent).is_some()
+            {
                 continue;
             }
             changed |= self.settle_previous_kimi_requests(&mut state, agent, observed_at_ms);

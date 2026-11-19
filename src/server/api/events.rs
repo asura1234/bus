@@ -8,6 +8,7 @@ impl App {
     fn observe_native_submission_state(&self, event: &TerminalEvent) {
         let pane_id = match event {
             TerminalEvent::StateChanged { pane_id, .. }
+            | TerminalEvent::AgentSessionReported { pane_id, .. }
             | TerminalEvent::AgentProcessDetected {
                 pane_id,
                 replaced: Some(_),
@@ -26,6 +27,21 @@ impl App {
                 state, observed_at, ..
             } => {
                 runtime.observe_submission_agent_state(*state, *observed_at);
+            }
+            TerminalEvent::AgentSessionReported {
+                agent_label,
+                session_ref,
+                ..
+            } => {
+                if matches!(agent_label.as_str(), "claude" | "claude-ds") {
+                    if let Some(session) = session_ref {
+                        runtime
+                            .submission_handle(true)
+                            .bind_claude_session(&session.value);
+                    } else {
+                        runtime.invalidate_submission_ownership();
+                    }
+                }
             }
             _ => runtime.invalidate_submission_ownership(),
         }

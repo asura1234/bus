@@ -31,6 +31,7 @@ pub(crate) enum ModelError {
     LaunchIdentityMismatch,
     DeletionPending,
     AgentNotIdle,
+    InterruptRetirementPending,
     MasterRoomFixed,
     ReservedRoomName,
     ReservedAgentName,
@@ -98,6 +99,7 @@ impl std::fmt::Display for ModelError {
             Self::RecipientDeleted { agent, name } => {
                 write!(formatter, "{}", recipient_deleted_message(name, *agent))
             }
+            Self::InterruptRetirementPending => write!(formatter, "Claude draft retirement is unresolved. Retry the guarded interrupt or confirm Retire terminal under the recipient in the Bus TUI. Do not resend."),
             _ => write!(formatter, "Bus model operation failed: {self:?}"),
         }
     }

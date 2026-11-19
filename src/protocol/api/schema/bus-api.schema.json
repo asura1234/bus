@@ -1949,11 +1949,27 @@
         },
         "NativeInterruptIdentity": {
           "properties": {
+            "expected_payloads": {
+              "description": "Exact current Bus inputs eligible for Claude restored-draft retirement.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "expected_session_id": {
               "type": "string"
             },
             "expected_terminal_id": {
               "type": "string"
+            },
+            "retirement_request_id": {
+              "description": "Stable coordinator request identity for idempotent Claude retirement.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             }
           },
           "required": [

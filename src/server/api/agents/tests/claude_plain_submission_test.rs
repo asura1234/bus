@@ -254,3 +254,64 @@ async fn claude_plain_paste_does_not_confirm_unrelated_background_activity() {
         .contains("agent_prompted"));
     assert!(writes.try_recv().is_err());
 }
+
+/// Exercise the actual server AgentSendKeys dispatch, not just the writer helper.
+#[tokio::test]
+async fn claude_plain_bus_interrupt_api_retires_only_its_fenced_restored_prompt() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let mut params = match &method {
+        Method::AgentPromptIfIdle(p) => crate::protocol::api::schema::AgentSendKeysParams {
+            target: p.target.clone(),
+            keys: vec!["esc".into()],
+            native_interrupt: Some(crate::protocol::api::schema::NativeInterruptIdentity {
+                expected_terminal_id: p.expected_terminal_id.clone(),
+                expected_session_id: "session".into(),
+                expected_payloads: vec!["from bus".into()],
+                retirement_request_id: None,
+            }),
+        },
+        _ => unreachable!(),
+    };
+    let response = start(&mut app, method);
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b[200~from bus\x1b[201~"
+    );
+    redraw(&app, AgentKind::Claude, "from bus");
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    redraw(&app, AgentKind::Claude, "");
+    assert!(response
+        .recv_timeout(WAIT)
+        .unwrap()
+        .contains("agent_prompted"));
+    params
+        .native_interrupt
+        .as_mut()
+        .unwrap()
+        .expected_session_id = "replacement".into();
+    assert!(app
+        .prepare_agent_send_keys("wrong".into(), params.clone())
+        .is_err());
+    assert!(writes.try_recv().is_err());
+    params
+        .native_interrupt
+        .as_mut()
+        .unwrap()
+        .expected_session_id = "session".into();
+    let job = app.prepare_agent_send_keys("stop".into(), params).unwrap();
+    let stopped = tokio::task::spawn_blocking(job);
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x1b");
+    redraw(&app, AgentKind::Claude, "from bus");
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x01");
+    redraw(&app, AgentKind::Claude, "from bus");
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x0b");
+    redraw(&app, AgentKind::Claude, "");
+    let result = stopped.await.unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["result"]["type"], "ok", "{result}");
+    assert!(result.get("error").is_none(), "{result}");
+    assert!(
+        writes.try_recv().is_err(),
+        "retirement sent no paste, Enter, or stash toggle"
+    );
+}
