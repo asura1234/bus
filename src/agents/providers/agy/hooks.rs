@@ -1,6 +1,6 @@
 //! Observation-hook parser for Google Antigravity CLI (`agy-hook`).
 use super::completion;
-use crate::agents::providers::spool::{field, Parsed};
+use crate::agents::providers::spool::{field, optional_text, Parsed};
 use serde_json::Value;
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -45,7 +45,9 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
             if invocation > 0 {
                 return Ok(Parsed::Ignore);
             }
-            let prompt = field(value, "lastUserInput")?;
+            // AGY also fires this hook for invocations with no user prompt,
+            // such as a child subagent's first model call.
+            let prompt = optional_text(value, "lastUserInput")?;
             if prompt.is_empty() || is_subagent_transcript(value, &session) {
                 return Ok(Parsed::Ignore);
             }

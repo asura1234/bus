@@ -49,14 +49,14 @@ fn agy_hooks_parse_session_outer_turn_and_reconcile_stop() {
         "conversationId": "11111111-2222-3333-4444-555555555555",
         "invocationNum": 0,
         "initialNumSteps": 5,
-        "lastUserInput": "Run checks",
+        "lastUserInput": "  Run checks\n保留空格  ",
     });
     assert_eq!(
         parse(ProviderKind::Agy, &outer).unwrap(),
         Parsed::Started {
             session: "11111111-2222-3333-4444-555555555555".into(),
             turn: "4".into(),
-            prompt: "Run checks".into(),
+            prompt: "  Run checks\n保留空格  ".into(),
         }
     );
 
@@ -560,8 +560,20 @@ fn agy_hooks_ignore_child_subagents_and_system_wakeup_continuations() {
     });
     assert_eq!(parse(ProviderKind::Agy, &subagent_stop), Ok(Parsed::Ignore));
 
+    let subagent_invocation = json!({
+        "hookEventName": "PreInvocation",
+        "conversationId": child_id,
+        "invocationNum": 0,
+        "initialNumSteps": 1,
+        "transcriptPath": child_transcript,
+    });
+    assert_eq!(
+        parse(ProviderKind::Agy, &subagent_invocation),
+        Ok(Parsed::Ignore)
+    );
+
     // Parent wakeup on SYSTEM_MESSAGE at step_index 1 (initialNumSteps == 2) is ignored!
-    let parent_wakeup = json!({
+    let mut parent_wakeup = json!({
         "hookEventName": "PreInvocation",
         "conversationId": parent_id,
         "invocationNum": 0,
@@ -569,6 +581,11 @@ fn agy_hooks_ignore_child_subagents_and_system_wakeup_continuations() {
         "lastUserInput": "hi",
         "transcriptPath": parent_transcript,
     });
+    assert_eq!(parse(ProviderKind::Agy, &parent_wakeup), Ok(Parsed::Ignore));
+    parent_wakeup
+        .as_object_mut()
+        .unwrap()
+        .remove("lastUserInput");
     assert_eq!(parse(ProviderKind::Agy, &parent_wakeup), Ok(Parsed::Ignore));
 
     // Parent user prompt at step_index 0 (initialNumSteps == 1) emits Started!
@@ -588,6 +605,29 @@ fn agy_hooks_ignore_child_subagents_and_system_wakeup_continuations() {
             prompt: "hi".into(),
         })
     );
+}
+
+#[test]
+fn agy_hooks_ignore_pre_invocation_without_prompt_text() {
+    let invocation = json!({
+        "hookEventName": "PreInvocation",
+        "conversationId": "conversation",
+        "invocationNum": 0,
+        "initialNumSteps": 0,
+    });
+    assert_eq!(parse(ProviderKind::Agy, &invocation), Ok(Parsed::Ignore));
+}
+
+#[test]
+fn agy_hooks_ignore_pre_invocation_with_empty_prompt_text() {
+    let invocation = json!({
+        "hookEventName": "PreInvocation",
+        "conversationId": "conversation",
+        "invocationNum": 0,
+        "initialNumSteps": 0,
+        "lastUserInput": "",
+    });
+    assert_eq!(parse(ProviderKind::Agy, &invocation), Ok(Parsed::Ignore));
 }
 
 #[cfg(unix)]
