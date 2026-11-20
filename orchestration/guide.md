@@ -576,6 +576,28 @@ process change and assign the next independent task to a new agent when
 devices, build slots, worktrees and disk allow. Do not hand it to an agent
 that already owns a different task.
 
+### Idle-agent alerts
+
+The threshold notice reports that N agents are sitting idle. The per-agent
+notice reports that one agent has sat idle longer than five minutes. Both are
+symptoms to triage. Neither is a command to close agents.
+
+Handle both aspects:
+
+- Trim. When an agent has no remaining step and no unowned follow-up, delete
+  it and release its worktree and slots. Idle capacity costs memory and crew.
+- Re-route in the same turn. This is the part usually missed. An idle agent
+  while merges are open is a routing failure. Find the starving step: a Ready
+  PR with no merge owner, a lane waiting on a device or gate, or an unowned
+  follow-up. Put the idle agent on it.
+
+Each audit, count open PRs and MRs against working agents. When open merges
+outnumber working agents, reassign before deleting anything. Eight open MRs
+with only two of six agents working is lost throughput to fix.
+
+Do not keep an agent idle for a later step. Do not delete the only owner of a
+pending merge. Do not answer the alert with deletions alone.
+
 ## Evidence behind the result and continuation rules
 
 The **room 8259 (`libtv-app master`) 36-hour record** supplied for this SOP
