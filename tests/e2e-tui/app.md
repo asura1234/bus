@@ -154,33 +154,37 @@ draft cases in [stash-draft-delivery.md](stash-draft-delivery.md).
 
 ### APP-26 — NEW: Composer delivery modes and history badges
 
-**Preconditions/setup:** R(`qa-modes`), A with fake Claude, P(Claude worker).
-Use a long fake turn with a trusted start and a steer-capable composer.
+**Preconditions/setup:** R(`qa-modes`), A with fake Claude, P(Claude worker),
+and a fake MASTER orchestrator bound to that room. Use a long fake turn with
+a trusted start. Scratch CLI sends for steer and queue use that orchestrator.
 
-1. In a fresh room inspect `Mode: Interrupt`; click it and confirm the three
-   choices Interrupt, Steer and Queue. Esc closes without changing selection.
-   Reopen with F4 and choose Steer with the keyboard → `Mode: Steer` is visible.
-   Return to Interrupt and send `fake:work 40 MODE_LEAD` → one long turn and
-   a history header with no delivery badge.
-2. While the lead is Working, choose Steer and send `MODE_JOIN` with Enter →
-   the recipient accepts it before the lead ends, in the same turn group.
-   Its history header shows `[pending]`, even after it settles.
-3. While that group remains active, select Queue by mouse and send
-   `MODE_AFTER` → header shows `[queued]`. Its request remains queued with no
-   provider input until the lead ends, then runs in a separate turn exactly
-   once. Reopen history → `[queued]` still reflects the original delivery mode.
-4. Switch to a fresh room → its picker uses Interrupt. Switch back →
-   the original room still shows Queue and the three correct headers. Save and reopen
-   only the scratch session → the persisted headers still show no badge for
-   Interrupt, `[pending]` for Steer and `[queued]` for Queue. Scan the whole
-   exchange for any stop-outcome badge.
+1. Inspect the composer and `/help` → there is no `Mode:` control and F4 does
+   not open a delivery menu. Help says Enter and Option+Enter both interrupt.
+   Send `fake:work 40 MODE_LEAD` with Enter → one long turn and a history
+   header with no delivery badge.
+2. While the lead is Working, send `MODE_ALT` with Option+Enter → the lead
+   stops and the new payload is accepted before the lead's scheduled natural
+   end. Its history header also has no delivery badge. A developer attempt
+   to send `--mode steer`, `--mode queue`, or `--queue` is refused.
+3. Start a fresh long turn. From the scratch CLI, as the bound orchestrator,
+   send `MODE_STEER` with `--mode steer` → the recipient accepts it in the
+   lead's turn group before the lead ends. Its history header shows
+   `[pending]`, including after it settles. While that group is still active,
+   send `MODE_QUEUE` with `--mode queue` → the header shows `[queued]`, the
+   request stays queued with no provider input until the lead ends, then runs
+   once in a separate turn.
+4. Reopen history, then save and reopen only the scratch session → the Enter
+   and Option+Enter rows still have no badge, Steer still shows `[pending]`,
+   and Queue still shows `[queued]`. Scan the exchange for any stop-outcome
+   badge.
 
-**Evidence:** dropdown and header cells, each prompt/request ID, native start
-and end evidence, group/status before and after settlement, restored history.
-If step 3 misses the active interval, report the missing observation.
+**Evidence:** composer and help text showing no mode picker, each
+prompt/request ID, native start and end evidence, the developer mode refusal,
+group/status before and after settlement, and restored history. If step 3
+misses the active interval, report the missing observation.
 
-**Pass criteria:** the selected mode governs the next Enter, Steer joins,
-Queue waits and drains, and history preserves only the expected mode badges.
+**Pass criteria:** the composer always interrupts and draws no mode badge.
+Orchestrator steer joins and queue waits, and history keeps only those badges.
 
 ### APP-27 — NEW: Explicit and captured developer answers render once
 
@@ -400,7 +404,7 @@ make progress within it and accepted work drains afterwards.
 
 1. Launch scratch Bus and wait for startup → permanent `MASTER` and the default work room `bus` appear; `bus` opens. Its history and agents list (headed `# bus`, with `+` at the right) have no messages or workers; composer says `Message selected agents…`, with `@  Choose agents`.
 2. Inspect the work-room header → directly below the room name, right-aligned `[ ] * → You` and `[ ] You → *` checkboxes appear in that order, matching MASTER; the conversation starts below their divider and no status editor is present.
-3. Verify the delivery control reads `Mode: Interrupt`. Press Enter on the empty composer → no message, error or agent is created.
+3. Verify the composer has no `Mode:` control. Press Enter on the empty composer → no message, error or agent is created.
 4. Type `/help`, press Enter, scroll with PageDown, then Esc → local `Keyboard shortcuts` guide opens and closes; `/help` is not sent or retained as a message.
 
 **Evidence:** startup/help text, screenshot, scratch rooms/agents/history before/after.
@@ -497,7 +501,7 @@ is discoverable, and the fake providers each create exactly one worker.
 **Preconditions/setup:** R(`qa-send`), A with alpha/beta, P(alpha); empty draft.
 
 1. Type `line one`, press Ctrl+J, type `line two @ +` → two draft lines; literal @ and + are text. If the host supports Shift+Enter, press it at the end of line two → third empty line; press Backspace once → exactly the original two lines restored, caret at the end of `line two @ +`, ready for step 2.
-2. Confirm `Mode: Interrupt`, then press Ctrl+A and Ctrl+K on the last line; type `line two revised` → only that line is replaced; first line remains. Press Enter once → one history message shows both lines, `You → alpha`; composer clears after acceptance.
+2. Press Ctrl+A and Ctrl+K on the last line; type `line two revised` → only that line is replaced; first line remains. Press Enter once → one history message shows both lines, `You → alpha`; composer clears after acceptance.
 3. Inspect scratch history → exact text `line one\nline two revised`, alpha as sole recipient, with no delivery badge on the header. Press Enter again → no duplicate prompt or empty-send error.
 4. Type `throwaway`, press Ctrl+C → draft clears; Bus remains open.
 
@@ -838,13 +842,13 @@ build missing a required product lane still fails the target assertion.
 
 | Area | Source at review | Check on the run head |
 | --- | --- | --- |
-| APP-25, agy portion of APP-30 | `fix/interrupt-deliver-after-stop` at `cdd3b9cb3` includes copy/send/restore and transcript reconciliation. The fetched master still has interrupt retirement paths. | Confirm the integrated delivery lane. Restoring opaque/clipped provider content is best-effort in the inspected branch. APP-25 requires exact restoration for readable plaintext. Keep separate rich-draft and genuine-blocker checks. |
-| APP-26 | Master `af8e243c6` renders original mode badges. The picker is on `feat/composer-mode-dropdown` at `a537244eb`. | Check the final key/menu behavior at the integrated head. |
+| APP-25, agy portion of APP-30 | Master `f00cc3b3d` removes interrupt retirement. Interrupt delivery runs while the agent is Working (`delivery.rs` `interrupt_ready`, `allow_working: true`). Pane-time copy-send-restore is `terminal/runtime/submission/copy.rs`: readable plaintext is snapshotted, sent, then restored; unrestorable content logs `bus.draft.copy_loss` and still delivers. The same commit reconciles confirmed AGY turns. | On this head, APP-25 requires exact restoration of readable plaintext and no retirement or fence notice. Opaque or clipped content may log `bus.draft.copy_loss` and must still deliver. Keep rich-draft and genuine-blocker checks separate. |
+| APP-26 | Master `f00cc3b3d` has no composer mode picker. Enter and Option+Enter both interrupt (`drafts.rs` `request_queued_send`, `delivery_mode_test.rs`). Badges from `af8e243c6` remain in `history/exchange.rs`: interrupt has no marker, steer is `[pending]`, queue is `[queued]`. Developer steer/queue is refused; an orchestrator may pass `--mode` (`messages.rs` `send_delivery`). | Do not look for `Mode:` or F4. Composer sends are interrupt with no badge. Produce steer and queue with an orchestrator `--mode` send and check that those badges persist. |
 | APP-27 | Master `af8e243c6` renders developer replies using the same projection as room history. | Check the still-open explicit acknowledgement and restored history independently. |
-| APP-28 | `fix/add-agent-dialog` at `30eb71d23` has provisional rows, inline validation and room-local errors. | Check failure wording and delayed hook-consent presentation on the integrated Add lane. |
+| APP-28 | #472 `067ea8672` returns to the room on submit (`agent_creation.rs` `submit_agent_creation` calls `open_room`) and shows a `Launching` row (`render/sidebar.rs`). Inline missing-field text stays on the form (`input/forms.rs`). The room renders `Could not add {name}: {reason}` (`render/room.rs`). Hook consent opens later, only while that room is idle (`receive_agent_setup`). | Expect the immediate close, the provisional row, inline Name/Model/PWD errors, and the room-local failure line. Consent must not hold the Add form open across startup. |
 | APP-29 | Master `1ab9d1c5b` and `f83ba7013` use immediate keypress confirmation. | A separate confirmation prompt is not in the inspected restart contract. If a prompt is required, the restart lane must change before adding that expectation. |
 | APP-30 | Master `80bef5469`, `ae6734d87`, `89c49bad8` and `2ca07f718` cover hook/parser/delivery cases. `fix/codex-false-blocked-hints` at `3cd45f0b1` has further dialog-layout work. | Keep the positive permission/trust controls and check the exact native fixture support on the run head. |
-| APP-31 | `fix/stale-blocked-notices` at `2206fb8f2` retires deleted-agent work while preserving history. | Confirm deletion/legacy queue cleanup and historic-row behavior on the integrated notice lane. |
+| APP-31 | #470 `0d3f76636` is on master. Deletion sets `deletion_pending` and `notify_dialogs` skips that agent (`dialogs.rs`). Unsettled requests on the deleted agent become Abandoned with `agent_deleted` (`model/agents.rs` `delete_agent`). Queued work whose author is deleting is retired before dispatch (`retire_deleted_queued_requests`). History remains, and a reused name gets a new id. | Confirm no new blocked notice or native delivery after deletion, `agent_deleted` on the abandoned request, and that the replacement agent does not inherit the old queue. |
 | APP-32 | Master `a662dfc1b` provides a provisional hint for eligible `send --async` followers. | Provide a deterministic stall fixture. The add/startup lane may change which operation reliably holds the coordinator. |
 
 ## Decisions
