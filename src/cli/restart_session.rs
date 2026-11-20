@@ -165,6 +165,10 @@ pub(crate) fn resume_after_quit() -> io::Result<()> {
 /// Relaunch the TUI claimed in `restarts/active.json` and return the new process.
 #[cfg(unix)]
 pub(crate) fn relaunch_claimed_handoff(root: &Path) -> io::Result<Option<Child>> {
+    // This process only waited on the TUI, so it never bound the session.
+    // Stop and the health probe resolve sockets from BUS_DATA_DIR. A registry
+    // resume leaves that unset, and the replacement then never counts as healthy.
+    std::env::set_var("BUS_DATA_DIR", root);
     let active = root.join("restarts/active.json");
     let Some(plan) = restart_record::read_handoff(&active).map_err(io::Error::other)? else {
         return Err(io::Error::other("restart handoff was not claimed"));
