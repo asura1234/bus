@@ -217,6 +217,45 @@ fn idle_backstop_keeps_codex_final_after_a_false_working_to_idle_edge() {
 }
 
 #[test]
+fn idle_backstop_keeps_codex_final_after_a_blocked_to_idle_edge() {
+    let (mut fixture, lead, rollout, typed) = idle_codex_turn();
+    append(
+        &rollout,
+        &codex_turn(&rollout_at(&fixture, 0), "turn-1", &typed, None),
+    );
+    let mut state = fixture.worker.state.clone();
+    state
+        .observe_dialog(fixture.agent, true, fixture.now)
+        .unwrap();
+    fixture.worker.save(state).unwrap();
+    fixture.status(RuntimeStatus::Blocked);
+    let progress = json!({"timestamp":rollout_at(&fixture, 0),"type":"event_msg",
+        "payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"CommandExecution"}}});
+    append(&rollout, &format!("{progress}\n"));
+    let mut state = fixture.worker.state.clone();
+    state
+        .observe_dialog(fixture.agent, false, fixture.now)
+        .unwrap();
+    fixture.worker.save(state).unwrap();
+    fixture.status(RuntimeStatus::Idle);
+    let idle = fixture.now;
+    let request = fixture.request(lead);
+    assert_eq!(request.turn_ended_at_ms, Some(idle));
+    assert!(!request.bound_turn_activity.as_ref().unwrap().working_seen);
+
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    append_owned_completion(&rollout, &fixture);
+    fixture.status(RuntimeStatus::Idle);
+    assert!(fixture.now < idle + 30_000);
+    fixture.worker.settle_requests().unwrap();
+    assert_completed_without_reply(&fixture, lead);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("late owned final"));
+}
+
+#[test]
 fn idle_backstop_retains_validated_codex_progress_when_the_rollout_tail_rotates() {
     let (mut fixture, lead, rollout, typed) = idle_codex_turn();
     let idle = fixture.now;

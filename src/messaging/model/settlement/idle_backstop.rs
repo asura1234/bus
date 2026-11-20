@@ -101,13 +101,14 @@ impl BusState {
             return None;
         }
         let activity = request.bound_turn_activity.as_ref()?;
-        let deadline = if activity.working_seen {
-            if owner.provider != Provider::Codex {
-                return None;
-            }
-            self.settle_candidate(agent)?
-                .turn_ended_at_ms?
-                .saturating_add(TURN_SETTLE_MS)
+        let inferred_end = (owner.provider == Provider::Codex)
+            .then(|| self.settle_candidate(agent))
+            .flatten()
+            .and_then(|candidate| candidate.turn_ended_at_ms);
+        let deadline = if let Some(ended_at) = inferred_end {
+            ended_at.saturating_add(TURN_SETTLE_MS)
+        } else if activity.working_seen {
+            return None;
         } else {
             activity
                 .idle_since_ms?
