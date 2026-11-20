@@ -121,13 +121,15 @@ the wrapper remains held.
 
 <a id="merge-independence"></a>
 
-- **Merge PRs independently; never sequence them.** Every PR/MR merges
-  independently as soon as it is Ready and its own gate allows; whoever is
-  ready first merges first. Never hold, delay or sequence a ready PR behind
-  another PR to minimize conflicts or to keep merge order convenient, and never
-  batch merges. A real merge conflict is resolved when it appears. Only genuine
-  dependency order (a stacked PR that cannot land before its parent) and
-  existing safety or authorization holds may keep a ready PR waiting.
+- **Never hold a PR hostage to another PR.** A PR/MR merges on its own gates
+  as soon as they are green, with no sequencing or delay behind another PR
+  except when the two PRs are explicitly designed as a train. Whoever is ready
+  first merges first. Never hold, delay or sequence a ready PR behind another
+  PR to minimize conflicts or to keep merge order convenient, and never batch
+  merges. If two changes touch the same code, the real conflict is resolved at
+  merge time instead of holding one for the other. Only genuine dependency
+  order (the two PRs are explicitly designed as a train) and existing safety
+  or authorization holds may keep a ready PR waiting.
   *Why:* a held or queued merge idles finished work and loses throughput, and a
   conflict avoided today still has to be resolved, so delaying buys nothing.
 
