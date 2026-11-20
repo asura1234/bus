@@ -626,7 +626,7 @@ fn acknowledging_the_final_queued_worker_outcome_persists_a_deliberate_withdrawa
             .unwrap()
             .failure_reason
             .as_deref(),
-        Some("hook_setup_unconfirmed")
+        Some("not_submitted")
     );
 }
 
@@ -666,12 +666,10 @@ fn queue_expired_worker_outcomes<const COUNT: usize>(
     f: &mut Fixture,
     texts: [&str; COUNT],
 ) -> ([RequestId; COUNT], RequestId) {
-    let mut state = f.worker.state.clone();
     let now = io::now_ms();
     let sent_at = now - crate::messaging::model::QUEUED_STALL_MS * 2;
-    state
-        .observe_status(f.agent, RuntimeStatus::Idle, sent_at)
-        .unwrap();
+    ready_worker_at(f, sent_at);
+    let mut state = f.worker.state.clone();
     let sources = texts.map(|text| {
         state
             .submit_message_from(
