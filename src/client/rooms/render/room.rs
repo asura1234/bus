@@ -7,11 +7,11 @@ use super::super::{
     thumbnails::Placement,
     BusUi, ComposerSize, LocalRoom,
 };
-use super::delivery_mode::{delivery_pill, delivery_pill_width};
+use super::delivery_mode::delivery_pill_width;
 use super::dialogs::{search_panel, SEARCH_BOX_HEIGHT};
 use super::sidebar::message_name_color;
 use super::text::{display, wrap};
-use super::{Action, Hit, View, ACCENT, GREY};
+use super::{Action, View, ACCENT, GREY};
 use crate::messaging::model::{BusState, Room, RoomHistoryFilters, RoomId};
 use ratatui::{
     layout::Rect,
@@ -128,7 +128,7 @@ impl BusUi {
                 false,
             );
         }
-        self.recipient_bar_view(view, local, &recipients, layout);
+        self.recipient_bar_view(view, local, &recipients);
         self.composer_editor_view(view, local, layout);
         let files = self.draft_files(room);
         self.file_scroll = self.file_scroll.min(files.len().saturating_sub(1));
@@ -463,88 +463,6 @@ impl BusUi {
             view.row(span_rect, text, None, false, false);
             view.style_last_row(span_rect, *style);
             column = column.saturating_add(span_width);
-        }
-    }
-
-    fn recipient_bar_view(
-        &self,
-        view: &mut View,
-        local: &LocalRoom,
-        recipients: &RecipientLayout,
-        layout: RoomLayout,
-    ) {
-        let RoomLayout {
-            x,
-            width,
-            composer_y,
-            bar_height,
-            ..
-        } = layout;
-        let controls_y = composer_y + u16::from(bar_height > 1);
-        let pill_width = delivery_pill_width(width);
-        let pill = Rect::new(
-            x,
-            controls_y,
-            pill_width.saturating_sub(1).max(1).min(pill_width),
-            1,
-        );
-        delivery_pill(view, pill, local.delivery, self.delivery_menu.is_some());
-        let x = x + pill_width;
-        let width = width.saturating_sub(pill_width);
-        view.row(
-            Rect::new(x, controls_y, width.min(3), 1),
-            "+",
-            Some(Action::Files),
-            false,
-            false,
-        );
-        view.row(
-            Rect::new(
-                x + 3,
-                controls_y,
-                if local.recipients.is_empty() {
-                    width.saturating_sub(3)
-                } else {
-                    width.saturating_sub(3).min(3)
-                },
-                1,
-            ),
-            if local.recipients.is_empty() {
-                "@  Choose agents"
-            } else {
-                "@"
-            },
-            Some(Action::Recipients),
-            false,
-            true,
-        );
-        for chip in &recipients.chips {
-            if chip.rect.y < self.recipient_scroll
-                || chip.rect.bottom() > self.recipient_scroll + bar_height
-            {
-                continue;
-            }
-            let rect = Rect::new(
-                x + chip.rect.x,
-                composer_y + chip.rect.y - self.recipient_scroll,
-                chip.rect.width,
-                3,
-            );
-            let color = self
-                .snapshot
-                .state
-                .agent(chip.agent)
-                .map_or(ACCENT, |agent| {
-                    message_name_color(&self.snapshot.state, self.room, agent, &self.settings)
-                });
-            view.recipient_chips.push((rect, color));
-            let label_rect = Rect::new(rect.x + 2, rect.y + 1, rect.width.saturating_sub(4), 1);
-            view.row(label_rect, &chip.label, None, false, false);
-            view.color_last_row(label_rect, color);
-            view.hits.push(Hit {
-                rect,
-                action: Action::Recipients,
-            });
         }
     }
 
