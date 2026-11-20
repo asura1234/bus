@@ -283,6 +283,9 @@ impl BusUi {
             y += 1;
             // Leave room for the buttons and a short PWD list.
             let mut below = 3;
+            if let Some(error) = &self.agent_form_error {
+                below += wrap(error, width).len().min(3) as u16;
+            }
             let suggestions = self.suggestions.entries.len().min(3) as u16;
             if suggestions > 0 {
                 below += 2 + suggestions;
@@ -321,7 +324,18 @@ impl BusUi {
             false,
             false,
         );
-        y += 2;
+        y += 1;
+        if let Some(error) = &self.agent_form_error {
+            let height = wrap(error, width).len().min(3) as u16;
+            view.lines(
+                Rect::new(x, y, width, height.min(main.bottom().saturating_sub(y))),
+                error,
+                None,
+                false,
+            );
+            y += height;
+        }
+        y += 1;
         let remaining = main.bottom().saturating_sub(y + 2) as usize;
         let start = self
             .suggestions

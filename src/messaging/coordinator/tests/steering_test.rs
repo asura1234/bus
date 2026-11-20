@@ -34,8 +34,11 @@ mod rollout_attribution_tests;
 #[path = "missing_directory_running_test.rs"]
 mod missing_directory_running_tests;
 
-#[path = "interrupt_retirement_test.rs"]
-mod interrupt_retirement_tests;
+#[path = "agy_unclaimed_turn_reconciliation_test.rs"]
+mod agy_unclaimed_turn_reconciliation_tests;
+
+#[path = "interrupt_delivery_test.rs"]
+mod interrupt_delivery_tests;
 
 #[path = "interrupt_test.rs"]
 mod interrupt_tests;
@@ -331,7 +334,13 @@ impl Fixture {
                 let mut rows = Vec::new();
                 let mut state_clone = self.worker.state.clone();
                 if let Some(lead) = state_clone.agent(self.agent).and_then(|a| a.current_request) {
-                    for (offset, id) in state_clone.group_members(lead).into_iter().enumerate() {
+                    let members = state_clone.group_members(lead);
+                    let turn_requests = if members.is_empty() {
+                        vec![lead]
+                    } else {
+                        members
+                    };
+                    for (offset, id) in turn_requests.into_iter().enumerate() {
                         if let Some(payload) = state_clone.render_request_payload(id) {
                             rows.push(json!({
                                 "step_index": step + offset as u64,

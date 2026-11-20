@@ -1,5 +1,5 @@
 //! Sidebar status, labels, animation colors and frame assembly.
-use super::super::deletion::DeleteTarget;
+use super::super::{agent_creation::CreationState, deletion::DeleteTarget};
 use super::super::{
     forms::{Form, RenameTarget},
     BusUi,
@@ -330,7 +330,8 @@ impl BusUi {
         let content_height = 6
             + master_rows
             + work_room_rows
-            + agents.iter().map(|entry| entry.height).sum::<usize>();
+            + agents.iter().map(|entry| entry.height).sum::<usize>()
+            + self.provisional_agents().count() * 2;
         let notices = u16::from(self.quitting.is_some());
         // The footer stays pinned below any exit notices.
         let footer_rows = 2 + u16::from(cfg!(feature = "dev-tools"));
@@ -534,7 +535,7 @@ impl BusUi {
             false,
             false,
         );
-        y += 2;
+        y = self.sidebar_provisional_agents(view, viewport, y + 2);
         for SidebarAgent {
             agent,
             in_master,
@@ -595,6 +596,42 @@ impl BusUi {
             }
             y += 1;
         }
+    }
+
+    fn sidebar_provisional_agents(
+        &self,
+        view: &mut View,
+        viewport: SidebarViewport,
+        mut y: usize,
+    ) -> usize {
+        let sw = viewport.sidebar.width.saturating_sub(3);
+        for (id, creation) in self.provisional_agents() {
+            let (status, action) = match &creation.state {
+                CreationState::Launching => ("Launching", None),
+                CreationState::NeedsConsent(_) => {
+                    ("Review hooks", Some(Action::ReviewAgentSetup(*id)))
+                }
+                CreationState::Failed(_) => ("Unavailable", None),
+            };
+            let status_width = status.len() as u16;
+            let name_width = sw.saturating_sub(status_width + 1);
+            view.row(
+                viewport.at(1, y, name_width),
+                &creation.name,
+                action.clone(),
+                false,
+                false,
+            );
+            view.row(
+                viewport.at(1 + sw.saturating_sub(status_width), y, status_width.min(sw)),
+                status,
+                action,
+                false,
+                true,
+            );
+            y += 2;
+        }
+        y
     }
 
     fn sidebar_agent_heading(

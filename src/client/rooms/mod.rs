@@ -1,3 +1,4 @@
+mod agent_creation;
 mod chat_search;
 #[path = "dialogs/deletion.rs"]
 mod deletion;

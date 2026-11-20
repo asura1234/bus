@@ -1,7 +1,7 @@
 //! Coordinator delivery ownership.
 use super::io;
 use super::{
-    callbacks, diagnostics, Method, Provider, RequestId, ResponseResult, RoomAgent, RuntimeStatus,
+    callbacks, diagnostics, Provider, RequestId, ResponseResult, RoomAgent, RuntimeStatus,
     SubmissionOutcome, Worker, OWN_TURN_GRACE,
 };
 use crate::messaging::model::DispatchMark;
@@ -19,7 +19,7 @@ pub(super) const PROMPT_NOT_SHOWN_RETRY: std::time::Duration = std::time::Durati
 
 enum DeliveryRoute {
     Steer(RequestId, RequestId),
-    Submit(bool),
+    Submit { steer: bool, allow_working: bool },
 }
 
 pub(super) struct ReplyDeliveryRetry {
@@ -162,10 +162,11 @@ impl Worker {
             let waited = self.note_queued_delivery_wait(&agent);
             match self.delivery_route(&agent) {
                 Some(DeliveryRoute::Steer(request, lead)) => self.steer(&agent, request, lead)?,
-                Some(DeliveryRoute::Submit(steer))
-                    if !launch_prompts || !self.deliver_launch_prompt(&agent)? =>
-                {
-                    self.deliver_queued_request(&agent, waited && !steer, steer)?;
+                Some(DeliveryRoute::Submit {
+                    steer,
+                    allow_working,
+                }) if !launch_prompts || !self.deliver_launch_prompt(&agent)? => {
+                    self.deliver_queued_request(&agent, waited && !steer, steer, allow_working)?;
                 }
                 _ => {}
             }
@@ -176,7 +177,7 @@ impl Worker {
     pub(super) fn note_delivery_eligibility(&mut self, agent: &RoomAgent) {
         let request = match self.delivery_route(agent) {
             Some(DeliveryRoute::Steer(request, _)) => Some(request),
-            Some(DeliveryRoute::Submit(_)) => self.state.next_queued_request(agent.id),
+            Some(DeliveryRoute::Submit { .. }) => self.state.next_queued_request(agent.id),
             None => None,
         };
         if let Some(request) = request {
@@ -186,11 +187,7 @@ impl Worker {
 
     fn delivery_route(&self, agent: &RoomAgent) -> Option<DeliveryRoute> {
         let now_ms = io::now_ms();
-        if agent
-            .current_request
-            .and_then(|id| self.state.request(id))
-            .is_some_and(|r| r.interrupt_retirement_pending)
-            || self.native_submissions.contains_key(&agent.id)
+        if self.native_submissions.contains_key(&agent.id)
             || self.submission_rechecks.contains(&agent.id)
             || self.withdrawn_at.contains_key(&agent.id)
             || agent.provider_retry.as_ref().is_some_and(|hold| {
@@ -217,7 +214,14 @@ impl Worker {
             .get(&agent.id)
             .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE);
         let steer = self.steer_into_unbound_turn(agent, own_turn);
-        if ((agent.status != RuntimeStatus::Idle || own_turn) && !steer)
+        let interrupt_ready = agent.current_request.is_none()
+            && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
+            && self.state.queued_requests(agent.id).iter().any(|id| {
+                self.state
+                    .request(*id)
+                    .is_some_and(|request| request.interrupt_delivery)
+            });
+        if ((agent.status != RuntimeStatus::Idle || own_turn) && !steer && !interrupt_ready)
             || agent.dialog
             || !agent.hook_setup_confirmed
             || agent.session_binding_invalidated
@@ -225,7 +229,10 @@ impl Worker {
         {
             return None;
         }
-        Some(DeliveryRoute::Submit(steer))
+        Some(DeliveryRoute::Submit {
+            steer,
+            allow_working: interrupt_ready,
+        })
     }
 
     /// Whether the queue head can be typed into a turn Bus does not own yet.
@@ -314,13 +321,14 @@ impl Worker {
         agent: &RoomAgent,
         waited: bool,
         steer: bool,
+        allow_working: bool,
     ) -> Result<(), String> {
         let report = self.state.next_queued_request(agent.id).filter(|id| {
             self.state
                 .request(*id)
                 .is_some_and(super::Request::is_error_report)
         });
-        if let Err(error) = self.deliver_request(agent, waited, steer) {
+        if let Err(error) = self.deliver_request(agent, waited, steer, allow_working) {
             let Some(request) = report else {
                 return Err(error);
             };
@@ -428,6 +436,7 @@ impl Worker {
             text,
             terminal,
             pane,
+            false,
             false,
             self.serving_generation,
         ));
@@ -600,14 +609,13 @@ impl Worker {
             .begin_submission(request, launch, boundary)
             .map_err(|e| e.to_string())?;
         state
-            .stamp_native_delivery_epoch(
+            .stamp_delivery_epoch(
                 request,
                 crate::messaging::model::DeliveryEpoch {
                     generation: self.serving_generation,
                     terminal_id: terminal.to_owned(),
                     pane_id: pane.to_owned(),
                 },
-                None,
             )
             .map_err(|e| e.to_string())?;
         state
@@ -626,6 +634,7 @@ impl Worker {
         agent: &RoomAgent,
         waited: bool,
         steer: bool,
+        allow_working: bool,
     ) -> Result<(), String> {
         let identity = &agent.runtime_identity;
         let (Some(launch), Some(terminal), Some(pane)) = (
@@ -671,7 +680,15 @@ impl Worker {
             "Bus payload metadata"
         );
         self.mark_live_dispatch(request, DispatchMark::Diagnostics);
-        let method = submission_method(agent, text, terminal, pane, steer, self.serving_generation);
+        let method = submission_method(
+            agent,
+            text,
+            terminal,
+            pane,
+            steer,
+            allow_working,
+            self.serving_generation,
+        );
         self.mark_live_dispatch(request, DispatchMark::Method);
         self.start_native_submission(agent, request, method, false, started)
     }
@@ -730,56 +747,5 @@ impl Worker {
                     .insert(agent.id, std::time::Instant::now());
             }
         }
-    }
-
-    /// Types `request` into the agent's running turn, the way a person types
-    /// while an agent works, so it joins `lead`'s group and shares its reply.
-    pub(super) fn steer(
-        &mut self,
-        agent: &RoomAgent,
-        request: RequestId,
-        lead: RequestId,
-    ) -> Result<(), String> {
-        let identity = &agent.runtime_identity;
-        let (Some(terminal), Some(pane), Some(_session)) = (
-            &identity.terminal_id,
-            &identity.pane_id,
-            &identity.session_id,
-        ) else {
-            return Ok(());
-        };
-        let mut state = self.state.clone();
-        self.mark_open_dispatch(&mut state, request, DispatchMark::Started);
-        let text = state
-            .render_request_payload(request)
-            .ok_or("Missing queued request")?;
-        self.mark_open_dispatch(&mut state, request, DispatchMark::Render);
-        state
-            .begin_steering(request, lead)
-            .map_err(|e| e.to_string())?;
-        self.stamp_steering_origin(&mut state, agent, request, terminal, pane)?;
-        state
-            .record_picked(request, io::now_ms(), true)
-            .map_err(|e| e.to_string())?;
-        state.begin_dialog_notice_write(request, io::now_ms());
-        self.mark_open_dispatch(&mut state, request, DispatchMark::Notice);
-        state
-            .record_native_requested(request, io::now_ms())
-            .map_err(|error| error.to_string())?;
-        self.save(state)?;
-        self.mark_live_dispatch(request, DispatchMark::Save);
-        diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
-        self.mark_live_dispatch(request, DispatchMark::Diagnostics);
-        let started = std::time::Instant::now();
-        let mut method =
-            submission_method(agent, text, terminal, pane, true, self.serving_generation);
-        if let Method::AgentPromptIfIdleAtGeneration(params) = &mut method {
-            params.expected_turn_id = self
-                .state
-                .request(lead)
-                .and_then(|request| request.provider_turn_id.clone());
-        }
-        self.mark_live_dispatch(request, DispatchMark::Method);
-        self.start_native_submission(agent, request, method, true, started)
     }
 }

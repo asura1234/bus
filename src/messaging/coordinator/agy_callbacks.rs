@@ -47,6 +47,23 @@ fn transcript_error_callback(
 }
 
 impl Worker {
+    pub(super) fn record_agy_transcript(
+        &mut self,
+        id: AgentId,
+        record: &callbacks::Record,
+        session: &str,
+    ) -> Option<PathBuf> {
+        let raw_path = record
+            .value
+            .get("transcriptPath")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())?;
+        let path = agy_completion::resolve_transcript_path(raw_path, session).ok()?;
+        self.agy_transcripts
+            .insert(id, (session.to_owned(), path.clone()));
+        Some(path)
+    }
+
     fn owned_agy_turn(
         state: &BusState,
         id: AgentId,
@@ -63,6 +80,46 @@ impl Worker {
                     && r.provider_session_id.as_deref() == Some(session)
             })
             .and_then(|r| r.provider_turn_id.clone())
+    }
+
+    /// Reconcile an unbound confirmed AGY request when `Stop` arrives without a
+    /// prior `PreInvocation(invocationNum == 0)` binding, using the transcript's
+    /// matching unconsumed `USER_EXPLICIT` prompt step.
+    fn reconcile_unbound_agy_turn(
+        &mut self,
+        id: AgentId,
+        state: &mut BusState,
+        record: &callbacks::Record,
+        session: &str,
+    ) -> Option<String> {
+        let req_id = state.agent(id).and_then(|a| a.current_request)?;
+        let request = state.request(req_id)?.clone();
+        if request.trusted_start_bound
+            || !matches!(
+                request.phase,
+                crate::messaging::model::RequestPhase::Submitting
+                    | crate::messaging::model::RequestPhase::Active
+            )
+            || request.expected_launch_id.as_deref() != Some(record.manifest.launch_id.as_str())
+            || request
+                .provider_session_id
+                .as_deref()
+                .is_some_and(|bound| bound != session)
+        {
+            return None;
+        }
+        let transcript = self.record_agy_transcript(id, record, session)?;
+        let launch = record.manifest.launch_id.as_str();
+        let turn = agy_completion::find_turn_for_prompt(
+            &transcript,
+            |prompt| {
+                request.matches_callback_payload(prompt, crate::messaging::model::Provider::Agy)
+            },
+            |turn| state.is_consumed_provider_turn(launch, Some(session), Some(turn)),
+        )
+        .ok()??;
+        state.bind_reconciled_agy_turn(req_id, session.to_owned(), turn.clone());
+        Some(turn)
     }
 
     pub(super) fn committed_agy_completion_callback(
@@ -202,7 +259,13 @@ impl Worker {
         session: String,
     ) -> Result<CallbackRecordResult, String> {
         let verdict = agy_hooks::stop_verdict(&record.value)?;
-        let Some(turn) = Self::owned_agy_turn(&state, id, record, &session) else {
+        let _ = self.record_agy_transcript(id, record, &session);
+        let turn = Self::owned_agy_turn(&state, id, record, &session).or_else(|| {
+            matches!(verdict, StopVerdict::Completed)
+                .then(|| self.reconcile_unbound_agy_turn(id, &mut state, record, &session))
+                .flatten()
+        });
+        let Some(turn) = turn else {
             tracing::debug!(
                 event = "bus.callback.ignored",
                 reason = "agy_no_owned_turn",
@@ -272,77 +335,91 @@ impl Worker {
                 )))
             }
             StopVerdict::Completed => {
-                match self.committed_agy_completion_callback(id, &mut state, record, &session, true)
-                {
-                    AgyTranscriptOutcome::Final(cb) => Ok(ControlFlow::Continue((
-                        state,
-                        Some(cb),
-                        agy_observation_paths(path),
-                    ))),
-                    AgyTranscriptOutcome::Rejected { turn, error } => {
-                        let cb = transcript_error_callback(record, id, session, turn, error);
+                self.agy_completed_stop(id, state, path, record, session, turn)
+            }
+        }
+    }
+
+    fn agy_completed_stop(
+        &self,
+        id: AgentId,
+        mut state: BusState,
+        path: &Path,
+        record: &callbacks::Record,
+        session: String,
+        turn: String,
+    ) -> Result<CallbackRecordResult, String> {
+        match self.committed_agy_completion_callback(id, &mut state, record, &session, true) {
+            AgyTranscriptOutcome::Final(cb) => Ok(ControlFlow::Continue((
+                state,
+                Some(cb),
+                agy_observation_paths(path),
+            ))),
+            AgyTranscriptOutcome::Rejected { turn, error } => {
+                let cb = transcript_error_callback(record, id, session, turn, error);
+                Ok(ControlFlow::Continue((
+                    state,
+                    Some(cb),
+                    agy_observation_paths(path),
+                )))
+            }
+            AgyTranscriptOutcome::Pending => {
+                let claim = claim_with_policy(
+                    path,
+                    crate::messaging::storage::io::now_ms(),
+                    AGY_RETRY_EXT,
+                    "AGY",
+                    AGY_RETRY_ATTEMPTS,
+                    AGY_RETRY_DELAY_MS,
+                )?;
+                match claim {
+                    Claim::Attempt(attempt) => {
+                        tracing::debug!(
+                            event = "bus.callback.deferred",
+                            reason = "agy_transcript_pending",
+                            agent_id = id.0,
+                            launch_id = %record.manifest.launch_id,
+                            session_id = %session,
+                            turn_id = %turn,
+                            attempt,
+                            "AGY Stop retained until transcript_full.jsonl flushes final reply"
+                        );
+                        Ok(ControlFlow::Break(()))
+                    }
+                    Claim::NotDue => {
+                        tracing::debug!(
+                            event = "bus.callback.deferred",
+                            reason = "agy_retry_not_due",
+                            agent_id = id.0,
+                            session_id = %session,
+                            turn_id = %turn,
+                            "AGY Stop retained until retry deadline"
+                        );
+                        Ok(ControlFlow::Break(()))
+                    }
+                    Claim::Exhausted => {
+                        tracing::warn!(
+                            event = "bus.callback.expired",
+                            reason = "agy_retry_budget_exhausted",
+                            agent_id = id.0,
+                            launch_id = %record.manifest.launch_id,
+                            session_id = %session,
+                            turn_id = %turn,
+                            attempts = AGY_RETRY_ATTEMPTS,
+                            "AGY completion retries exhausted; failing the owned turn without publishing a reply"
+                        );
+                        let cb = transcript_error_callback(
+                            record,
+                            id,
+                            session,
+                            turn,
+                            "AGY transcript final was not committed before the completion retry budget expired".into(),
+                        );
                         Ok(ControlFlow::Continue((
                             state,
                             Some(cb),
                             agy_observation_paths(path),
                         )))
-                    }
-                    AgyTranscriptOutcome::Pending => {
-                        let claim = claim_with_policy(
-                            path,
-                            crate::messaging::storage::io::now_ms(),
-                            AGY_RETRY_EXT,
-                            "AGY",
-                            AGY_RETRY_ATTEMPTS,
-                            AGY_RETRY_DELAY_MS,
-                        )?;
-                        match claim {
-                            Claim::Attempt(attempt) => {
-                                tracing::debug!(
-                                    event = "bus.callback.deferred",
-                                    reason = "agy_transcript_pending",
-                                    agent_id = id.0,
-                                    launch_id = %record.manifest.launch_id,
-                                    session_id = %session,
-                                    turn_id = %turn,
-                                    attempt,
-                                    "AGY Stop retained until transcript_full.jsonl flushes final reply"
-                                );
-                                Ok(ControlFlow::Break(()))
-                            }
-                            Claim::NotDue => {
-                                tracing::debug!(
-                                    event = "bus.callback.deferred",
-                                    reason = "agy_retry_not_due",
-                                    agent_id = id.0,
-                                    session_id = %session,
-                                    turn_id = %turn,
-                                    "AGY Stop retained until retry deadline"
-                                );
-                                Ok(ControlFlow::Break(()))
-                            }
-                            Claim::Exhausted => {
-                                tracing::warn!(
-                                    event = "bus.callback.expired",
-                                    reason = "agy_retry_budget_exhausted",
-                                    agent_id = id.0,
-                                    launch_id = %record.manifest.launch_id,
-                                    session_id = %session,
-                                    turn_id = %turn,
-                                    attempts = AGY_RETRY_ATTEMPTS,
-                                    "AGY completion retries exhausted; failing the owned turn without publishing a reply"
-                                );
-                                let cb = transcript_error_callback(
-                                    record, id, session, turn,
-                                    "AGY transcript final was not committed before the completion retry budget expired".into(),
-                                );
-                                Ok(ControlFlow::Continue((
-                                    state,
-                                    Some(cb),
-                                    agy_observation_paths(path),
-                                )))
-                            }
-                        }
                     }
                 }
             }

@@ -188,6 +188,89 @@ pub(crate) fn read_turn_completion(
     Ok(resolution)
 }
 
+/// Find the latest unconsumed `USER_EXPLICIT`/`USER_INPUT` step whose unwrapped
+/// prompt matches `matches`. Used to reconcile an AGY request whose native
+/// paste+Enter succeeded when no `PreInvocation(invocationNum == 0)` bound it.
+pub(crate) fn find_turn_for_prompt(
+    transcript_path: &Path,
+    matches: impl Fn(&str) -> bool,
+    is_consumed: impl Fn(&str) -> bool,
+) -> Result<Option<String>, String> {
+    let metadata = match std::fs::metadata(transcript_path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Cannot stat AGY transcript: {error}")),
+    };
+    if !metadata.is_file() {
+        return Err("AGY transcript path is not a regular file".into());
+    }
+    let mut file =
+        File::open(transcript_path).map_err(|e| format!("Cannot open AGY transcript: {e}"))?;
+    if metadata.len() > TAIL_FAST_PATH_BYTES {
+        file.seek(SeekFrom::Start(metadata.len() - TAIL_FAST_PATH_BYTES))
+            .map_err(|e| format!("Cannot seek AGY transcript: {e}"))?;
+        let mut tail_reader = BufReader::new(&mut file);
+        let mut partial_prefix = Vec::new();
+        let _ = read_bounded_line(&mut tail_reader, &mut partial_prefix);
+        if let Some(found) = scan_prompt_turn(&mut tail_reader, &matches, &is_consumed)? {
+            return Ok(Some(found));
+        }
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| format!("Cannot rewind AGY transcript: {e}"))?;
+    }
+    let mut reader = BufReader::new(file);
+    scan_prompt_turn(&mut reader, &matches, &is_consumed)
+}
+
+fn scan_prompt_turn(
+    reader: &mut impl BufRead,
+    matches: &impl Fn(&str) -> bool,
+    is_consumed: &impl Fn(&str) -> bool,
+) -> Result<Option<String>, String> {
+    let mut buf = Vec::new();
+    let mut found = None;
+    loop {
+        let n = read_bounded_line(reader, &mut buf)
+            .map_err(|e| format!("Cannot read AGY transcript bytes: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        let Ok(line) = std::str::from_utf8(&buf) else {
+            continue;
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let source = row
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let kind = row.get("type").and_then(Value::as_str).unwrap_or_default();
+        if source != "USER_EXPLICIT" || kind != "USER_INPUT" {
+            continue;
+        }
+        let Some(step_index) = row.get("step_index").and_then(Value::as_u64) else {
+            continue;
+        };
+        let turn_id = step_index.to_string();
+        if is_consumed(&turn_id) {
+            continue;
+        }
+        let raw = row
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let unwrapped = unwrap_user_request(raw);
+        if matches(&unwrapped) {
+            found = Some(turn_id);
+        }
+    }
+    Ok(found)
+}
+
 fn scan_byte_reader(
     reader: &mut impl BufRead,
     target_step: u64,

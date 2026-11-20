@@ -142,6 +142,7 @@ fn legacy_awaiting_start() -> (Fixture, RequestId) {
                 expected_agent: "codex".into(),
                 expected_session_id: "session".into(),
                 steer: false,
+                allow_working: false,
                 expected_generation: None,
                 expected_turn_id: None,
             }));

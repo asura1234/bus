@@ -159,6 +159,9 @@ fn insert_prompt<'a>(
     prompt: &'a Prompt,
     messages: &mut BTreeMap<Key, Message<'a>>,
 ) {
+    if state.stale_dialog_notice(room, prompt) {
+        return;
+    }
     let (sender, sender_id, directed) = match prompt.author {
         Author::Agent(id) => (
             state.agent(id).map_or("Bus", |a| a.name.as_str()),

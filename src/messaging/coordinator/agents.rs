@@ -30,7 +30,11 @@ impl Worker {
             .is_some_and(|agent| agent.deletion_pending);
         let mut state = self.state.clone();
         state.prepare_delete_agent(id).map_err(|e| e.to_string())?;
+        state
+            .retire_deleted_queued_requests(super::io::now_ms())
+            .map_err(|e| e.to_string())?;
         self.save(state)?;
+        self.dialog_seen.remove(&id);
         if !was_pending {
             tracing::info!(
                 event = "bus.deletion.pending",
@@ -38,6 +42,7 @@ impl Worker {
                 "Agent deletion is durable; terminal close and removal are pending"
             );
         }
+        self.finish_deleting_submissions();
         let left_open: Vec<_> = self.stop_agent_terminal(id)?.into_iter().collect();
         let mut state = self.state.clone();
         state
@@ -52,6 +57,7 @@ impl Worker {
         );
         self.branch_checks.remove(&id);
         self.codex_rollouts.remove(&id);
+        self.agy_transcripts.remove(&id);
         self.collect_deleted_callbacks();
         self.finish_deletion(left_open, events);
         Ok(())
@@ -64,11 +70,18 @@ impl Worker {
     ) -> Result<(), String> {
         let mut state = self.state.clone();
         state.prepare_delete_room(id).map_err(|e| e.to_string())?;
+        state
+            .retire_deleted_queued_requests(super::io::now_ms())
+            .map_err(|e| e.to_string())?;
         self.save(state)?;
         // The room's orchestrator in MASTER goes with it: it exists only for
         // this room, so its terminal is stopped like a member's.
         let agents = self.state.agents_deleted_with_room(id);
+        self.finish_deleting_submissions();
         let mut left_open = Vec::new();
+        for agent in &agents {
+            self.dialog_seen.remove(agent);
+        }
         for agent in &agents {
             left_open.extend(self.stop_agent_terminal(*agent)?);
         }
@@ -80,6 +93,7 @@ impl Worker {
         for agent in agents {
             self.branch_checks.remove(&agent);
             self.codex_rollouts.remove(&agent);
+            self.agy_transcripts.remove(&agent);
         }
         self.collect_deleted_callbacks();
         self.finish_deletion(left_open, events);

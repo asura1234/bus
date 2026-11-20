@@ -1,7 +1,7 @@
 //! Save the native draft, submit guarded owned input, then restore it.
 mod consumption;
+mod copy;
 mod diagnostics;
-mod interrupt;
 mod plain;
 mod preservation;
 mod recovery;
@@ -96,10 +96,6 @@ pub(crate) trait SubmissionInspector: Send {
         self.observe(screen) != InputObservation::Unavailable
             && !crate::terminal::driver::has_input_controls(screen)
     }
-    /// Strict, raw composer geometry for transcript-backed Claude retirement.
-    fn claude_empty_editable_composer(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> bool {
-        false
-    }
     /// Some providers register pasted attachments asynchronously and swallow
     /// Enter until registration finishes. This is independent of pane focus
     /// and of the developer draft already saved by the input lease.
@@ -115,26 +111,20 @@ pub(crate) trait SubmissionInspector: Send {
     fn native_draft_preserved(&self) -> bool {
         false
     }
+    fn clear_native_draft(&self) {}
+    /// Snapshot the current composer content for universal copy-send-restore fallback.
+    fn composer_copy_fallback(
+        &self,
+        _screen: &str,
+        _cursor: Option<(u16, u16)>,
+        _pristine: bool,
+    ) -> Option<(String, Option<Bytes>)> {
+        None
+    }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         self.observe_with_launch(screen, cursor, pristine) == InputObservation::Empty
     }
     fn always_use_editor(&self) -> bool {
-        false
-    }
-    fn retains_joined_claude_receipts(&self) -> bool {
-        false
-    }
-    /// Payload and rendered body attested before Enter, with an opaque representation flag.
-    fn interrupt_receipt(&self) -> Option<(String, String, bool)> {
-        None
-    }
-    fn interrupted_input(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> Option<String> {
-        None
-    }
-    fn interrupted_remainder(&self, _body: &str) -> bool {
-        false
-    }
-    fn cleanup_expects_empty(&self) -> bool {
         false
     }
     fn confirm_consumption(&self) -> bool {
@@ -152,7 +142,6 @@ pub(crate) trait SubmissionInspector: Send {
     fn diagnose_refusal(&self, _screen: &str, _phase: &'static str, _cursor: Option<(u16, u16)>) {}
     /// Indices identify the Ctrl+A, Ctrl+K, Ctrl+U sequence supplied by the API.
     /// Called only after its key was queued under the content/render lock.
-    fn retirement_clear_frame(&self, _index: usize, _screen: &str, _cursor: Option<(u16, u16)>) {}
     fn clearing(&self, _key_index: usize) {}
     /// Advances only when a new owned remainder is actually observed.
     fn cleanup_progress(&self) -> u64 {
@@ -291,10 +280,6 @@ impl TerminalRuntime {
 }
 
 impl SubmissionHandle {
-    pub(crate) fn bind_claude_session(&self, session: &str) {
-        super::draft_input::DraftInput::bind_session(&self.draft_input, session);
-    }
-
     pub(crate) fn try_send_developer_bytes(&self, bytes: Bytes) -> io::Result<()> {
         super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
             .map_err(io::Error::other)
@@ -379,36 +364,6 @@ impl SubmissionHandle {
                         } else {
                             submission.diagnostics.pending_paste(&result)
                         };
-                        if result.is_ok() {
-                            if let Some((payload, body, opaque)) =
-                                submission.inspect.interrupt_receipt()
-                            {
-                                let joined = submission.inspect.retains_joined_claude_receipts();
-                                lease.retain_confirmed(
-                                    super::draft_input::ConfirmedPaste {
-                                        session: lease.session(),
-                                        payload,
-                                        body,
-                                        opaque,
-                                        stopped: false,
-                                        cleanup_started: false,
-                                        attempt: None,
-                                        final_clear_revision: None,
-                                        paste: super::draft_input::PendingPaste {
-                                            inspect: std::mem::replace(
-                                                &mut submission.inspect,
-                                                Box::new(|_: &str| InputObservation::Unavailable),
-                                            ),
-                                            clear: submission.clear.clone(),
-                                            since: submission.clock.now(),
-                                            entered: true,
-                                            withdraw_grace: submission.withdraw_grace,
-                                        },
-                                    },
-                                    joined,
-                                );
-                            }
-                        }
                         if let Some((since, entered)) = pending {
                             lease.retain_pending(super::draft_input::PendingPaste {
                                 inspect: std::mem::replace(

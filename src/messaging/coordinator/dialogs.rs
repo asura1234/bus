@@ -3,19 +3,21 @@
 //! notice is signed "bus", once per episode; a blocked MASTER orchestrator gets
 //! a typed Bus developer-attention notice instead.
 #[cfg(test)]
+use super::Draft;
+#[cfg(test)]
 use super::{
     schema, AgentRuntimeIdentity, BTreeMap, Method, PathBuf, PromptId, Provider, ResponseResult,
     RoomId, RuntimeStatus, Transport,
 };
-use super::{AgentId, Author, BusState, Draft, Worker};
+use super::{AgentId, Author, Worker};
 use crate::messaging::model::DialogNoticeTo;
 
 /// Fallback notice key for blocked list metadata without a dialog id.
 pub(super) const BLOCKED: &str = "blocked";
 /// Polls a change must hold before Bus reports it, so a redraw never counts.
 const STEADY_POLLS: u8 = 2;
-/// Common notice sentence; each notice also names the worker and its inspection command.
-pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
+#[cfg(test)]
+pub(super) use crate::messaging::model::BLOCKED_MESSAGE;
 
 impl Worker {
     /// Retire a closed dialog's notice so the next form can start an episode even
@@ -49,6 +51,9 @@ impl Worker {
         waits: Vec<(AgentId, Option<String>)>,
     ) -> Result<(), String> {
         for (id, wait) in waits {
+            let Some(agent) = self.state.agent(id).filter(|agent| !agent.deletion_pending) else {
+                continue;
+            };
             let steady = match self.dialog_seen.get_mut(&id) {
                 Some((seen, polls)) if *seen == wait => {
                     *polls = polls.saturating_add(1);
@@ -59,10 +64,7 @@ impl Worker {
                     false
                 }
             };
-            let Some(agent) = self.state.agent(id) else {
-                continue;
-            };
-            if agent.deletion_pending || !steady {
+            if !steady {
                 continue;
             }
             let notice = agent.dialog_notice.clone();
@@ -116,7 +118,9 @@ impl Worker {
                 continue;
             }
             let mut state = self.state.clone();
-            let to = post_blocked(&mut state, id)?;
+            let to = state
+                .post_blocked_notice(id, crate::messaging::storage::io::now_ms())
+                .map_err(|error| error.to_string())?;
             state
                 .set_dialog_notice(id, wait)
                 .map_err(|error| error.to_string())?;
@@ -129,59 +133,6 @@ impl Worker {
         self.dialog_seen.retain(|id, _| state.agent(*id).is_some());
         Ok(())
     }
-}
-
-/// Bus's notice about a blocked agent in its work room: to the room's
-/// orchestrator, which delivers it like any message and wakes the
-/// orchestrator, or else to the developer. A blocked MASTER orchestrator tells
-/// the developer directly, since MASTER cannot itself be orchestrated.
-fn post_blocked(state: &mut BusState, id: AgentId) -> Result<Option<DialogNoticeTo>, String> {
-    let agent = state.agent(id).ok_or("Unknown agent")?;
-    let text = format!(
-        "{}. {BLOCKED_MESSAGE}\nInspect: bus agent observe {}",
-        state.agent_message_label(id),
-        state.agent_cli_selector(id)
-    );
-    if state.is_developer_attention_author(agent.room_id, &Author::Agent(id)) {
-        return state
-            .post_developer_attention(id, &text, crate::messaging::storage::io::now_ms())
-            .map(|_| None)
-            .map_err(|error| error.to_string());
-    }
-    post_dialog_notice(state, id, text)
-}
-
-/// Blocked and resolved notices share the existing room/recipient policy.
-/// Returns who the notice went to.
-fn post_dialog_notice(
-    state: &mut BusState,
-    id: AgentId,
-    text: String,
-) -> Result<Option<DialogNoticeTo>, String> {
-    let room = state.agent(id).ok_or("Unknown agent")?.room_id;
-    if state.room(room).is_none() {
-        return Ok(None);
-    }
-    let now = crate::messaging::storage::io::now_ms();
-    let orchestrator = state.notice_orchestrator(room, Some(id));
-    match orchestrator {
-        Some(orchestrator) => state
-            .submit_message_from(
-                room,
-                Draft {
-                    text,
-                    files: Vec::new(),
-                    recipient_ids: [orchestrator].into(),
-                },
-                Author::Bus,
-                now,
-            )
-            .map(|requests| requests.first().copied().map(DialogNoticeTo::Orchestrator)),
-        None => state
-            .post_bus_notice(room, None, text, now)
-            .map(|_| Some(DialogNoticeTo::Developer)),
-    }
-    .map_err(|error| error.to_string())
 }
 
 const MINUTE_MS: u64 = 60_000;

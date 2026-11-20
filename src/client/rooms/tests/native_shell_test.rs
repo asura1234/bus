@@ -978,6 +978,20 @@ fn updates_arriving_in_terminal_preserve_newer_local_room_edits_and_unread() {
 #[test]
 fn hook_consent_clears_old_pwd_suggestions_before_enter_can_confirm() {
     let (mut ui, room, _) = fixture();
+    let input = crate::messaging::coordinator::agents::AddAgent {
+        room,
+        name: "fixture".into(),
+        provider: Provider::Codex,
+        cwd: "/project".into(),
+        extra_args: String::new(),
+        consent_project_hooks: false,
+    };
+    ui.submit_agent_creation(
+        BusCommand::AddAgent(input.clone()),
+        room,
+        input.name.clone(),
+    );
+    let command_id = ui.creation_origins.back().unwrap().id;
     ui.suggestions.query_id = 9;
     ui.suggestions
         .entries
@@ -986,14 +1000,8 @@ fn hook_consent_clears_old_pwd_suggestions_before_enter_can_confirm() {
             is_directory: true,
         });
     ui.receive_event(BusEvent::SetupRequired {
-        input: crate::messaging::coordinator::agents::AddAgent {
-            room,
-            name: "fixture".into(),
-            provider: Provider::Codex,
-            cwd: "/project".into(),
-            extra_args: String::new(),
-            consent_project_hooks: false,
-        },
+        command_id,
+        input,
         orchestrator: None,
         notice: crate::agents::providers::launch::SetupNotice {
             path: "/project/.codex/hooks.json".into(),

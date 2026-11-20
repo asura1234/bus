@@ -15,10 +15,6 @@ pub(super) struct DraftInput {
     revision: u64,
     invalidation_revision: u64,
     pending: Option<PendingPaste>,
-    confirmed: Vec<ConfirmedPaste>,
-    confirmed_revoked: bool,
-    completed_retirement: Option<String>,
-    session: Option<String>,
     working_started: Option<Instant>,
     completed_turn: Option<(Instant, Instant)>,
     // Shared with the runtime launch window. AtomicBool's Default is false,
@@ -33,10 +29,6 @@ impl Default for DraftInput {
             revision: 0,
             invalidation_revision: 0,
             pending: None,
-            confirmed: Vec::new(),
-            confirmed_revoked: false,
-            completed_retirement: None,
-            session: None,
             working_started: None,
             completed_turn: None,
             launch_window: Arc::new(AtomicBool::new(true)),
@@ -51,18 +43,6 @@ pub(super) struct PendingPaste {
     pub(super) since: Instant,
     pub(super) entered: bool,
     pub(super) withdraw_grace: Duration,
-}
-
-pub(super) struct ConfirmedPaste {
-    pub(super) session: Option<String>,
-    pub(super) opaque: bool,
-    pub(super) payload: String,
-    pub(super) body: String,
-    pub(super) stopped: bool,
-    pub(super) cleanup_started: bool,
-    pub(super) attempt: Option<String>,
-    pub(super) final_clear_revision: Option<u64>,
-    pub(super) paste: PendingPaste,
 }
 
 pub(super) type SharedDraftInput = Arc<Mutex<DraftInput>>;
@@ -87,29 +67,6 @@ impl DraftInput {
                     && pending.inspect.recoverable_input(screen, cursor)
             })
         })
-    }
-
-    pub(super) fn bind_session(state: &SharedDraftInput, session: &str) {
-        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
-        match state.session.as_deref() {
-            Some(current) if current == session => {}
-            None => {
-                // First binding may follow Enter on the same PTY. Raw input
-                // and process replacement already revoke unbound witnesses.
-                for confirmed in &mut state.confirmed {
-                    confirmed.session = Some(session.to_owned());
-                }
-                state.session = Some(session.to_owned());
-            }
-            Some(_) => {
-                state.revision = state.revision.wrapping_add(1);
-                let had_confirmed = !state.confirmed.is_empty();
-                state.confirmed.clear();
-                state.confirmed_revoked |= had_confirmed;
-                state.invalidation_revision = state.invalidation_revision.wrapping_add(1);
-                state.session = Some(session.to_owned());
-            }
-        }
     }
 
     pub(super) fn shared_with_launch_window() -> (SharedDraftInput, Arc<AtomicBool>) {
@@ -144,9 +101,6 @@ impl DraftInput {
         if result.is_ok() {
             state.revision = state.revision.wrapping_add(1);
             state.pending = None;
-            let had_confirmed = !state.confirmed.is_empty();
-            state.confirmed.clear();
-            state.confirmed_revoked |= had_confirmed;
         }
         result
     }
@@ -190,10 +144,6 @@ impl DraftInput {
         state.revision = state.revision.wrapping_add(1);
         state.invalidation_revision = state.invalidation_revision.wrapping_add(1);
         state.pending = None;
-        let had_confirmed = !state.confirmed.is_empty();
-        state.confirmed.clear();
-        state.confirmed_revoked |= had_confirmed;
-        state.session = None;
         state.working_started = None;
         state.completed_turn = None;
     }
@@ -221,59 +171,6 @@ impl DraftInput {
 impl DraftInputLease {
     pub(super) fn restored(&self) {
         self.replay_safe.set(true);
-    }
-
-    pub(super) fn session(&self) -> Option<String> {
-        self.state.lock().ok()?.session.clone()
-    }
-
-    pub(super) fn completed_retirement(&self, key: &str) -> bool {
-        self.state
-            .lock()
-            .is_ok_and(|state| state.completed_retirement.as_deref() == Some(key))
-    }
-
-    pub(super) fn record_completed_retirement(&self, key: String) -> io::Result<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| io::Error::other("pane input lock poisoned"))?;
-        if state.revision != self.revision {
-            return Err(io::Error::other("Native input changed during retirement"));
-        }
-        state.completed_retirement = Some(key);
-        Ok(())
-    }
-
-    pub(super) fn take_confirmed(&self) -> Vec<ConfirmedPaste> {
-        self.state
-            .lock()
-            .map(|mut state| std::mem::take(&mut state.confirmed))
-            .unwrap_or_default()
-    }
-
-    pub(super) fn confirmed_revoked(&self) -> bool {
-        self.state.lock().is_ok_and(|state| state.confirmed_revoked)
-    }
-
-    pub(super) fn retain_confirmed(&self, mut confirmed: ConfirmedPaste, joined: bool) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.revision == self.revision
-            && (confirmed.session.is_none() || state.session == confirmed.session)
-        {
-            confirmed.session.clone_from(&state.session);
-            state.confirmed_revoked = false;
-            if joined {
-                state
-                    .confirmed
-                    .retain(|previous| previous.payload != confirmed.payload);
-            } else {
-                state.confirmed.clear();
-            }
-            state.confirmed.push(confirmed);
-        } else {
-            state.confirmed_revoked = true;
-        }
     }
 
     pub(super) fn take_pending(&self) -> Option<PendingPaste> {

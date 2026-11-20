@@ -9,7 +9,6 @@ use self::provider_turns::{callback, order_records, reporting_processes};
 #[cfg(test)]
 use super::{AgentRuntimeIdentity, Draft, Transport};
 use crate::agents::providers::{spool as callbacks, spool::Parsed, ProviderKind};
-pub(super) use provider_turns::claude_retirement_turn;
 use std::ops::ControlFlow;
 
 type CallbackRecordResult = ControlFlow<(), (BusState, Option<ProviderCallback>, Vec<PathBuf>)>;
@@ -34,8 +33,6 @@ mod grok_callbacks;
 mod provider_turns;
 #[path = "reports.rs"]
 mod reports;
-#[path = "callback_retirement.rs"]
-mod retirement;
 
 impl Worker {
     /// A native hook can bind its session before the Bus spool is consumed.
@@ -146,9 +143,6 @@ impl Worker {
         state: &mut BusState,
         callback: ProviderCallback,
     ) -> Result<Option<CallbackDisposition>, String> {
-        if state.defer_during_interrupt_retirement(&callback) {
-            return Ok(None);
-        }
         let _binding = binding::span(state, &callback).entered();
         let report = reports::pending_report(state, &callback);
         let late_final = matches!(callback.kind, CallbackEventKind::Final { .. })
@@ -775,11 +769,8 @@ impl Worker {
                 return Ok(CallbackFlow::Stop);
             }
             let disposition = self.apply_request_callback(id, &mut state, callback)?;
-            let Some(disposition) = disposition else {
+            if disposition.is_none() {
                 return Ok(CallbackFlow::Next);
-            };
-            if disposition == CallbackDisposition::AcceptedBinding {
-                self.save_claude_retirement_anchor(&state, id, record);
             }
         }
         self.save_callback_state(state)?;

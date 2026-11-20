@@ -11,8 +11,6 @@ pub(super) struct OwnedComposer {
 
 struct Owned {
     body: Option<String>,
-    attested_body: Option<String>,
-    wrapped_row_kill: Option<(String, String, usize)>,
     text: String,
     cursor: usize,
     remainders: VecDeque<String>,
@@ -69,8 +67,6 @@ impl OwnedComposer {
                 cursor: text.len(),
                 text,
                 body: None,
-                attested_body: None,
-                wrapped_row_kill: None,
                 remainders: VecDeque::new(),
                 lost: false,
                 progress: 0,
@@ -80,34 +76,6 @@ impl OwnedComposer {
 }
 
 impl SubmissionInspector for OwnedComposer {
-    fn interrupt_receipt(&self) -> Option<(String, String, bool)> {
-        // Only Claude's plain-paste path proves consumption after Enter.
-        if self.kind != AgentKind::Claude {
-            return None;
-        }
-        let body = self.state.lock().ok()?.attested_body.clone()?;
-        let opaque = !self.retry_owned_enter() || super::preservation::opaque(&body);
-        Some((self.expected.clone(), body, opaque))
-    }
-    fn interrupted_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> Option<String> {
-        super::input_with_cursor(self.kind, screen, cursor)
-    }
-    fn interrupted_remainder(&self, body: &str) -> bool {
-        self.state.lock().is_ok_and(|owned| {
-            !owned.lost
-                && owned.body.is_some()
-                && (owned.body.as_deref() == Some(body)
-                    || owned.remainders.iter().any(|value| value == body)
-                    || owned
-                        .wrapped_row_kill
-                        .as_ref()
-                        .is_some_and(|(candidate, _, _)| candidate == body))
-        })
-    }
-    fn cleanup_expects_empty(&self) -> bool {
-        self.state.lock().is_ok_and(|owned| owned.text.is_empty())
-    }
-
     fn retry_owned_enter(&self) -> bool {
         self.kind == AgentKind::Claude
             && crate::agents::providers::claude_code::hooks::claude_lifted_images(&self.expected).0
@@ -187,7 +155,6 @@ impl SubmissionInspector for OwnedComposer {
                 let body = super::input_since_launch(self.kind, screen, cursor, pristine);
                 if owned.body.is_none() {
                     if observation == InputObservation::Pending {
-                        owned.attested_body = body.clone();
                         owned.body = body;
                         owned.progress = owned.progress.wrapping_add(1);
                     }
@@ -224,25 +191,6 @@ impl SubmissionInspector for OwnedComposer {
 
     fn cleanup_progress(&self) -> u64 {
         self.state.lock().map_or(0, |owned| owned.progress)
-    }
-
-    fn retirement_clear_frame(&self, index: usize, screen: &str, cursor: Option<(u16, u16)>) {
-        if self.kind != AgentKind::Claude {
-            return;
-        }
-        let Ok(mut owned) = self.state.lock() else {
-            return;
-        };
-        owned.wrapped_row_kill = if index == 1 && !owned.lost {
-            owned.body.as_deref().and_then(|body| {
-                if super::input_with_cursor(self.kind, screen, cursor).as_deref() != Some(body) {
-                    return None;
-                }
-                wrapped_row_kill(&owned.text, body, screen, cursor?)
-            })
-        } else {
-            None
-        };
     }
 
     fn clearing(&self, index: usize) {
@@ -300,95 +248,10 @@ impl SubmissionInspector for OwnedComposer {
     }
 }
 
-/// Derive one alternative for Claude's Ctrl+K at a rendered row boundary.
-/// Require a complete, byte-preserving alignment of the current body to its
-/// input text. In particular a clipped display cannot authorize a row kill.
-fn wrapped_row_kill(
-    text: &str,
-    body: &str,
-    screen: &str,
-    (x, y): (u16, u16),
-) -> Option<(String, String, usize)> {
-    use unicode_width::UnicodeWidthStr;
-    let lines: Vec<String> = screen
-        .lines()
-        .map(|line| {
-            super::styled_chars(line)
-                .iter()
-                .map(|cell| cell.character)
-                .collect()
-        })
-        .collect();
-    let prompt = lines.windows(2).rposition(|window| {
-        window[0].trim_start().starts_with('─') && window[1].trim_start().starts_with('❯')
-    })? + 1;
-    let y = usize::from(y);
-    let index = y.checked_sub(prompt)?;
-    if index == 0 {
-        return None;
-    }
-    let row = lines.get(y)?;
-    let start_column = row[..row.len() - row.trim_start().len()].width();
-    if usize::from(x) != start_column {
-        return None;
-    }
-
-    let rows: Vec<_> = body.split('\n').collect();
-    let mut physical = 0;
-    let mut logical_start = 0;
-    let mut range = None;
-    for logical in text.split('\n') {
-        let mut remaining = logical;
-        loop {
-            let rendered = *rows.get(physical)?;
-            let fragment = remaining.trim_start_matches([' ', '\t']);
-            let rest = fragment.strip_prefix(rendered)?;
-            if physical == index && !rendered.is_empty() && !rest.is_empty() {
-                let start = logical_start + logical.len() - remaining.len();
-                let end = logical_start + logical.len() - rest.len();
-                range = Some(start..end);
-            }
-            physical += 1;
-            if rest.is_empty() {
-                break;
-            }
-            if rendered.is_empty() {
-                return None;
-            }
-            remaining = rest;
-        }
-        logical_start += logical.len() + 1;
-    }
-    if physical != rows.len() {
-        return None;
-    }
-    let range = range?;
-    let cursor = range.start;
-    let mut text = text.to_owned();
-    text.replace_range(range, "");
-    let mut rows = rows;
-    rows.remove(index);
-    Some((rows.join("\n"), text, cursor))
-}
-
 fn accept_owned_change(owned: &mut Owned, body: Option<String>) -> bool {
     if body == owned.body {
         return true;
     }
-    if owned
-        .wrapped_row_kill
-        .as_ref()
-        .is_some_and(|(candidate, _, _)| Some(candidate) == body.as_ref())
-    {
-        let (_, text, cursor) = owned.wrapped_row_kill.take().expect("matched row kill");
-        owned.text = text;
-        owned.cursor = cursor;
-        owned.remainders.clear();
-        owned.body = body;
-        owned.progress = owned.progress.wrapping_add(1);
-        return true;
-    }
-    owned.wrapped_row_kill = None;
     let Some(at) = owned
         .remainders
         .iter()

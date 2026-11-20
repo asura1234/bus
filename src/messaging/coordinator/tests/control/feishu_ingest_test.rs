@@ -326,7 +326,6 @@ fn feishu_developer_reply_interrupts_the_orchestrators_running_turn() {
             .any(|method| method == "agent.send_keys"),
         "the Feishu reply is a developer message and must interrupt: {calls:?}"
     );
-    assert!(worker.state.agent(orch).unwrap().interrupt_pending);
     let request = worker
         .state
         .requests()
@@ -334,6 +333,7 @@ fn feishu_developer_reply_interrupts_the_orchestrators_running_turn() {
             request.agent_id == orch
                 && request.prompt.author == crate::messaging::model::Author::Developer
                 && request.queue_only
+                && request.interrupt_delivery
                 && request.phase == RequestPhase::Queued
         })
         .expect("Feishu reply request");

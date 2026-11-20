@@ -124,60 +124,10 @@ impl App {
                 || agent.agent_session.as_ref().map(|s| s.value.as_str())
                     != Some(expected.expected_session_id.as_str())
                 || expected.expected_session_id.is_empty()
-                || !matches!(
-                    expected_agent,
-                    crate::agents::AgentKind::Codex | crate::agents::AgentKind::Claude
-                )
+                || expected_agent != crate::agents::AgentKind::Codex
                 || params.keys != ["esc"]
             {
                 return Err(agent_not_ready(id, &params.target));
-            }
-            if expected_agent == crate::agents::AgentKind::Claude {
-                let sender = runtime.submission_handle(true);
-                sender.bind_claude_session(&expected.expected_session_id);
-                let expected = expected.clone();
-                let completion_path = expected.retirement_request_id.map(|request| {
-                    use sha2::{Digest, Sha256};
-                    let identity = (
-                        &expected.expected_terminal_id,
-                        &expected.expected_session_id,
-                        request,
-                    );
-                    let digest = Sha256::digest(
-                        serde_json::to_vec(&identity).expect("serializable retirement identity"),
-                    );
-                    crate::utils::paths::data_dir()
-                        .join("private")
-                        .join("claude-retirement")
-                        .join(format!("{digest:x}"))
-                });
-                return Ok(Box::new(move || {
-                    use crate::agents::providers::claude_code::retirement::TranscriptAnchor;
-                    let anchor = expected.claude_turn.as_ref().and_then(|turn| {
-                        // The coordinator writes anchors outside the native session's
-                        // herdr-config tree. Completion receipts stay at their native key.
-                        let root =
-                            crate::utils::env::bus_data_dir().filter(|root| root.is_absolute())?;
-                        TranscriptAnchor::load(
-                            &root,
-                            &turn.launch_id,
-                            &expected.expected_session_id,
-                            &turn.prompt_id,
-                            &expected.expected_terminal_id,
-                            expected.retirement_request_id?,
-                        )
-                    });
-                    match sender.retire_claude_interrupt_with_anchor(
-                        &expected.expected_session_id,
-                        &expected.expected_payloads,
-                        Bytes::from_static(b"\x1b"),
-                        completion_path.as_deref(),
-                        anchor.as_ref(),
-                    ) {
-                    Ok(()) => encode_success(id, ResponseResult::Ok {}),
-                    Err(error) => encode_error(id, "agent_interrupt_unconfirmed", format!("Claude draft retirement is unconfirmed; request remains tracked: {error}")),
-                }
-                }));
             }
             return agent_keys_job(runtime, id, params.keys, Some(agent));
         }
