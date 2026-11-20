@@ -145,6 +145,16 @@ impl History {
                 );
             }
 
+            if filters == Default::default() || filters.to_you {
+                self.push_developer_replies(
+                    &mut lines,
+                    &mut active_markdown,
+                    state,
+                    &exchange,
+                    width,
+                );
+            }
+
             lines.push(blank_row(RowAnchor::new(prompt.id, None, RowKind::Gap)));
         }
         self.retain_window_markdown(state, room.id, active_markdown, filtered);
@@ -297,6 +307,58 @@ impl History {
         for line in &mut lines[start..] {
             line.to_developer = direction.to_you;
             line.from_developer = direction.from_you;
+        }
+    }
+
+    fn push_developer_replies(
+        &mut self,
+        lines: &mut Vec<Line>,
+        active_markdown: &mut BTreeSet<MarkdownSource>,
+        state: &BusState,
+        exchange: &Exchange<'_>,
+        width: u16,
+    ) {
+        for agent in exchange.prompt.recipient_ids.iter().copied() {
+            let Some(request) = exchange.requests.get(&agent) else {
+                continue;
+            };
+            let Some(reply) = state.developer_history_reply(request) else {
+                continue;
+            };
+            let start = lines.len();
+            let prompt = exchange.prompt.id;
+            lines.extend(wrap_header(
+                vec![
+                    (state.agent_label(agent), Tone::Agent(agent)),
+                    (" → You".into(), Tone::Muted),
+                ],
+                width,
+                "    ",
+                RowAnchor::new(prompt, Some(agent), RowKind::ReplyHeader),
+            ));
+            let source = MarkdownSource::Reply(request.id);
+            active_markdown.insert(source);
+            let scope = link_scope(state, &Author::Agent(agent));
+            let block = self.markdown_block(source, &reply.text);
+            let cold = !block.is_laid_out(width);
+            let projected = !block.is_scoped(width, &scope);
+            lines.extend(
+                block
+                    .lines(
+                        width,
+                        source,
+                        "    ",
+                        RowAnchor::new(prompt, Some(agent), RowKind::ReplyBody),
+                        scope,
+                    )
+                    .iter()
+                    .cloned(),
+            );
+            self.rendered += usize::from(cold);
+            self.projected += usize::from(projected);
+            for line in &mut lines[start..] {
+                line.to_developer = true;
+            }
         }
     }
 }
@@ -452,8 +514,9 @@ fn signature(
         outcome.uncertain_outcome.hash(&mut hash);
         outcome.failure_reason.hash(&mut hash);
         outcome.submission_error.hash(&mut hash);
-        if request.reply().is_some() {
-            request.reply().map(|r| r.received_at_ms).hash(&mut hash);
+        if let Some(reply) = state.developer_history_reply(request) {
+            reply.received_at_ms.hash(&mut hash);
+            reply.callback_id.hash(&mut hash);
         }
     }
     room.latest_prompt.as_ref().map(|p| p.id.0).hash(&mut hash);

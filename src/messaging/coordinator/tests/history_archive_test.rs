@@ -109,11 +109,11 @@ fn history_status_keeps_mixed_live_and_archived_recipients_after_reopen() {
     let archived = &history.result["messages"][0]["delivery"]["requests"];
     assert_eq!(archived.as_array().unwrap().len(), 2);
     assert_eq!(archived[0]["agent_id"], peer.0);
-    assert!(archived[0]["reply"].is_null());
+    assert_eq!(archived[0]["reply"]["text"], "archived answer");
     assert!(archived[0]["group"].is_null());
     assert!(archived[0].get("answered_with_message").is_none());
     assert_eq!(archived[0]["reply_ack"], false);
-    assert_eq!(archived[0]["stage"], "ended");
+    assert_eq!(archived[0]["stage"], "replied");
     assert_eq!(archived[1]["agent_id"], agent.0);
     assert_eq!(archived[1]["stage"], "queued");
     assert!(archived[1]["reply"].is_null());

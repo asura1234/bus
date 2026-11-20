@@ -245,10 +245,12 @@ pub(super) fn saved_exchange(
     let record = &mut json["requests"][request.0.to_string()];
     record["phase"] = "completed".into();
     record["completed_at_ms"] = 1500.into();
-    record["completed_reply"] = serde_json::json!({"group":record["group"].as_u64().unwrap_or(record["id"].as_u64().unwrap()),"content":serde_json::json!({
-        "callback_id": "final", "text": reply, "received_at_ms": 1500,
-        "provider_session_id": "session", "provider_turn_id": "turn"
-    })});
+    if !reply.is_empty() {
+        record["completed_reply"] = serde_json::json!({"group":record["group"].as_u64().unwrap_or(record["id"].as_u64().unwrap()),"content":serde_json::json!({
+            "callback_id": "final", "text": reply, "received_at_ms": 1500,
+            "provider_session_id": "session", "provider_turn_id": "turn"
+        })});
+    }
     snapshot.state = serde_json::from_value(json).unwrap();
     snapshot.revision += 1;
     ui.receive_snapshot(Arc::new(snapshot));

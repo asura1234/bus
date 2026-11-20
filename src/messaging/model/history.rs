@@ -2,7 +2,7 @@
 //! `state.json`. The coordinator appends them to `history.jsonl`; in memory they
 //! sit behind one `Arc`, so cloning the state for a save or a UI snapshot copies
 //! only the live part.
-use super::{AgentId, Prompt, PromptId, Request, RequestId, RoomId};
+use super::{AgentId, Author, PendingFinal, Prompt, PromptId, Request, RequestId, RoomId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -183,6 +183,71 @@ impl History {
 const DIALOG_ANSWER_TTL_MS: u64 = 60 * 60 * 1000;
 
 impl super::BusState {
+    /// Replies to developer messages belong to their original exchange. A
+    /// shared final is shown once per room, even across history page boundaries.
+    pub(crate) fn developer_history_reply<'a>(
+        &self,
+        request: &'a Request,
+    ) -> Option<&'a PendingFinal> {
+        if request.prompt.author != Author::Developer || !request.visible_in_history() {
+            return None;
+        }
+        let reply = request.completed_reply.as_ref()?;
+        if reply.content.text.trim().is_empty() {
+            return None;
+        }
+        if let Some(group) = reply.group {
+            let room = request.room_id;
+            let source = self
+                .requests
+                .history_index()
+                .first_developer_reply(room, group)
+                .into_iter()
+                .chain(self.history.groups.first_developer_reply(room, group))
+                .min();
+            if source != Some(request.id) || self.posted_developer_reply(request, &reply.content) {
+                return None;
+            }
+        }
+        Some(&reply.content)
+    }
+
+    /// An uncorrelated send can also carry the answer. Suppress a captured
+    /// copy only when the same agent posted the same body in this conversation
+    /// during the request's turn.
+    fn posted_developer_reply(&self, request: &Request, reply: &PendingFinal) -> bool {
+        let start = request
+            .latency
+            .native_requested_at_ms
+            .unwrap_or(request.prompt.submitted_at_ms);
+        let is_copy = |notice: &Prompt| {
+            notice.author == Author::Agent(request.agent_id)
+                && (start..=reply.received_at_ms).contains(&notice.submitted_at_ms)
+                && notice.text.trim() == reply.text.trim()
+        };
+        let archived = self
+            .history
+            .notices
+            .get(&request.room_id)
+            .into_iter()
+            .flat_map(|notices| {
+                notices
+                    .range(PromptId(request.id.0.saturating_add(1))..)
+                    .map(|(_, prompt)| prompt.as_ref())
+            });
+        let live = self.room(request.room_id).into_iter().flat_map(|room| {
+            let first = room
+                .notices
+                .partition_point(|notice| notice.id.0 <= request.id.0);
+            room.notices[first..].iter()
+        });
+        let before_reply = |notice: &&Prompt| notice.submitted_at_ms <= reply.received_at_ms;
+        archived
+            .take_while(before_reply)
+            .chain(live.take_while(before_reply))
+            .any(is_copy)
+    }
+
     /// Establish the recovery boundary before any routing/event pass can run.
     pub(crate) fn advance_routing_floor(&mut self, now_ms: u64) {
         self.routing_before_ms = self

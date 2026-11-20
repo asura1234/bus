@@ -68,15 +68,15 @@ fn shortcuts_filter_history_directly_and_combine_with_text_search() {
         room_screen(&mut ui, 100, 60);
         assert!(
             !incoming.contains("ordinary peer answer")
-                && !incoming.contains("Needle developer answer")
+                && incoming.contains("Needle developer answer")
                 && !incoming.contains("Needle @you reply mention"),
-            "stored replies are not history rows: {incoming}"
+            "only the developer reply belongs in incoming history: {incoming}"
         );
-        assert_eq!(ui.view.search_matches.len(), 4, "master: {master}");
+        assert_eq!(ui.view.search_matches.len(), 5, "master: {master}");
         key(&mut ui, KeyCode::Char('o'), KeyModifiers::ALT);
         apply_filter_commands(&mut ui);
         room_screen(&mut ui, 100, 60);
-        assert_eq!(ui.view.search_matches.len(), 5, "union: master {master}");
+        assert_eq!(ui.view.search_matches.len(), 6, "union: master {master}");
         assert_visible_directions(&ui, true, true);
 
         key(&mut ui, KeyCode::Char('i'), KeyModifiers::ALT);

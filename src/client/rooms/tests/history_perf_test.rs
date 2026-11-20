@@ -722,7 +722,7 @@ fn append_only_projects_links_for_the_new_message() {
         1_800_000_010_000,
         &mut thumbnails,
     );
-    assert_eq!(history.projected, 1);
+    assert_eq!(history.projected, 2);
     state
         .submit_message_from(room, draft(), Author::Developer, 1_800_000_002_000)
         .unwrap();

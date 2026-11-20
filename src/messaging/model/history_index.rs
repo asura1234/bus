@@ -4,62 +4,48 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct HistoryIndex {
-    records: BTreeMap<RequestId, Member>,
-    developers: BTreeMap<RequestId, usize>,
-    followers: BTreeMap<(RoomId, RequestId), BTreeSet<RequestId>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct Member {
-    key: RequestId,
-    room: RoomId,
-    developer: bool,
-    visible_follower: bool,
+    records: BTreeMap<RequestId, (RoomId, RequestId)>,
+    developer_replies: BTreeMap<(RoomId, RequestId), BTreeSet<RequestId>>,
 }
 
 impl HistoryIndex {
     pub(super) fn insert(&mut self, request: &Request) {
         self.remove(request.id);
-        let key = request.reply_key();
-        let member = Member {
-            key,
-            room: request.room_id,
-            developer: request.prompt.author == Author::Developer,
-            visible_follower: key != request.id && request.visible_in_history(),
-        };
-        if member.developer {
-            *self.developers.entry(key).or_default() += 1;
+        if request.prompt.author != Author::Developer || !request.visible_in_history() {
+            return;
         }
-        if member.visible_follower {
-            self.followers
-                .entry((member.room, key))
+        if let Some(group) = request
+            .completed_reply
+            .as_ref()
+            .and_then(|reply| reply.group)
+        {
+            let key = (request.room_id, group);
+            self.developer_replies
+                .entry(key)
                 .or_default()
                 .insert(request.id);
+            self.records.insert(request.id, key);
         }
-        self.records.insert(request.id, member);
     }
 
     pub(super) fn remove(&mut self, id: RequestId) {
-        let Some(member) = self.records.remove(&id) else {
+        let Some(key) = self.records.remove(&id) else {
             return;
         };
-        if member.developer {
-            if let Some(count) = self.developers.get_mut(&member.key) {
-                *count -= 1;
-                if *count == 0 {
-                    self.developers.remove(&member.key);
-                }
+        if let Some(ids) = self.developer_replies.get_mut(&key) {
+            ids.remove(&id);
+            if ids.is_empty() {
+                self.developer_replies.remove(&key);
             }
         }
-        if member.visible_follower {
-            let key = (member.room, member.key);
-            if let Some(ids) = self.followers.get_mut(&key) {
-                ids.remove(&id);
-                if ids.is_empty() {
-                    self.followers.remove(&key);
-                }
-            }
-        }
+    }
+
+    pub(super) fn first_developer_reply(
+        &self,
+        room: RoomId,
+        group: RequestId,
+    ) -> Option<RequestId> {
+        self.developer_replies.get(&(room, group))?.first().copied()
     }
 }
 
