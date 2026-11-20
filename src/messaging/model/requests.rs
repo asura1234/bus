@@ -386,9 +386,7 @@ impl BusState {
         if exited {
             return Some("provider_exited".into());
         }
-        let Some(attempt) = self.current_launch_attempt(agent_id) else {
-            return None;
-        };
+        let attempt = self.current_launch_attempt(agent_id)?;
         match attempt.outcome {
             LaunchOutcome::Failed => Some(
                 attempt
