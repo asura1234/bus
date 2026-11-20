@@ -45,10 +45,7 @@ impl BusState {
                 .clone()
                 .or_else(|| agent.wait_reason().map(str::to_owned))
                 .unwrap_or_else(|| "not_submitted".into());
-            (
-                reason,
-                agent.exit_snapshot.is_some() || agent.deletion_pending,
-            )
+            (reason, agent.exit_snapshot.is_some())
         };
         if !launch_consent_wait(&reason) {
             return Some(reason);
