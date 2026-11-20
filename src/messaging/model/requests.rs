@@ -10,8 +10,7 @@ mod latency;
 mod policy;
 mod queue_order;
 mod rejection;
-mod submit;
-pub(crate) use submit::SendMode;
+pub(super) mod submit;
 mod turn_end;
 
 impl BusState {

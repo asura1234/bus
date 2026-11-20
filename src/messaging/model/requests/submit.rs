@@ -18,7 +18,7 @@ impl Request {
         // into a running turn. queue_only also covers interrupts and forced
         // independent turns, and group can come from ordinary coalescing.
         self.send_mode
-            .or_else(|| self.steered.then_some(SendMode::Steer))
+            .or(self.steered.then_some(SendMode::Steer))
     }
 }
 
