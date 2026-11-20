@@ -151,6 +151,9 @@ impl BusUi {
         let room_removed = |id| previous.room(id).is_some() && state.room(id).is_none();
         let agent_removed = |id| previous.agent(id).is_some() && state.agent(id).is_none();
         self.locals.retain(|id, _| !room_removed(*id));
+        self.agent_creations.retain(|_, creation| {
+            !room_removed(creation.room) && !creation.roster_agent.is_some_and(agent_removed)
+        });
         for local in self.locals.values_mut() {
             local.recipients.retain(|id| !agent_removed(*id));
         }

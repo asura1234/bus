@@ -182,6 +182,7 @@ pub(crate) enum BusEvent {
     },
     StorageRecovered,
     SetupRequired {
+        command_id: u64,
         input: AddAgent,
         orchestrator: Option<orchestrator::OrchestratorSpec>,
         notice: crate::agents::providers::launch::SetupNotice,
