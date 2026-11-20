@@ -92,13 +92,15 @@ impl BusState {
         // A later member's transcript lookup can prove earlier inputs too.
         // Resolve all available evidence before declaring any member uncertain.
         for id in &members {
+            let reason = self.request_closure_reason(*id, "submission_unconfirmed");
             if let Some(member) = self.requests.get_mut(id).filter(|m| !m.settled()) {
                 member.group = None;
                 member.phase = RequestPhase::Abandoned;
                 member.completed_at_ms = Some(now_ms);
-                member.failure_reason = Some("submission_unconfirmed".into());
+                member.failure_reason = Some(reason.into());
                 member.uncertain_outcome = true;
-                uncertain.get_or_insert(member.prompt.id);
+                uncertain =
+                    uncertain.or((reason == "submission_unconfirmed").then_some(member.prompt.id));
             }
         }
         if let Some(request) = self.requests.get_mut(&lead.id) {
@@ -750,9 +752,8 @@ impl BusState {
     }
 
     /// Abandon `id`'s turn with `reason`. Messages typed or coalesced into
-    /// this turn close with it and share its reason; members that already
-    /// settled keep their own outcome. Returns whether outstanding work closed,
-    /// so caller feedback describes the requests actually affected.
+    /// this turn close with per-request accounting. Settled members keep
+    /// their outcome. Returns whether outstanding work closed.
     pub(super) fn close_turn_with_reason(
         &mut self,
         id: RequestId,
@@ -760,23 +761,23 @@ impl BusState {
         reason: String,
     ) -> Result<bool, ModelError> {
         let reason = self.restart_continuation_failure_reason(id, reason);
-        let detail = (reason == "submission_unconfirmed")
-            .then(|| {
-                self.requests
-                    .get(&id)
-                    .and_then(|request| request.submission_error.clone())
-            })
-            .flatten();
+        let detail = self
+            .requests
+            .get(&id)
+            .filter(|_| reason == "submission_unconfirmed")
+            .and_then(|request| request.submission_error.clone());
         let mut closed = self.group_members(id);
-
         closed.retain(|member| self.requests.get(member).is_some_and(|m| !m.settled()));
         if self.request(id).is_some_and(|r| !r.settled()) {
             closed.push(id);
         }
         let affected = !closed.is_empty();
-        for request in closed {
-            if let Some(request) = self.requests.get_mut(&request) {
-                request.failure_reason = Some(reason.clone());
+        for id in closed {
+            let request_reason = self.request_closure_reason(id, &reason);
+            if let Some(request) = self.requests.get_mut(&id) {
+                request.uncertain_outcome |=
+                    reason == "submission_unconfirmed" && request_reason != reason.as_str();
+                request.failure_reason = Some(request_reason.to_owned());
                 if detail.is_some() {
                     request.submission_error = detail.clone();
                 }

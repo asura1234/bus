@@ -70,12 +70,11 @@ impl BusState {
                 labels,
                 IDLE_ALERT_ACTION
             );
-            let prompt_id = self.post_bus_notice(room, Some(orchestrator), text, now_ms)?;
+            let id = self.post_orchestrator_notice(room, orchestrator, text, now_ms)?;
             let request = self
                 .requests
-                .values_mut()
-                .find(|request| request.prompt.id == prompt_id)
-                .ok_or(ModelError::InvalidTransition)?;
+                .get_mut(&id)
+                .ok_or(ModelError::UnknownRequest(id))?;
             request.prompt.idle_agent_ids = idle.into_iter().collect();
             changed = true;
         }
@@ -227,7 +226,7 @@ impl BusState {
         let Some(orchestrator) = self.notice_orchestrator(room, Some(id)) else {
             return Ok(false);
         };
-        self.post_bus_notice(room, Some(orchestrator), text, now_ms)?;
+        self.post_informational_notice(room, orchestrator, id, text, now_ms)?;
         self.agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?

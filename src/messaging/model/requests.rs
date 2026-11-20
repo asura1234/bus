@@ -391,7 +391,7 @@ impl BusState {
             .get(&request)
             .and_then(Request::submission_notice)
             .unwrap_or_else(|| Self::unconfirmed_submission_message(prompt));
-        if let Some(error) = self.request_failure_error(request, message) {
+        if let Some(error) = self.unconfirmed_submission_error(request, message) {
             let _ = self.set_agent_error(agent, Some(error));
         }
         tracing::info!(
@@ -442,7 +442,7 @@ impl BusState {
                 .and_then(Request::submission_notice)
                 .unwrap_or_else(|| Self::unconfirmed_submission_message(prompt));
             self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
-            if let Some(error) = self.request_failure_error(request, message) {
+            if let Some(error) = self.unconfirmed_submission_error(request, message) {
                 self.set_agent_error(agent, Some(error))?;
             }
             // Canonical restart closures are reported only after durable save.

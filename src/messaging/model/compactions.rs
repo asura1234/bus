@@ -52,8 +52,10 @@ impl BusState {
             "{} reached {} compactions; get a handover note and replace it.",
             agent.name, agent.compactions.count
         );
-        let orchestrator = self.notice_orchestrator(room, Some(id));
-        self.post_bus_notice(room, orchestrator, text, now_ms)
-            .map(|_| ())
+        if let Some(orchestrator) = self.notice_orchestrator(room, Some(id)) {
+            self.post_informational_notice(room, orchestrator, id, text, now_ms)
+        } else {
+            self.post_bus_notice(room, None, text, now_ms).map(|_| ())
+        }
     }
 }

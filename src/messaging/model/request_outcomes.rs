@@ -1,4 +1,4 @@
-use super::{BusState, Request, RequestPhase};
+use super::{agents::AGENT_DELETED, AgentId, Author, BusState, Request, RequestId, RequestPhase};
 
 pub(super) const WORKER_NOTICE_WITHDRAWN: &str = "worker_notice_withdrawn";
 
@@ -72,7 +72,59 @@ pub(crate) fn classify_request_failure(reason: &str) -> RequestFailureClass {
     }
 }
 
+impl BusState {
+    pub(super) fn request_closure_reason<'a>(&self, id: RequestId, proposed: &'a str) -> &'a str {
+        if proposed == "submission_unconfirmed"
+            && self.request(id).is_some_and(|request| {
+                !request.trusted_start_bound
+                    && request.informational_subjects_match(|id| self.agent(id).is_none())
+            })
+        {
+            AGENT_DELETED
+        } else {
+            proposed
+        }
+    }
+
+    pub(super) fn unconfirmed_submission_error(
+        &self,
+        id: RequestId,
+        fallback: String,
+    ) -> Option<String> {
+        let lead = self.request(id)?;
+        if lead.failure_reason.as_deref() != Some(AGENT_DELETED) {
+            return self.request_failure_error(id, fallback);
+        }
+        // The lead was an obsolete notice. A coalesced message can still need
+        // an unknown-outcome error for the same native write.
+        let member = self
+            .group_members(id)
+            .into_iter()
+            .filter_map(|id| self.request(id))
+            .find(|request| request.failure_reason.as_deref() == Some("submission_unconfirmed"))?;
+        let error = member
+            .submission_notice()
+            .unwrap_or_else(|| Self::unconfirmed_submission_message(member.prompt.id));
+        self.request_failure_error(member.id, error)
+    }
+}
+
 impl Request {
+    /// A roster notice stays relevant while any of its original subjects remains.
+    pub(super) fn informational_subjects_match(
+        &self,
+        mut predicate: impl FnMut(AgentId) -> bool,
+    ) -> bool {
+        self.prompt.author == Author::Bus
+            && match self.informational_subject {
+                Some(subject) => predicate(subject),
+                None => {
+                    !self.prompt.idle_agent_ids.is_empty()
+                        && self.prompt.idle_agent_ids.iter().copied().all(predicate)
+                }
+            }
+    }
+
     /// Persisted stage shared by message status and dashboard audit records.
     pub(crate) fn delivery_stage(&self) -> &'static str {
         if self.reply().is_some() {
