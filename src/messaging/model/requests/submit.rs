@@ -230,6 +230,7 @@ impl BusState {
                     room_id: room,
                     agent_id,
                     prompt: prompt.clone(),
+                    informational_subject: None,
                     sender_identity: self.message_sender(&prompt.author),
                     phase: RequestPhase::Queued,
                     failure_reason: None,

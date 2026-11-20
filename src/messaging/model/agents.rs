@@ -276,7 +276,11 @@ impl BusState {
             Author::Agent(sender) => self
                 .agent(sender)
                 .is_none_or(|agent| agent.deletion_pending),
-            Author::Bus => self.stale_dialog_notice(request.room_id, &request.prompt),
+            Author::Bus => {
+                request.informational_subjects_match(|id| {
+                    self.agent(id).is_none_or(|agent| agent.deletion_pending)
+                }) || self.stale_dialog_notice(request.room_id, &request.prompt)
+            }
             Author::Developer => false,
         }
     }

@@ -7,8 +7,8 @@ use std::{
 };
 use {
     super::{
-        AgentId, AgentRecipients, Author, BusState, Draft, ModelError, Prompt, PromptId, Room,
-        RoomId, RoomKind, MASTER_ROOM_NAME,
+        AgentId, AgentRecipients, Author, BusState, Draft, ModelError, Prompt, PromptId, RequestId,
+        Room, RoomId, RoomKind, MASTER_ROOM_NAME,
     },
     crate::messaging::model::RoomAgent,
 };
@@ -422,7 +422,38 @@ impl BusState {
         let Some(orchestrator) = orchestrator else {
             return self.record_developer_notice(room, Author::Bus, text, Vec::new(), now_ms);
         };
-        let requests = self.submit_message_from(
+        let request = self.post_orchestrator_notice(room, orchestrator, text, now_ms)?;
+        self.requests
+            .get(&request)
+            .map(|request| request.prompt.id)
+            .ok_or(ModelError::InvalidTransition)
+    }
+
+    /// Posts an informational notice and records the identity it describes.
+    pub(super) fn post_informational_notice(
+        &mut self,
+        room: RoomId,
+        orchestrator: AgentId,
+        subject: AgentId,
+        text: String,
+        now_ms: u64,
+    ) -> Result<(), ModelError> {
+        let id = self.post_orchestrator_notice(room, orchestrator, text, now_ms)?;
+        self.requests
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownRequest(id))?
+            .informational_subject = Some(subject);
+        Ok(())
+    }
+
+    pub(super) fn post_orchestrator_notice(
+        &mut self,
+        room: RoomId,
+        orchestrator: AgentId,
+        text: String,
+        now_ms: u64,
+    ) -> Result<RequestId, ModelError> {
+        self.submit_message_from(
             room,
             Draft {
                 text,
@@ -431,12 +462,10 @@ impl BusState {
             },
             Author::Bus,
             now_ms,
-        )?;
-        requests
-            .first()
-            .and_then(|id| self.requests.get(id))
-            .map(|request| request.prompt.id)
-            .ok_or(ModelError::InvalidTransition)
+        )?
+        .first()
+        .copied()
+        .ok_or(ModelError::InvalidTransition)
     }
 
     fn record_developer_notice(
