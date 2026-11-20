@@ -111,9 +111,10 @@ fn captured_developer_reply_is_present_in_room_history() {
     }
 }
 
-/// An explicit reply settles the request while its turn is still open.
+/// Room 1 message 22856 / request 22857: status returned the explicit
+/// answer while the open turn's history row rewrote it to ended with no body.
 #[test]
-fn explicit_reply_to_settles_before_the_turn_ends() {
+fn explicit_work_room_reply_is_visible_before_the_turn_ends() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "question", "turn-1");
     let message = fixture.request(lead).prompt.id;
@@ -134,6 +135,19 @@ fn explicit_reply_to_settles_before_the_turn_ends() {
         fixture.worker.state.agent(agent).unwrap().current_request,
         Some(lead)
     );
+
+    let status = fixture.worker.control_message(message).unwrap();
+    let status_row = &status["requests"][0];
+    let projected = history(&mut fixture);
+    let history_row = &projected["messages"][0]["delivery"]["requests"][0];
+    assert_eq!(projected["messages"][0]["prompt"]["id"], json!(message));
+    assert_eq!(history_row["request_id"], json!(lead));
+    assert_eq!(status_row["stage"], "replied", "{status_row}");
+    assert_eq!(history_row["stage"], "replied", "{history_row}");
+    assert_eq!(history_row["turn_ended"], false, "{history_row}");
+    assert_eq!(history_row["reply_ack"], false, "{history_row}");
+    assert_eq!(history_row["reply"], status_row["reply"]);
+    assert_eq!(projected.to_string().matches("explicit answer").count(), 1);
 }
 
 /// The correlated answer is visible once, even when a final follows.

@@ -61,8 +61,16 @@ fn master_reply(author_is_agent: bool, command: &str) {
     assert!(response.ok, "{response:?}");
     let history = response.result;
     let request = &history["messages"][0]["delivery"]["requests"][0];
-    assert!(request["reply"].is_null(), "{request}");
-    assert_eq!(request["stage"], "ended");
+    if author_is_agent {
+        assert!(request["reply"].is_null(), "{request}");
+        assert_eq!(request["stage"], "ended");
+    } else {
+        assert_eq!(
+            request["reply"]["text"],
+            "Dispatched; available for your next message."
+        );
+        assert_eq!(request["stage"], "replied");
+    }
     assert_eq!(history["room_id"], 0);
 }
 

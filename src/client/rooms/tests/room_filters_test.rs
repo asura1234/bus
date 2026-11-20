@@ -328,7 +328,7 @@ fn incoming_filter_preserves_a_shared_answer_to_a_developer_member() {
     assert!(worker < follow, "{before}");
     assert_eq!(
         before.matches("SHARED ANSWER FOR DEVELOPER").count(),
-        0,
+        1,
         "{before}"
     );
     assert!(!before.contains("answered with message"), "{before}");
@@ -337,12 +337,12 @@ fn incoming_filter_preserves_a_shared_answer_to_a_developer_member() {
     let after = room_screen(&mut ui, 100, 60);
     assert_eq!(
         after.matches("SHARED ANSWER FOR DEVELOPER").count(),
-        0,
+        1,
         "{after}"
     );
     assert!(
         !after.contains("developer followup") && !after.contains("ordinary worker prompt"),
-        "incoming filter keeps only messages to you, not the stored reply: {after}"
+        "incoming filter shows the reply without either original prompt: {after}"
     );
     assert_visible_directions(&ui, true, false);
 }
@@ -929,7 +929,7 @@ fn filtered_pagination_find_keeps_the_selected_match() {
 }
 
 #[test]
-fn filtered_pagination_omits_the_shared_reply_and_keeps_messages_to_you() {
+fn filtered_pagination_loads_the_shared_reply_with_its_original_exchange() {
     let (mut ui, room, receiver) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let peer = snapshot
@@ -1024,7 +1024,7 @@ fn filtered_pagination_omits_the_shared_reply_and_keeps_messages_to_you() {
     assert_eq!(
         times(&ui, "WINDOW SHARED ANSWER FOR DEVELOPER"),
         0,
-        "a stored reply is not a history row"
+        "the exchange that owns the reply is outside the first page"
     );
     assert!(ui.history.load_older());
     room_screen(&mut ui, 100, 32);
@@ -1037,7 +1037,7 @@ fn filtered_pagination_omits_the_shared_reply_and_keeps_messages_to_you() {
         shows(&ui, "direct filler 0"),
         "the older message arrives with the next page"
     );
-    assert_eq!(times(&ui, "WINDOW SHARED ANSWER FOR DEVELOPER"), 0);
+    assert_eq!(times(&ui, "WINDOW SHARED ANSWER FOR DEVELOPER"), 1);
     let text = ui
         .history
         .cached()
