@@ -1,0 +1,43 @@
+› Implement the delivery-mode dropdown…
+• Ran rg --files | rg 'recipients.rs|tui-driver.md|help.rs$' …
+  └ Ctrl+Enter     Confirm form
+    Esc            Cancel
+    drwxr-xr-x@ 3 developer  wheel  96 Nov 20 11:12 /tmp/build-slot-1
+    + 333 lines (⌃t to expand)
+
+• Ran cat src/client/rooms/widgets/recipients.rs; sed -n '1,79p;321,420p' src/client/rooms/input/mod.rs; sed -n…
+  └                             enter_to_ack_ms,
+                                "Room received submit acknowledgement"
+     M tests/tui/driver_test.rs
+    + 792 lines (⌃t to expand)
+
+• Ran ls -ld /tmp/bus-1-build-slot*; cat /tmp/bus-1-build-slot-*/owner; tail -20 temp/composer-mode/red-tui.log…
+  └ 537:    session.ok(&["click", "--hit", "room:MASTER"]);
+    2319:    session.ok(&["click", "--hit", "room:master"]);
+    zsh:1: no matches found: docs/user*
+    + 15 lines (⌃t to expand)
+
+• Ran sed -i '' 's/"room:master"/"room:MASTER"/' tests/tui/driver_test.rs …
+  └         {
+    src/client/rooms/render/room.rs:143:        super::super::recipients::layout(
+    owner
+    + 86 lines (⌃t to expand)
+
+• The composer currently hard-codes Interrupt in the coordinator. I’ll route the picker through the existing
+  delivery modes and keep the CLI and Feishu policies intact. The scratch TUI tests will inspect the persisted
+  request to verify what Enter actually sent.
+
+• Ran ls -ld /tmp/bus-1-build-slot*; tail -20 temp/composer-mode/red-tui.log; rg -n 'mod .*|pub\(crate\) use' s…
+  └ templates
+    testing.md
+    tui-driver.md
+    + 318 lines (⌃t to expand)
+
+• Working (3m 03s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close
+  └ Tip: Visit the Codex community forum.
+
+
+› Ask Codex to do anything
+
+  GPT-6.2-Sol medium · ~/work/bus-feishu-toggle · Add composer mode dropdown
+  ← for agents · ? for shortcuts                                                       ⚠ 1 warning · f2 to view

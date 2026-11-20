@@ -128,13 +128,7 @@ fn wrapped_cells(ui: &BusUi, target: &str) -> Vec<Vec<(u16, u16)>> {
 fn wrapped_url_styles_every_fragment_and_leaves_following_text_plain() {
     let (mut ui, room, agent) = fixture();
     let url = wrapped_url();
-    saved_exchange(
-        &mut ui,
-        room,
-        agent,
-        &format!("{url} AFTER"),
-        "hidden reply",
-    );
+    saved_exchange(&mut ui, room, agent, &format!("{url} AFTER"), "");
     let buffer = settled_screen(&mut ui);
     for row in wrapped_cells(&ui, &url) {
         for at in row {
@@ -153,13 +147,7 @@ fn wrapped_url_styles_every_fragment_and_leaves_following_text_plain() {
 fn wrapped_url_click_on_every_row_opens_the_whole_target() {
     let (mut ui, room, agent) = fixture();
     let url = wrapped_url();
-    saved_exchange(
-        &mut ui,
-        room,
-        agent,
-        &format!("{url} AFTER"),
-        "hidden reply",
-    );
+    saved_exchange(&mut ui, room, agent, &format!("{url} AFTER"), "");
     settled_screen(&mut ui);
     for row in wrapped_cells(&ui, &url) {
         assert_eq!(
@@ -176,13 +164,7 @@ fn wrapped_existing_path_styles_and_opens_every_fragment() {
     std::fs::write(&doc, "wrapped path").unwrap();
     let target = doc.display().to_string();
     let (mut ui, room, agent) = fixture();
-    saved_exchange(
-        &mut ui,
-        room,
-        agent,
-        &format!("`{target}` AFTER"),
-        "hidden reply",
-    );
+    saved_exchange(&mut ui, room, agent, &format!("`{target}` AFTER"), "");
     let buffer = settled_screen(&mut ui);
     for row in wrapped_cells(&ui, &target) {
         for &at in &row {
@@ -212,7 +194,7 @@ fn wrapped_links_keep_targets_in_prompts_code_lists_and_after_resize() {
         format!("- {url} AFTER"),
     ] {
         let (mut ui, room, agent) = fixture();
-        saved_exchange(&mut ui, room, agent, &body, "hidden reply");
+        saved_exchange(&mut ui, room, agent, &body, "");
         for width in [120, 100] {
             ui.compute_view(width, 40);
             let mut buffer =
@@ -239,7 +221,7 @@ fn wrapped_links_do_not_join_hard_lines_or_same_target_occurrences() {
         room,
         agent,
         &format!("https://example.test/short\n\nAFTER\n\n{url} AFTER {url} AFTER"),
-        "hidden reply",
+        "",
     );
     let buffer = settled_screen(&mut ui);
     let short = locate(&ui, "https://example.test/short");
@@ -319,10 +301,13 @@ fn attachments_read_as_links_without_brackets_and_open_on_click() {
         .position(|line| line.text == "lovart_产品设计文档.md")
         .expect("attachment row without brackets");
     assert_eq!(lines[file - 1].text, "see attached", "follows its message");
-    assert_eq!(lines[file + 1].text, "", "a blank row closes the message");
     assert!(
-        lines.iter().all(|line| line.text.trim() != "ok"),
-        "the stored reply is not a history row"
+        lines[file + 2].text.contains("→ You"),
+        "the reply follows the attachment"
+    );
+    assert!(
+        lines.iter().any(|line| line.text.trim() == "ok"),
+        "stored reply is visible"
     );
 
     let at = locate(&ui, "lovart");
@@ -343,7 +328,7 @@ fn only_an_existing_path_in_a_reply_is_underlined_and_a_click_opens_it() {
         doc.display(),
         dir.display()
     );
-    saved_exchange(&mut ui, room, agent, &reply, "hidden reply");
+    saved_exchange(&mut ui, room, agent, &reply, "");
     let buffer = settled_screen(&mut ui);
 
     let path = doc.display().to_string();
@@ -387,7 +372,7 @@ fn dragging_across_a_link_copies_plain_text_and_opens_nothing() {
         room,
         agent,
         &format!("see {} now", doc.display()),
-        "hidden reply",
+        "",
     );
     settled_screen(&mut ui);
     let (x, y) = locate(&ui, "see ");
@@ -471,7 +456,7 @@ fn releasing_over_a_link_after_pressing_other_text_does_not_open_it() {
         room,
         agent,
         "before https://example.test after",
-        "hidden reply",
+        "",
     );
     settled_screen(&mut ui);
     let (x, y) = locate(&ui, "before ");
@@ -558,13 +543,7 @@ fn dragging_within_a_picture_does_not_open_it() {
 fn assert_wrapped_reply_url_links_on_every_row(body: &str) {
     let (mut ui, room, agent) = fixture();
     let url = wrapped_url();
-    saved_exchange(
-        &mut ui,
-        room,
-        agent,
-        &body.replace("{url}", &url),
-        "hidden reply",
-    );
+    saved_exchange(&mut ui, room, agent, &body.replace("{url}", &url), "");
     let buffer = settled_screen(&mut ui);
     let hits = ui.view.history_links.clone();
     let mut rows = 0;

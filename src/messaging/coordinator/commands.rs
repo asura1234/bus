@@ -3,7 +3,7 @@ use super::{
     mpsc, schema, AgentId, BusCommand as C, BusEvent, BusState, Method, Provider, ResponseResult,
     RoomId, Worker,
 };
-use crate::messaging::model::SendDelivery;
+use crate::messaging::model::SendMode;
 use crate::messaging::storage::state_store::JournalOp;
 
 impl Worker {
@@ -75,7 +75,7 @@ impl Worker {
             }
             C::RemoveFile(room, path) => state.remove_file(room, &path),
             C::Submit(room, draft) | C::SubmitQueued(room, draft) => {
-                return self.persist_draft_submission(room, draft, SendDelivery::Interrupt);
+                return self.persist_draft_submission(room, draft, SendMode::Interrupt);
             }
             C::SubmitWithMode(room, draft, delivery) => {
                 return self.persist_draft_submission(room, draft, delivery);
@@ -131,7 +131,7 @@ impl Worker {
         &mut self,
         room: RoomId,
         mut draft: crate::messaging::model::Draft,
-        delivery: SendDelivery,
+        delivery: SendMode,
     ) -> Result<(), String> {
         for recipient in &draft.recipient_ids {
             if let Some(error) = self.check_launch_directory(*recipient)? {
@@ -156,7 +156,7 @@ impl Worker {
         let requests = state
             .submit_draft_exact(room, draft.clone(), now, queued)
             .map_err(|e| e.to_string())?;
-        let op = if delivery == SendDelivery::Interrupt {
+        let op = if delivery == SendMode::Interrupt {
             let interrupts = super::control_dispatch::stage_send_interrupts(&mut state, &requests)?;
             JournalOp::SubmitInterruptDraft {
                 room,
@@ -165,15 +165,19 @@ impl Worker {
                 interrupts,
             }
         } else {
+            state
+                .record_send_mode(&requests, delivery)
+                .map_err(|e| e.to_string())?;
             JournalOp::SubmitDraft {
                 room,
                 draft,
                 queued,
+                mode: Some(delivery),
                 now_ms: now,
             }
         };
         self.journal(state, op)?;
-        if delivery == SendDelivery::Interrupt {
+        if delivery == SendMode::Interrupt {
             self.dispatch_committed_send_interrupts(&requests, now);
         }
         self.note_requests_queued(&requests);

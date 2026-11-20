@@ -76,9 +76,9 @@ impl BusUi {
             Action::ChooseDelivery(mode) => format!(
                 "delivery-mode:{}",
                 match mode {
-                    crate::messaging::model::SendDelivery::Interrupt => "interrupt",
-                    crate::messaging::model::SendDelivery::Steer => "steer",
-                    crate::messaging::model::SendDelivery::Queue => "queue",
+                    crate::messaging::model::SendMode::Interrupt => "interrupt",
+                    crate::messaging::model::SendMode::Steer => "steer",
+                    crate::messaging::model::SendMode::Queue => "queue",
                 }
             ),
             Action::Recipients => "recipients".into(),

@@ -4,7 +4,7 @@ use super::super::{
 };
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentId, AgentRecipients, RoomId, SendDelivery},
+    model::{AgentId, AgentRecipients, RoomId, SendMode},
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -113,11 +113,11 @@ impl BusUi {
         }
     }
 
-    fn delivery_menu_key(&mut self, mode: SendDelivery, code: KeyCode, modifiers: KeyModifiers) {
+    fn delivery_menu_key(&mut self, mode: SendMode, code: KeyCode, modifiers: KeyModifiers) {
         if !modifiers.is_empty() {
             return;
         }
-        use SendDelivery::{Interrupt, Queue, Steer};
+        use SendMode::{Interrupt, Queue, Steer};
         match code {
             KeyCode::Esc | KeyCode::Tab | KeyCode::F(4) => self.delivery_menu = None,
             KeyCode::Enter | KeyCode::Char(' ') => self.action(Action::ChooseDelivery(mode)),

@@ -1,12 +1,12 @@
 //! Composer delivery pill and its keyboard- and mouse-selectable options.
 use super::{wrap, Action, View, ACCENT};
-use crate::messaging::model::SendDelivery::{self, Interrupt, Queue, Steer};
+use crate::messaging::model::SendMode::{self, Interrupt, Queue, Steer};
 use ratatui::{
     layout::{Margin, Rect},
     style::{Color, Style},
 };
 
-const OPTIONS: [(SendDelivery, &str, &str); 3] = [
+const OPTIONS: [(SendMode, &str, &str); 3] = [
     (
         Interrupt,
         "Interrupt",
@@ -31,7 +31,7 @@ pub(super) fn delivery_pill_width(width: u16) -> u16 {
     }
 }
 
-pub(super) fn delivery_pill(view: &mut View, rect: Rect, mode: SendDelivery, open: bool) {
+pub(super) fn delivery_pill(view: &mut View, rect: Rect, mode: SendMode, open: bool) {
     let label = match mode {
         Interrupt => "Interrupt",
         Steer => "Steer",
@@ -60,7 +60,7 @@ pub(super) fn delivery_pill(view: &mut View, rect: Rect, mode: SendDelivery, ope
 }
 
 impl View {
-    pub(super) fn delivery_menu(&mut self, selected: SendDelivery) {
+    pub(super) fn delivery_menu(&mut self, selected: SendMode) {
         let composer = self.composer_box;
         let width = composer.width.min(52);
         if width < 3 || composer.bottom() < 3 {

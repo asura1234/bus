@@ -132,7 +132,7 @@ pub(crate) enum BusCommand {
     SubmitWithMode(
         RoomId,
         crate::messaging::model::Draft,
-        crate::messaging::model::SendDelivery,
+        crate::messaging::model::SendMode,
     ),
     SetDetails(AgentId, bool),
     AddAgent(AddAgent),

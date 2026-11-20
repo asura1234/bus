@@ -17,7 +17,7 @@ fn waiting_tags_keep_you_color_when_markdown_table_cells_wrap() {
         room,
         agent,
         "| Status | Next |\n| --- | --- |\n| [waiting-on-you] | confirm |",
-        "hidden reply",
+        "",
     );
     let snapshot = Arc::clone(&ui.snapshot);
     for width in [12, 24, 32, 80] {
@@ -62,14 +62,14 @@ fn prompt_and_agent_reply_markdown_are_rendered() {
         room,
         agent,
         "**rendered prompt**\nsecond `line`",
-        "hidden reply",
+        "",
     );
     saved_exchange(
         &mut ui,
         room,
         agent,
         "# Heading\n\n- **bold** and `code`",
-        "hidden reply",
+        "",
     );
     ui.compute_view(100, 40);
     let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 40));
@@ -152,7 +152,7 @@ fn a_drag_inside_a_rendered_reply_selects_and_copies_only_those_characters() {
 
     let (mut ui, room, agent) = fixture();
     let markdown = "**bold** and [docs](https://example.com) and `code`";
-    saved_exchange(&mut ui, room, agent, markdown, "hidden reply");
+    saved_exchange(&mut ui, room, agent, markdown, "");
     ui.compute_view(100, 40);
     let (start, row) = locate(&ui, "and docs");
     // "and docs" is 8 cells; the release column is inclusive.
@@ -176,8 +176,8 @@ fn a_drag_inside_a_rendered_reply_selects_and_copies_only_those_characters() {
 #[test]
 fn a_drag_across_two_messages_copies_the_text_between_without_layout_indents() {
     let (mut ui, room, agent) = fixture();
-    saved_exchange(&mut ui, room, agent, "literal prompt", "hidden reply");
-    saved_exchange(&mut ui, room, agent, "**bold** reply", "hidden reply");
+    saved_exchange(&mut ui, room, agent, "literal prompt", "");
+    saved_exchange(&mut ui, room, agent, "**bold** reply", "");
     ui.compute_view(100, 40);
     let (from, from_row) = locate(&ui, "prompt");
     let (to, to_row) = locate(&ui, "bold reply");
@@ -195,7 +195,7 @@ fn a_drag_across_a_wrapped_reply_line_rejoins_it_and_never_copies_quote() {
     let (mut ui, room, agent) = fixture();
     let words: Vec<String> = (0..30).map(|n| format!("w{n:02}")).collect();
     let reply = format!("**lead** {}", words.join(" "));
-    saved_exchange(&mut ui, room, agent, &reply, "hidden reply");
+    saved_exchange(&mut ui, room, agent, &reply, "");
     ui.compute_view(60, 40);
     let rows: Vec<_> = ui
         .history
@@ -248,8 +248,8 @@ fn a_drag_in_a_scrolled_history_selects_the_rows_on_screen() {
 #[test]
 fn selection_stopping_before_markdown_keeps_the_selected_line_end_in_both_directions() {
     let (mut ui, room, agent) = fixture();
-    saved_exchange(&mut ui, room, agent, "literal prompt", "hidden reply");
-    saved_exchange(&mut ui, room, agent, "**raw reply**", "hidden reply");
+    saved_exchange(&mut ui, room, agent, "literal prompt", "");
+    saved_exchange(&mut ui, room, agent, "**raw reply**", "");
     ui.compute_view(100, 40);
     let prompt = ui
         .history
@@ -367,7 +367,7 @@ fn prompt_line_stores_raw_markdown() {
 #[test]
 fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
     let (mut ui, room, agent) = fixture();
-    saved_exchange(&mut ui, room, agent, "**cached reply**", "hidden reply");
+    saved_exchange(&mut ui, room, agent, "**cached reply**", "");
     let snapshot = Arc::clone(&ui.snapshot);
     let room = snapshot.state.room(room).expect("room");
 
@@ -418,14 +418,8 @@ fn markdown_rendering_survives_a_visit_to_another_room() {
         .create_agent(other, "helper", Provider::Codex, "/project".into(), None)
         .unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
-    saved_exchange(&mut ui, room, agent, "**first reply**", "hidden reply");
-    saved_exchange(
-        &mut ui,
-        other,
-        other_agent,
-        "**other reply**",
-        "hidden reply",
-    );
+    saved_exchange(&mut ui, room, agent, "**first reply**", "");
+    saved_exchange(&mut ui, other, other_agent, "**other reply**", "");
     let snapshot = Arc::clone(&ui.snapshot);
     let rendered_reply = |ui: &mut BusUi, id| {
         ui.history.lines(
@@ -464,7 +458,7 @@ fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
         room,
         agent,
         "## 日本語 👩‍💻\n\n**強調 text**\n\n| A | B |\n| - | - |\n| 甲 | 🙂 |",
-        "hidden reply",
+        "",
     );
     let snapshot = Arc::clone(&ui.snapshot);
     let room = snapshot.state.room(room).expect("room");
@@ -538,7 +532,7 @@ fn a_history_copy_of_a_wrapped_list_item_skips_its_continuation_indent() {
         room,
         agent,
         "- alpha beta gamma delta epsilon zeta",
-        "hidden reply",
+        "",
     );
 
     assert_eq!(
@@ -558,14 +552,8 @@ fn markdown_returning_to_a_room_after_a_resize_elsewhere_lays_out_at_the_new_wid
         .unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
     let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau";
-    saved_exchange(&mut ui, room, agent, long, "hidden reply");
-    saved_exchange(
-        &mut ui,
-        other,
-        other_agent,
-        "**other reply**",
-        "hidden reply",
-    );
+    saved_exchange(&mut ui, room, agent, long, "");
+    saved_exchange(&mut ui, other, other_agent, "**other reply**", "");
     let snapshot = Arc::clone(&ui.snapshot);
     let reply_rows = |ui: &mut BusUi, id, width| -> Vec<String> {
         ui.history.lines(

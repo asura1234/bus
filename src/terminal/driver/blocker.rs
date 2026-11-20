@@ -7,6 +7,7 @@ use std::ops::Range;
 enum ControlKind {
     Foreground,
     Pending,
+    Cancel,
 }
 
 struct Controls {
@@ -200,6 +201,7 @@ fn agy_footer_index(
 }
 
 fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
+    hide_codex_tool_output(&mut rows);
     if let Some(region) = editable_composer_region(&rows) {
         let border = |row: &str| row.starts_with(['─', '╭', '╰', '┌', '└', '▀']);
         let closing_border = region
@@ -239,6 +241,26 @@ fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
         }
     }
     rows
+}
+
+fn hide_codex_tool_output(rows: &mut [String]) {
+    // Codex renders completed shell calls as a column-zero header followed
+    // by an output branch and indented continuation rows. Keep the header
+    // as a boundary and exclude the output from both hints and menu options.
+    let mut command_header = false;
+    let mut output = false;
+    for row in rows {
+        if (command_header || output) && row.starts_with("  └ ")
+            || output && (row.starts_with("    ") || row.trim().is_empty())
+        {
+            row.clear();
+            command_header = false;
+            output = true;
+        } else {
+            command_header = row.starts_with("• Ran ") || row.starts_with("• Exited (status ");
+            output = false;
+        }
+    }
 }
 
 fn plain(row: &str) -> &str {
@@ -341,6 +363,9 @@ fn tail_clear(
         if row == "⟩" {
             return true;
         }
+        if live_activity_row(&rows[index]) {
+            return false;
+        }
         if super::selection::option_body(row).1 && !numbered(row) {
             return false;
         }
@@ -401,8 +426,15 @@ fn controls(rows: &[String]) -> Option<Controls> {
                 let menu = menu
                     .clone()
                     .filter(|menu| tail_clear(rows, menu.end, end, None, &hint));
+                // A standalone cancel label needs a current input affordance.
+                if kind == ControlKind::Cancel
+                    && menu.as_ref().is_none_or(|menu| menu.end > start)
+                    && !cancel_form(&rows[..start], &rows[start])
+                {
+                    continue;
+                }
                 return Some(Controls {
-                    kind,
+                    kind: ControlKind::Foreground,
                     end: finish,
                     menu,
                     hint,
@@ -512,6 +544,25 @@ fn keyboard_hint(row: &str) -> Option<ControlKind> {
     keyboard_hint_with_form(row, false)
 }
 
+fn cancel_form(rows: &[String], hint: &str) -> bool {
+    let native_cancel = plain(hint)
+        .get(.."esc to cancel".len())
+        .is_some_and(|label| label.eq_ignore_ascii_case("esc to cancel"));
+    native_cancel
+        && rows
+            .iter()
+            .rev()
+            .skip_while(|row| row.trim().is_empty())
+            .take_while(|row| meaningful(row))
+            .any(|row| {
+                let row = plain(row);
+                row == ">"
+                    || row
+                        .strip_prefix('❯')
+                        .is_some_and(|label| !label.trim().is_empty())
+            })
+}
+
 fn input_hint(rows: &[String], hint: Range<usize>) -> Option<ControlKind> {
     let text = rows[hint.clone()]
         .iter()
@@ -586,8 +637,23 @@ fn keyboard_hint_with_form(row: &str, checkbox_form: bool) -> Option<ControlKind
     let alternate = ["esc", "skip", "cancel", "navigate", "↑", "↓"]
         .iter()
         .any(|key| row.contains(key));
-    (enter && action(&row) && (alternate || row.starts_with("press "))
+    if enter && action(&row) && (alternate || row.starts_with("press "))
         || (row.contains('↑') || row.contains('↓')) && action(&row)
-        || row.starts_with("esc") && row.contains("cancel"))
-    .then_some(ControlKind::Foreground)
+    {
+        return Some(ControlKind::Foreground);
+    }
+    if !row.starts_with("esc") || !row.contains("cancel") {
+        return None;
+    }
+    let sibling_binding = row.split('·').skip(1).any(|binding| {
+        binding
+            .trim()
+            .split_once(" to ")
+            .is_some_and(|(key, description)| !description.is_empty() && key_list(key))
+    });
+    Some(if sibling_binding {
+        ControlKind::Foreground
+    } else {
+        ControlKind::Cancel
+    })
 }

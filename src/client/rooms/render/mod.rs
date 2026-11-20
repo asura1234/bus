@@ -49,7 +49,7 @@ pub(super) enum Action {
     ToggleToYou,
     ToggleFromYou,
     DeliveryMode,
-    ChooseDelivery(crate::messaging::model::SendDelivery),
+    ChooseDelivery(crate::messaging::model::SendMode),
     Recipients,
     Recipient(Option<crate::messaging::model::AgentId>),
     Files,

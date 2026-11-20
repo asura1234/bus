@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::messaging::model::{
-    BusState, Draft, ModelError, RequestId, RoomId, SendInterrupt, SendInterruptOutcome,
+    BusState, Draft, ModelError, RequestId, RoomId, SendInterrupt, SendInterruptOutcome, SendMode,
 };
 
 const JOURNAL_VERSION: u64 = 1;
@@ -40,6 +40,8 @@ pub(crate) enum JournalOp {
         room: RoomId,
         draft: Draft,
         queued: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<SendMode>,
         now_ms: u64,
     },
     SubmitInterruptDraft {
@@ -124,10 +126,20 @@ impl JournalOp {
                 room,
                 draft,
                 queued,
+                mode,
                 now_ms,
-            } => state
-                .submit_draft_exact(*room, draft.clone(), *now_ms, *queued)
-                .map(drop),
+            } => {
+                if let Some(mode) = mode {
+                    return state
+                        .submit_draft_with_mode(*room, draft.clone(), *now_ms, *mode)
+                        .map(drop);
+                }
+                let requests = state.submit_draft_exact(*room, draft.clone(), *now_ms, *queued)?;
+                if *queued {
+                    state.record_send_mode(&requests, SendMode::Queue)?;
+                }
+                Ok(())
+            }
             Self::SubmitInterruptDraft {
                 room,
                 draft,
@@ -135,6 +147,7 @@ impl JournalOp {
                 interrupts,
             } => {
                 let requests = state.submit_draft_exact(*room, draft.clone(), *now_ms, true)?;
+                state.record_send_mode(&requests, SendMode::Interrupt)?;
                 for (id, interrupt) in interrupts {
                     if requests.contains(id) {
                         state.stage_send_interrupt(*id, interrupt.clone())?;

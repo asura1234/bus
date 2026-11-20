@@ -93,7 +93,7 @@ pub(in crate::client) struct BusUi {
     pub(super) deletion: Option<super::deletion::DeleteDialog>,
     pub(super) rename: Option<Rename>,
     pub(super) recipient_menu: bool,
-    pub(super) delivery_menu: Option<crate::messaging::model::SendDelivery>,
+    pub(super) delivery_menu: Option<crate::messaging::model::SendMode>,
     pub(super) recipient_index: usize,
     pub(super) suggestions: Suggestions,
     pub(super) view: View,

@@ -2,7 +2,7 @@
 use super::*;
 use crate::messaging::{
     control::Response,
-    model::SendInterrupt,
+    model::{SendInterrupt, SendMode},
     native::{NativeCall, NativeResult},
 };
 
@@ -267,6 +267,11 @@ fn orchestrator_steer_joins_the_running_turn_like_today() {
         let response = send(&mut fixture, params);
         assert!(response.ok, "{provider:?}: {response:?}");
         let message = sent_request(&response);
+        let saved = fixture.worker.store.load().unwrap().unwrap();
+        assert_eq!(
+            saved.request(message).unwrap().send_mode,
+            Some(SendMode::Steer)
+        );
         assert!(stop_keys(&fixture).is_empty(), "{provider:?}");
         assert!(
             !fixture
@@ -296,6 +301,11 @@ fn orchestrator_queue_waits_for_the_turn_to_end() {
         let response = send(&mut fixture, params);
         assert!(response.ok, "{provider:?}: {response:?}");
         let message = sent_request(&response);
+        let saved = fixture.worker.store.load().unwrap().unwrap();
+        assert_eq!(
+            saved.request(message).unwrap().send_mode,
+            Some(SendMode::Queue)
+        );
         assert!(stop_keys(&fixture).is_empty(), "{provider:?}");
         assert!(fixture.request(message).queue_only, "{provider:?}");
         fixture.deliver();
@@ -467,6 +477,10 @@ fn an_interrupt_send_stays_in_the_next_turn_after_a_restart() {
         .unwrap()
         .unwrap();
     assert_eq!(saved.request(message).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(
+        saved.request(message).unwrap().send_mode,
+        Some(SendMode::Interrupt)
+    );
     assert!(
         saved.request(message).unwrap().queue_only,
         "the restarted coordinator must not steer it into the old turn"
@@ -539,9 +553,7 @@ fn room_composer_developer_send_interrupts_the_running_turn() {
 
 #[test]
 fn composer_modes_steer_or_wait_without_stopping_a_running_turn() {
-    use crate::messaging::model::SendDelivery;
-
-    for mode in [SendDelivery::Steer, SendDelivery::Queue] {
+    for mode in [SendMode::Steer, SendMode::Queue] {
         let mut fixture = Fixture::new(Provider::ClaudeCode);
         let lead = running(&mut fixture, "write the parser", "1");
         let draft = Draft {
@@ -562,13 +574,12 @@ fn composer_modes_steer_or_wait_without_stopping_a_running_turn() {
         };
         let request = *request;
         let persisted = fixture.worker.store.load().unwrap().unwrap();
-        assert_eq!(
-            persisted.request(request).unwrap().queue_only,
-            mode == SendDelivery::Queue
-        );
+        let persisted = persisted.request(request).unwrap();
+        assert_eq!(persisted.queue_only, mode == SendMode::Queue);
+        assert_eq!(persisted.history_send_mode(), Some(mode));
 
         fixture.deliver();
-        if mode == SendDelivery::Steer {
+        if mode == SendMode::Steer {
             assert_typed(&fixture, "also add tests", true);
             assert_eq!(fixture.request(request).group, Some(lead));
         } else {
@@ -861,6 +872,10 @@ fn composer_acknowledges_a_durable_send_when_its_stop_claim_write_fails() {
         panic!("expected one durable follower")
     };
     assert!(durable.request(*queued).unwrap().send_interrupt.is_some());
+    assert_eq!(
+        durable.request(*queued).unwrap().send_mode,
+        Some(SendMode::Interrupt)
+    );
     assert!(stop_keys(&f).is_empty());
 }
 

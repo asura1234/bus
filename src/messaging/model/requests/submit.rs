@@ -3,7 +3,48 @@ use super::{
 };
 use crate::messaging::model::DeliveryLatency;
 
+/// Delivery mode selected when the message was sent, independent of native progress.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SendMode {
+    #[default]
+    Interrupt,
+    Steer,
+    Queue,
+}
+
+impl SendMode {
+    pub(crate) fn queue_only(self) -> bool {
+        matches!(self, Self::Interrupt | Self::Queue)
+    }
+}
+
+impl Request {
+    pub(crate) fn history_send_mode(&self) -> Option<SendMode> {
+        // Older records only prove steer when the request was actually typed
+        // into a running turn. queue_only also covers interrupts and forced
+        // independent turns, and group can come from ordinary coalescing.
+        self.send_mode.or(self.steered.then_some(SendMode::Steer))
+    }
+}
+
 impl BusState {
+    pub(crate) fn record_send_mode(
+        &mut self,
+        requests: &[RequestId],
+        mode: SendMode,
+    ) -> Result<(), ModelError> {
+        for &id in requests {
+            self.requests
+                .get_mut(&id)
+                .ok_or(ModelError::UnknownRequest(id))?
+                .send_mode = Some(mode);
+        }
+        Ok(())
+    }
+
     /// Queue an automation prompt without changing the room's developer-owned draft.
     pub(crate) fn submit_message_from(
         &mut self,
@@ -82,7 +123,21 @@ impl BusState {
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(room, Author::Developer, now_ms, true, false)
+        let requests = self.submit_draft_from(room, Author::Developer, now_ms, true, false)?;
+        self.record_send_mode(&requests, SendMode::Queue)?;
+        Ok(requests)
+    }
+
+    pub(crate) fn submit_draft_with_mode(
+        &mut self,
+        room: RoomId,
+        draft: Draft,
+        now_ms: u64,
+        mode: SendMode,
+    ) -> Result<Vec<RequestId>, ModelError> {
+        let requests = self.submit_draft_exact(room, draft, now_ms, mode.queue_only())?;
+        self.record_send_mode(&requests, mode)?;
+        Ok(requests)
     }
 
     pub(crate) fn submit_draft_exact(
@@ -218,6 +273,7 @@ impl BusState {
                         ..Default::default()
                     },
                     queue_only: queue_only || independent,
+                    send_mode: None,
                     bus_generated,
                     group: None,
                     steered: false,

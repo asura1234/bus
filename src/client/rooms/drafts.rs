@@ -2,7 +2,7 @@
 use super::{editor::Editor, forms::Form, BusUi, Effect};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentRecipients, Draft, Room, RoomId, SendDelivery},
+    model::{AgentRecipients, Draft, Room, RoomId, SendMode},
 };
 
 pub(super) fn attachment_path(input: &str) -> std::path::PathBuf {
@@ -34,7 +34,7 @@ pub(super) struct LocalSubmission {
     pub command_id: u64,
     pub room: RoomId,
     pub draft: Draft,
-    pub delivery: SendDelivery,
+    pub delivery: SendMode,
     pub requested_at: std::time::Instant,
     pub submitted_at_ms: u64,
     pub status: LocalSendStatus,
@@ -70,7 +70,7 @@ pub(super) struct LocalRoom {
     pub text: Editor,
     pub recipients: AgentRecipients,
     pub composer_size: ComposerSize,
-    pub delivery: SendDelivery,
+    pub delivery: SendMode,
     // None follows the caret; Some is an independently scrolled viewport.
     pub composer_scroll: Option<usize>,
     pub recall: Vec<Recalled>,
@@ -88,7 +88,7 @@ impl From<&Room> for LocalRoom {
             text: Editor::new(room.draft.text.clone()),
             recipients: room.draft.recipient_ids.clone(),
             composer_size: ComposerSize::Auto,
-            delivery: SendDelivery::default(),
+            delivery: SendMode::default(),
             composer_scroll: None,
             recall: Vec::new(),
             stash: Vec::new(),
@@ -209,10 +209,10 @@ impl BusUi {
         let delivery = self
             .locals
             .get(&room)
-            .map_or_else(SendDelivery::default, |local| local.delivery);
+            .map_or_else(SendMode::default, |local| local.delivery);
         let command = match delivery {
-            SendDelivery::Interrupt if alt_enter => BusCommand::SubmitQueued(room, draft.clone()),
-            SendDelivery::Interrupt => BusCommand::Submit(room, draft.clone()),
+            SendMode::Interrupt if alt_enter => BusCommand::SubmitQueued(room, draft.clone()),
+            SendMode::Interrupt => BusCommand::Submit(room, draft.clone()),
             _ => BusCommand::SubmitWithMode(room, draft.clone(), delivery),
         };
         let command_id = self.queue(command, Effect::Submit);
@@ -343,11 +343,11 @@ impl BusUi {
                 .wrapping_mul(31)
                 .wrapping_add(submission.command_id)
                 .wrapping_add(u64::from(submission.status == LocalSendStatus::Failed) << 32);
-            let Ok(requests) = projected.state.submit_draft_exact(
+            let Ok(requests) = projected.state.submit_draft_with_mode(
                 submission.room,
                 submission.draft.clone(),
                 submission.submitted_at_ms,
-                submission.delivery.queue_only(),
+                submission.delivery,
             ) else {
                 continue;
             };
