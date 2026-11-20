@@ -416,6 +416,14 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
         snapshots: &Arc<Mutex<Arc<BusSnapshot>>>,
     ) {
+        // Tests hold the ack open so a second Ctrl+Q can land in the force window.
+        if let Some(delay) = std::env::var("BUS_QUIT_SHUTDOWN_DELAY_MS")
+            .ok()
+            .and_then(|text| text.parse::<u64>().ok())
+            .filter(|delay| *delay > 0)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+        }
         self.finish_native_submissions(true);
         self.fold_journal();
         self.finish_feishu();

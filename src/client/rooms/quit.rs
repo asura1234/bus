@@ -2,7 +2,15 @@
 use super::{storage_paused, BusUi, Effect};
 use std::time::Instant;
 
-const QUIT_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+fn quit_save_timeout() -> std::time::Duration {
+    // Tests set a short window so the second Ctrl+Q can confirm a force quit
+    // without waiting out the production 5s save.
+    std::env::var("BUS_QUIT_SAVE_TIMEOUT_MS")
+        .ok()
+        .and_then(|text| text.parse::<u64>().ok())
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(std::time::Duration::from_secs(5))
+}
 const QUIT_FORCE_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl BusUi {
@@ -41,7 +49,7 @@ impl BusUi {
         if let Some(started) = self
             .quitting
             .filter(|started| {
-                now.duration_since(*started) > QUIT_SAVE_TIMEOUT || !self.failed.is_empty()
+                now.duration_since(*started) > quit_save_timeout() || !self.failed.is_empty()
             })
             .filter(|_| !self.exit_ready)
         {

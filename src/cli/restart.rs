@@ -13,6 +13,8 @@ mod build;
 mod prep;
 #[path = "restart_session.rs"]
 mod session;
+#[cfg(unix)]
+pub(crate) use session::relaunch_claimed_handoff;
 pub(crate) use session::{resume_after_quit, run_handoff_entry};
 
 const CONFIRM: &str = "This command changes or removes work; add --confirm to proceed";

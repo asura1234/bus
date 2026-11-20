@@ -15,6 +15,16 @@ pub(crate) fn take_restart_plan() -> Option<HandoffPlan> {
         .take()
 }
 
+/// True once an authorized restart quit is waiting for the UI to finish.
+/// The plan stays put so [`take_restart_plan`] can still claim it after the
+/// terminal has been handed to the successor.
+pub(crate) fn restart_plan_pending() -> bool {
+    RESTART_PLAN
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_some()
+}
+
 #[cfg(test)]
 pub(crate) fn test_restart_plan(plan: HandoffPlan) {
     *RESTART_PLAN

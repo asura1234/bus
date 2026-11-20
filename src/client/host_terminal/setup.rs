@@ -480,6 +480,11 @@ impl TerminalGuard {
             self.restore_windows_input_mode,
         )
     }
+
+    /// Leave raw mode in place for a successor TUI. Drop must not restore.
+    pub(in crate::client) fn release_to_successor(mut self) {
+        self.restored = true;
+    }
 }
 
 impl Drop for TerminalGuard {

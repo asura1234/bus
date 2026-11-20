@@ -278,7 +278,8 @@ pub use daemon::launch_server_daemon_command;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use daemon::{current_process_is_detached_server_daemon, detach_server_daemon_command};
 pub(crate) use signals::{
-    disregard_interrupt_signal, take_terminal_resize_signal, watch_terminal_resize_signal,
+    disregard_interrupt_signal, install_quit_on_termination, restore_default_termination_signals,
+    take_terminal_resize_signal, watch_terminal_resize_signal,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

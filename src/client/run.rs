@@ -119,6 +119,8 @@ fn run_client_with_mode(
     let input_lifecycle = ClientInputLifecycle::default();
 
     install_client_termination_handler(&should_quit);
+    // Replace ctrlc's SIGTERM/SIGHUP hook. On macOS that hook does not wake.
+    crate::platform::install_quit_on_termination(&should_quit);
 
     let result = rt.block_on(async {
         run_client_loop(
@@ -135,22 +137,39 @@ fn run_client_with_mode(
         .await
     });
 
-    // Terminal palette replies are stdin, so let the reader drain them before restoring echo.
-    #[cfg(unix)]
-    let _ = finish_terminal_input(
-        &input_lifecycle.host_palette_query_pending,
-        &input_lifecycle.host_palette_query_progress,
-        &input_lifecycle.reader_should_quit,
-        Duration::from_millis(250),
-        Duration::from_secs(2),
-    );
-    #[cfg(not(unix))]
-    input_lifecycle
-        .reader_should_quit
-        .store(true, Ordering::Release);
+    // A restart successor owns the tty. Restoring here would cook the terminal
+    // under the process that is about to take it, and the retiring process
+    // must not be the one that restores.
+    let handing_off = crate::messaging::coordinator::restart_plan_pending();
+    if handing_off {
+        input_lifecycle
+            .reader_should_quit
+            .store(true, Ordering::Release);
+    } else {
+        // Terminal palette replies are stdin, so let the reader drain them before restoring echo.
+        #[cfg(unix)]
+        let _ = finish_terminal_input(
+            &input_lifecycle.host_palette_query_pending,
+            &input_lifecycle.host_palette_query_progress,
+            &input_lifecycle.reader_should_quit,
+            Duration::from_millis(250),
+            Duration::from_secs(2),
+        );
+        #[cfg(not(unix))]
+        input_lifecycle
+            .reader_should_quit
+            .store(true, Ordering::Release);
+    }
+    // The loop is done. A stuck stop must die on SIGTERM instead of staying
+    // inside ctrlc's flag-only handler.
+    crate::platform::restore_default_termination_signals();
 
-    // Restore the terminal before printing any final status message.
-    let terminal_restore_failed = terminal_guard.restore().is_err();
+    let terminal_restore_failed = if handing_off {
+        terminal_guard.release_to_successor();
+        false
+    } else {
+        terminal_guard.restore().is_err()
+    };
     let stopped = stop_server_after_quit(|| {
         eprintln!("Stopping Bus and its agents...");
         stop_server()

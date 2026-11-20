@@ -59,3 +59,57 @@ pub(crate) fn take_terminal_resize_signal() -> bool {
 pub(crate) fn take_terminal_resize_signal() -> bool {
     false
 }
+
+/// After the UI loop, termination must kill the process again.
+///
+/// `ctrlc` stays installed for the whole process and only sets a flag. Once
+/// the loop has exited, a stuck save or server stop would ignore SIGTERM the
+/// way a restart waiter did.
+#[cfg(unix)]
+pub(crate) fn restore_default_termination_signals() {
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+        libc::signal(libc::SIGHUP, libc::SIG_DFL);
+    }
+}
+
+#[cfg(unix)]
+static QUIT_FLAG: std::sync::atomic::AtomicPtr<std::sync::atomic::AtomicBool> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+#[cfg(unix)]
+extern "C" fn mark_quit_flag(_signal: libc::c_int) {
+    let flag = QUIT_FLAG.load(std::sync::atomic::Ordering::Relaxed);
+    if !flag.is_null() {
+        unsafe {
+            (*flag).store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+/// SIGTERM and SIGHUP set the quit flag directly.
+///
+/// `ctrlc`'s Apple handler posts a dispatch semaphore from the signal
+/// context, and that post does not wake the waiter, so the flag stays false
+/// and the process keeps sleeping in `kevent`. No `SA_RESTART`, so the
+/// runtime's poll returns and the loop observes the flag.
+#[cfg(unix)]
+pub(crate) fn install_quit_on_termination(flag: &std::sync::atomic::AtomicBool) {
+    QUIT_FLAG.store(
+        std::ptr::from_ref(flag).cast_mut(),
+        std::sync::atomic::Ordering::Release,
+    );
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = mark_quit_flag as *const () as libc::sighandler_t;
+    unsafe {
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
+        libc::sigaction(libc::SIGHUP, &action, std::ptr::null_mut());
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn install_quit_on_termination(_flag: &std::sync::atomic::AtomicBool) {}
+
+#[cfg(not(unix))]
+pub(crate) fn restore_default_termination_signals() {}

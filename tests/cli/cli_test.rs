@@ -6,6 +6,9 @@ use utils::test_temp as fixture_dirs;
 
 #[path = "callbacks_test.rs"]
 mod callbacks;
+#[cfg(unix)]
+#[path = "exit_lifecycle_test.rs"]
+mod exit_lifecycle;
 #[path = "help_test.rs"]
 mod help;
 #[path = "../../src/utils/tests/live_bus_env_test.rs"]

@@ -31,6 +31,12 @@ def until(predicate, timeout=40):
     raise AssertionError("condition did not arrive before deadline")
 
 
+def coordinator_pid(bus):
+    # The shell waits on a supervisor. The coordinator is the TUI child.
+    receipt = json.loads((bus.data / "restarts/tui.json").read_text())
+    return int(receipt["process"]["pid"])
+
+
 def stop_spooled(data):
     for path in data.glob("callbacks/*/*.json"):
         try:
@@ -101,13 +107,16 @@ def scenario(binary, root, provider, master, retain_failure=False):
         # Stop only this scratch coordinator while its native provider keeps running.
         # The provider cannot produce a final until this pause is established,
         # even if polling or SIGSTOP is delayed longer than the old fake work.
-        os.kill(bus.child.pid, signal.SIGSTOP)
+        coordinator = coordinator_pid(bus)
+        os.kill(coordinator, signal.SIGSTOP)
         release.touch()
         until(lambda: stop_spooled(data), timeout=15)
         stopped = subprocess.run([str(binary), "stop"], env=env, capture_output=True, text=True,
                                  timeout=20, check=False)
         assert stopped.returncode == 0, stopped.stderr
-        os.kill(bus.child.pid, signal.SIGKILL)
+        os.kill(coordinator, signal.SIGKILL)
+        if bus.child.pid != coordinator:
+            os.kill(bus.child.pid, signal.SIGKILL)
         bus.child.wait(timeout=10)
         os.close(bus.master)
         bus.master = None
@@ -165,6 +174,10 @@ def scenario(binary, root, provider, master, retain_failure=False):
             try:
                 if bus.child is not None and bus.child.poll() is None:
                     os.kill(bus.child.pid, signal.SIGCONT)
+                    try:
+                        os.kill(coordinator_pid(bus), signal.SIGCONT)
+                    except (OSError, ValueError):
+                        pass
             finally:
                 if retain_failure and original_error is not None:
                     complete_restart_fixture(bus, root, evidence, original_error)

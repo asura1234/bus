@@ -12,6 +12,8 @@ mod perf;
 pub(crate) mod restart;
 mod session_pick;
 pub(crate) mod stop;
+#[cfg(unix)]
+mod tui_supervisor;
 use help::print_help;
 use session_pick::{parse_invocation, Action};
 #[cfg(test)]
@@ -99,6 +101,15 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     if let Some(text) = help::subcommand_help(args) {
         help::write_stdout_line(format_args!("{text}"));
         return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        // A supervised TUI must capture its pipe before any child is spawned,
+        // and the shell-facing process must not itself become a TUI.
+        tui_supervisor::capture_worker_handoff_fd();
+        if tui_supervisor::should_supervise(args) {
+            return tui_supervisor::supervise(args);
+        }
     }
     let invocation = match parse_invocation(args) {
         Ok(invocation) => invocation,
