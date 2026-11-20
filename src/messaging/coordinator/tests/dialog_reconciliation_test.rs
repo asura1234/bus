@@ -452,3 +452,172 @@ fn an_unreadable_uncertain_notice_uses_its_write_clock_and_preserves_delivery_un
     ));
     assert!(!text.contains("The dialog state could not be read; the agent may still be blocked."));
 }
+
+#[test]
+fn deleting_blocked_worker_cancels_queued_notice_and_requests() {
+    let (mut f, worker, _, notice) = queued_worker_notice();
+    let mut state = f.worker.state.clone();
+    let room = f.request(notice).room_id;
+    let incoming = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "old review head".into(),
+                files: vec![],
+                recipient_ids: [worker].into(),
+            },
+            Author::Agent(f.agent),
+            crate::messaging::storage::io::now_ms(),
+        )
+        .unwrap()[0];
+    let outgoing = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "old review result".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(worker),
+            crate::messaging::storage::io::now_ms(),
+        )
+        .unwrap()[0];
+    f.worker.save(state).unwrap();
+
+    f.worker.delete_agent(worker, &mpsc::channel().0).unwrap();
+    f.status(RuntimeStatus::Idle);
+    f.deliver();
+
+    assert!(f.worker.state.agent(worker).is_none());
+    assert!(f.worker.state.queued_requests(worker).is_empty());
+    assert_eq!(
+        f.request(incoming).failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
+    assert_eq!(
+        f.request(outgoing).failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
+    assert!(f.request(outgoing).submitted_payload.is_none());
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        f.request(notice).failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
+    assert!(f.typed().iter().all(|(text, _)| {
+        !text.contains(crate::messaging::coordinator::dialogs::BLOCKED_MESSAGE)
+            && !text.contains("old review")
+    }));
+    assert!(!f.worker.dialog_seen.contains_key(&worker));
+}
+
+#[test]
+fn deleting_blocked_worker_cancels_queued_notice_before_native_delivery() {
+    let (mut f, worker, _, notice) = queued_worker_notice();
+    f.worker.delete_agent(worker, &mpsc::channel().0).unwrap();
+    f.status(RuntimeStatus::Idle);
+    f.deliver();
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        f.request(notice).failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
+    assert!(f.typed().iter().all(|(text, _)| {
+        !text.contains(crate::messaging::coordinator::dialogs::BLOCKED_MESSAGE)
+            && !text.contains("old review")
+    }));
+}
+
+#[test]
+fn startup_cancels_legacy_queued_notice_and_send_from_deleted_worker() {
+    let (mut f, worker, _, notice) = queued_worker_notice();
+    let mut state = f.worker.state.clone();
+    let room = f.request(notice).room_id;
+    let outgoing = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "old review result".into(),
+                files: vec![],
+                recipient_ids: [f.agent].into(),
+            },
+            Author::Agent(worker),
+            crate::messaging::storage::io::now_ms(),
+        )
+        .unwrap()[0];
+    let before = serde_json::to_value(&state).unwrap();
+    state.delete_agent(worker, f.now).unwrap();
+    // Reuse the old coordinator's snapshot shape: it removed the worker but
+    // left untouched queued deliveries to the surviving orchestrator.
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy["queues"] = before["queues"].clone();
+    for id in [notice, outgoing] {
+        let key = id.0.to_string();
+        legacy["requests"][&key] = before["requests"][&key].clone();
+    }
+    legacy["requests"][notice.0.to_string()]["prompt"]
+        .as_object_mut()
+        .unwrap()
+        .remove("dialog_subject");
+
+    let resume = f.dir.join("legacy-deletion");
+    std::fs::create_dir(&resume).unwrap();
+    let store = JsonStore::new(resume.join("state.json"));
+    store
+        .save(&serde_json::from_value(legacy).unwrap())
+        .unwrap();
+    f.worker = Worker::open(resume, Box::new(Native(f.native.clone()))).unwrap();
+    assert!(f.worker.state.queued_requests(f.agent).is_empty());
+    for id in [notice, outgoing] {
+        assert_eq!(f.request(id).phase, RequestPhase::Abandoned);
+        assert_eq!(
+            f.request(id).failure_reason.as_deref(),
+            Some("agent_deleted")
+        );
+    }
+}
+
+#[test]
+fn deleting_notice_subject_drains_a_rejected_native_attempt_without_retry() {
+    use crate::messaging::native::{NativeCall, NativeResult};
+
+    struct DeferredNotice {
+        native: Native,
+        receipt: Option<mpsc::Receiver<NativeResult>>,
+    }
+
+    impl Transport for DeferredNotice {
+        fn request(&mut self, method: Method) -> NativeResult {
+            self.native.request(method)
+        }
+
+        fn submit(&mut self, _: Method) -> NativeCall {
+            NativeCall::Pending(self.receipt.take().unwrap())
+        }
+    }
+
+    let (mut f, worker, _, notice) = queued_worker_notice();
+    let (receipt, result) = mpsc::channel();
+    f.worker.transport = Box::new(DeferredNotice {
+        native: Native(f.native.clone()),
+        receipt: Some(result),
+    });
+    f.deliver();
+    assert_eq!(f.request(notice).phase, RequestPhase::Submitting);
+    receipt
+        .send(Err(TransportError {
+            timestamps: Default::default(),
+            message: "the native composer refused the notice".into(),
+            code: None,
+            definitely_rejected: true,
+        }))
+        .unwrap();
+
+    f.worker.delete_agent(worker, &mpsc::channel().0).unwrap();
+    assert!(f.worker.native_submissions.is_empty());
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        f.request(notice).failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
+}

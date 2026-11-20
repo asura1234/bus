@@ -121,10 +121,12 @@ impl BusState {
         for request in requests {
             // Whoever interrupted or deleted the agent ended these requests on purpose;
             // a notice per queued request repeats that decision back to the sender.
-            let expected_end = request.failure_reason.as_deref() == Some(super::INTERRUPTED)
-                || self
-                    .agent(request.agent_id)
-                    .is_none_or(|a| a.deletion_pending);
+            let expected_end = matches!(
+                request.failure_reason.as_deref(),
+                Some(super::INTERRUPTED | super::agents::AGENT_DELETED | "room_deleted")
+            ) || self
+                .agent(request.agent_id)
+                .is_none_or(|a| a.deletion_pending);
             let outcome = self.outcome_to_post(&request, now_ms, expected_end);
             if let Some((class, reason)) = outcome {
                 let idle = request.turn_ended_at_ms.map_or("", |_| "; went idle");

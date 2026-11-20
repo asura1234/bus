@@ -263,6 +263,10 @@ impl BusState {
             Some(room) if room.kind == RoomKind::Master => return Err(ModelError::MasterRoomFixed),
             Some(_) => {}
         }
+        self.rooms
+            .get_mut(&id)
+            .expect("checked room")
+            .deletion_pending = true;
         for agent in self.agents_deleted_with_room(id) {
             self.delete_agent(agent, now_ms)?;
         }
@@ -458,6 +462,7 @@ impl BusState {
             submitted_at_ms: now_ms,
             idle_agent_ids: BTreeSet::new(),
             attention_origin: None,
+            dialog_subject: None,
             in_reply_to: None,
         };
         // The latest prompt is what rings and what the composer recalls, as

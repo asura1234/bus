@@ -96,6 +96,8 @@ pub(crate) struct Prompt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention_origin: Option<super::AttentionOrigin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dialog_subject: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) in_reply_to: Option<Box<super::feishu::InReplyTo>>,
 }
 

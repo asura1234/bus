@@ -1599,3 +1599,52 @@ fn a_latency_replay_with_unallowlisted_native_identity_uses_ordinary_help_withou
 }
 
 include!("automatic_input_test.rs");
+
+#[test]
+fn deleting_between_polls_purges_automatic_dialog_answer() {
+    let (mut worker, _, _, orchestrator, _, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    let master = worker.state.master_room().unwrap().id;
+    let wait = vec![(orchestrator, Some("pending-dialog".into()))];
+    worker.notify_dialogs(wait.clone()).unwrap();
+    let mut state = worker.state.clone();
+    state
+        .reserve_automatic_dialog_answer(orchestrator, "reserved answer".into())
+        .unwrap();
+    worker.save(state).unwrap();
+    worker
+        .delete_agent(orchestrator, &std::sync::mpsc::channel().0)
+        .unwrap();
+
+    assert!(!worker.dialog_seen.contains_key(&orchestrator));
+    worker.notify_dialogs(wait.clone()).unwrap();
+    worker.notify_dialogs(wait).unwrap();
+    assert!(worker.state.room(master).unwrap().notices.is_empty());
+    assert!(worker
+        .store
+        .load()
+        .unwrap()
+        .unwrap()
+        .agent(orchestrator)
+        .is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn deleted_master_orchestrator_attention_is_history_only() {
+    let (mut worker, _, _, orchestrator, _, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    let master = worker.state.master_room().unwrap().id;
+    notify_steady(&mut worker, orchestrator, Some("pending-dialog"));
+    assert_eq!(worker.state.attention_sources().count(), 1);
+
+    worker
+        .delete_agent(orchestrator, &std::sync::mpsc::channel().0)
+        .unwrap();
+    notify_steady(&mut worker, orchestrator, Some("pending-dialog"));
+    assert_eq!(worker.state.attention_sources().count(), 0);
+    assert_eq!(worker.state.notices(master).count(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

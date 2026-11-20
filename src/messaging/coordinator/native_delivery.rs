@@ -1,6 +1,6 @@
 //! Native writes are independent per recipient; all model mutations stay on the coordinator.
 use super::delivery::submission::{native_response_timestamps, record_native_timestamps};
-use super::{AgentId, BusState, RequestId, RoomAgent, Worker};
+use super::{BusState, RequestId, RoomAgent, Worker};
 use crate::messaging::native::{NativeCall, NativeResult, TransportError};
 use crate::protocol::api::schema::Method;
 use std::{sync::mpsc, time::Instant};
@@ -65,7 +65,34 @@ impl Worker {
     /// Shutdown drains writes before releasing the coordinator lease. A restart
     /// sees every uncertain submission durably owned and must never replay it.
     pub(super) fn finish_native_submissions(&mut self, wait: bool) {
-        let ids: Vec<AgentId> = self.native_submissions.keys().copied().collect();
+        self.finish_native_submissions_matching(wait, |_, _| true);
+    }
+
+    /// A native write already admitted before deletion cannot be recalled.
+    /// Drain its receipt before removing either endpoint from the roster.
+    pub(super) fn finish_deleting_submissions(&mut self) {
+        self.finish_native_submissions_matching(true, |state, pending| {
+            state
+                .agent(pending.agent.id)
+                .is_none_or(|agent| agent.deletion_pending)
+                || std::iter::once(pending.request)
+                    .chain(state.group_members(pending.request))
+                    .filter_map(|id| state.request(id))
+                    .any(|request| state.request_source_deleting(request))
+        });
+    }
+
+    fn finish_native_submissions_matching(
+        &mut self,
+        wait: bool,
+        matches: impl Fn(&BusState, &PendingSubmission) -> bool,
+    ) {
+        let ids: Vec<_> = self
+            .native_submissions
+            .iter()
+            .filter(|(_, pending)| matches(&self.state, pending))
+            .map(|(&id, _)| id)
+            .collect();
         for id in ids {
             let Some(pending) = self.native_submissions.get(&id) else {
                 continue;
