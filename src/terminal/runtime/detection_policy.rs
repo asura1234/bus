@@ -737,6 +737,28 @@ mod tests {
     }
 
     #[test]
+    fn codex_static_title_keeps_working_above_tool_output_and_footer() {
+        let captured = include_str!("../../../tests/fixtures/codex-activity/working-room-1.txt");
+        let tool_output = captured.replace(
+            "• Working (2m 38s • esc to interrupt)\n",
+            "• Working (2m 38s • esc to interrupt)\n\n• Ran check\n  └ first line\n    second line\n    + 1 line (⌃t to expand)\n",
+        );
+        for screen in [captured, &tool_output] {
+            let result = published(AgentKind::Codex, screen, "project");
+            assert_eq!(result.state, AgentState::Working, "{screen}");
+            assert!(result.visible_working);
+        }
+
+        let finished = tool_output.replace(
+            "› Ask Codex to do anything",
+            "─ Worked for 2m 39s ─\n\n› Ask Codex to do anything",
+        );
+        let result = published(AgentKind::Codex, &finished, "project");
+        assert_eq!(result.state, AgentState::Idle);
+        assert!(!result.visible_working);
+    }
+
+    #[test]
     fn codex_tool_output_shortcuts_do_not_create_a_dialog() {
         const OUTPUT: &str =
             "• Ran cat docs/help.md\n  └ Ctrl+Enter     Confirm form\n    Esc            Cancel";

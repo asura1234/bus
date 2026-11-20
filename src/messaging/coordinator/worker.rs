@@ -749,7 +749,12 @@ impl Worker {
             }
             changed |= state.settle_unclaimed_steering(agent, observed_at_ms, recorded_end);
             changed |= state
-                .settle_ended_request(agent, observed_at_ms, recorded_end)
+                .settle_ended_request_with_codex_progress(
+                    agent,
+                    observed_at_ms,
+                    recorded_end,
+                    |request| codex_settlement::recorded_codex_progress(rollout?, request),
+                )
                 .is_some();
         }
         if changed {

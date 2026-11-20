@@ -1,12 +1,22 @@
 //! Bound a never-Working turn without treating a stale screen as an end.
-use super::{AgentId, BusState, RecordedTurnEnd, RequestId, RequestPhase, RuntimeStatus};
-use crate::messaging::model::types::BoundTurnActivity;
+use super::{AgentId, BusState, RecordedTurnEnd, Request, RequestId, RequestPhase, RuntimeStatus};
+use crate::messaging::model::{types::BoundTurnActivity, Provider};
 
 // Larger than the full 17.9s measured real Codex resume, and the subsecond
 // stale Idle gaps. A real Working observation disables this bound entirely.
 const BOUND_IDLE_MS: u64 = 30_000;
+const CODEX_IDLE_EVIDENCE_WAIT_MS: u64 = 300_000;
 
 impl BusState {
+    pub(crate) fn settle_ended_request(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+        recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
+    ) -> Option<RequestId> {
+        self.settle_ended_request_with_codex_progress(agent, now_ms, recorded_end, |_| None)
+    }
+
     pub(crate) fn observe_bound_turn_activity(
         &mut self,
         agent: AgentId,
@@ -60,7 +70,7 @@ impl BusState {
         now_ms: u64,
     ) -> Option<RequestId> {
         let owner = self.agents.get(&agent)?;
-        if owner.provider == crate::messaging::model::Provider::Agy
+        if owner.provider == Provider::Agy
             || owner.status != RuntimeStatus::Idle
             || owner.working_directory_error.is_some()
             || owner.dialog
@@ -98,6 +108,57 @@ impl BusState {
         (now_ms >= deadline && owner.observed_at_ms >= deadline).then_some(request.id)
     }
 
+    pub(super) fn reconcile_idle_bound_turn(
+        &mut self,
+        agent: AgentId,
+        id: RequestId,
+        now_ms: u64,
+        recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
+        codex_progress_at: impl FnOnce(&Request) -> Option<u64>,
+    ) -> Option<RequestId> {
+        let request = self.requests.get(&id)?;
+        let codex = self.agents.get(&agent)?.provider == Provider::Codex;
+        let normal_boundary = codex && self.settle_candidate(agent).is_some();
+        let progress = if codex && !normal_boundary {
+            codex_progress_at(request)
+        } else {
+            None
+        };
+        let recorded = recorded_end(request);
+        if recorded.is_none() && codex {
+            if normal_boundary {
+                return self.settle_recorded_boundary(agent, now_ms, |_| None);
+            }
+            if !self.codex_idle_evidence_wait_elapsed(request, now_ms, progress) {
+                return None;
+            }
+        }
+        self.settle_idle_bound_turn(agent, id, now_ms, recorded)
+    }
+
+    fn codex_idle_evidence_wait_elapsed(
+        &self,
+        request: &Request,
+        now_ms: u64,
+        progress: Option<u64>,
+    ) -> bool {
+        let Some(owner) = self.agents.get(&request.agent_id) else {
+            return false;
+        };
+        let Some(activity) = &request.bound_turn_activity else {
+            return false;
+        };
+        let Some(idle_since) = activity.idle_since_ms else {
+            return false;
+        };
+        let since = idle_since
+            .max(owner.status_since_ms)
+            .max(activity.started_at_ms)
+            .max(progress.filter(|at| *at <= now_ms).unwrap_or(0));
+        let deadline = since.saturating_add(CODEX_IDLE_EVIDENCE_WAIT_MS);
+        now_ms >= deadline && owner.observed_at_ms >= deadline
+    }
+
     pub(super) fn settle_idle_bound_turn(
         &mut self,
         agent: AgentId,
@@ -128,7 +189,12 @@ impl BusState {
             self.requests.get_mut(&id)?.uncertain_outcome = true;
         }
         if let Some(owner) = self.agents.get_mut(&agent) {
-            owner.actionable_error = Some("Turn end unconfirmed after 30 seconds of Idle with no accepted final or Working observation after Started. Provider records did not prove completion; unanswered requests have an uncertain outcome. Queue released. Inspect its terminal before resending.".into());
+            let elapsed = if owner.provider == Provider::Codex {
+                "the Codex liveness window"
+            } else {
+                "30 seconds of Idle"
+            };
+            owner.actionable_error = Some(format!("Turn end unconfirmed after {elapsed} with no accepted final or Working observation after Started. Provider records did not prove completion; unanswered requests have an uncertain outcome. Queue released. Inspect its terminal before resending."));
         }
         Some(id)
     }

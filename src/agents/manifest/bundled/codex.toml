@@ -96,10 +96,10 @@ not = [{ contains = ["■ Conversation interrupted"] }]
 id = "screen_working_with_tip"
 state = "working"
 priority = 500
-# A native tip can sit between the spinner and the three-row composer footer.
-region = "bottom_non_empty_lines(5)"
+# Native tips, command output and warnings can sit above the current footer.
+region = "bottom_non_empty_lines(16)"
 visible_working = true
-regex = ['(?m)^[•◦][ \t]+Working \([^\r\n)]*esc to interrupt\)(?: · [^\r\n]*)?\r?\n[ \t]+└ Tip:[^\r\n]*\r?\n(?:[ \t]*\r?\n)*[ \t]*›[^\r\n]*\r?\n(?:[ \t]*\r?\n)*[ \t]*(?:GPT|gpt)-[^\r\n]+ · [^\r\n]+\r?\n[ \t]*(?:\? for shortcuts|← for agents)[^\r\n]*\s*\z']
+regex = ['(?m)^[•◦][ \t]+Working \([^\r\n)]*esc to interrupt\)(?: · [^\r\n]*)?\r?\n(?:[ \t]*\r?\n|[ \t]+(?:└ Tip:|⚠)[^\r\n]*\r?\n|[•◦][ \t]+(?:Ran|Running)[ \t]+[^\r\n]*\r?\n(?:[ \t]+└[^\r\n]*\r?\n(?:[ \t]{4,}[^\r\n]*\r?\n)*)?)*[ \t]*›[^\r\n]*\r?\n(?:[ \t]*\r?\n)*[ \t]*(?:GPT|gpt)-[^\r\n]+ · [^\r\n]+\r?\n[ \t]*(?:\? for shortcuts|← for agents)[^\r\n]*\s*\z']
 
 [[rules]]
 id = "osc_title_idle"

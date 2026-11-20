@@ -60,6 +60,48 @@ fn read_rollout_tail(path: &Path) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&tail).into_owned())
 }
 
+pub(crate) fn read_codex_turn_activity(path: &Path, turn_id: &str) -> std::io::Result<Option<u64>> {
+    if turn_id.is_empty() {
+        return Ok(None);
+    }
+    let tail = read_rollout_tail(path)?;
+    let mut owned_open = false;
+    let mut latest_progress = None;
+    for event in tail
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    {
+        let payload = &event["payload"];
+        let event_turn = payload["turn_id"].as_str();
+        let at = || event["timestamp"].as_str().and_then(rfc3339_ms);
+        match (event["type"].as_str(), payload["type"].as_str()) {
+            (Some("event_msg"), Some("task_started")) => {
+                owned_open = event_turn == Some(turn_id);
+                latest_progress = if owned_open { at() } else { None };
+            }
+            (Some("event_msg"), Some("task_complete" | "turn_aborted"))
+                if event_turn.is_none() || event_turn == Some(turn_id) =>
+            {
+                owned_open = false;
+                latest_progress = None;
+            }
+            (Some("event_msg"), Some("item_completed"))
+                if owned_open && event_turn == Some(turn_id) =>
+            {
+                latest_progress = latest_progress.max(at());
+            }
+            (
+                Some("response_item"),
+                Some("function_call" | "custom_tool_call" | "local_shell_call"),
+            ) if owned_open && (event_turn.is_none() || event_turn == Some(turn_id)) => {
+                latest_progress = latest_progress.max(at());
+            }
+            _ => {}
+        }
+    }
+    Ok(latest_progress)
+}
+
 /// How a completed Codex turn ended, from its rollout.
 #[derive(Debug, PartialEq)]
 pub(crate) enum CodexTurnEnd {
