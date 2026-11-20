@@ -217,8 +217,15 @@ impl BusState {
         let Some(record) = self.current_launch_attempt(agent) else {
             return;
         };
-        let deadline = started_at_ms
-            .saturating_add(crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64);
+        let window = self
+            .agent(agent)
+            .and_then(|agent| {
+                let startup = agent.startup.as_ref()?;
+                (startup.started_at_ms == started_at_ms)
+                    .then(|| startup.readiness_timeout_ms(agent))
+            })
+            .unwrap_or(crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64);
+        let deadline = started_at_ms.saturating_add(window);
         if record.outcome != LaunchOutcome::Pending || record.deadline_at_ms == deadline {
             return;
         }

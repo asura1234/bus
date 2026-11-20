@@ -338,12 +338,12 @@ impl Worker {
                 },
             ))
             .map_err(|e| e.message)?;
+        state
+            .set_agent_startup(id, None)
+            .map_err(|e| e.to_string())?;
         identity.session_id = Some(session.clone());
         state
             .set_agent_runtime_identity(id, identity)
-            .map_err(|e| e.to_string())?;
-        state
-            .set_agent_startup(id, None)
             .map_err(|e| e.to_string())?;
         if agent.session_reset_pending {
             // A reset agent that had no session yet binds its first one here.

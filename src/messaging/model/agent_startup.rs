@@ -1,5 +1,34 @@
 //! Startup recovery and closure of never-submitted queued work.
-use super::{AgentId, BusState, ModelError, RequestPhase, StartupFailure};
+use super::{
+    AgentId, AgentStartup, BusState, ModelError, RequestPhase, RoomAgent, StartupFailure,
+    StartupRecovery,
+};
+
+const INITIAL_STARTUP_GRACE_MS: u64 = 90_000;
+const STARTUP_TIMEOUT_MS: u64 = crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
+
+impl AgentStartup {
+    pub(crate) fn initial_sessionless(&self, agent: &RoomAgent) -> bool {
+        agent.runtime_identity.session_id.is_none()
+            && self.native_terminal_id.is_none()
+            && !matches!(
+                self.recovery,
+                Some(StartupRecovery::CodexBootstrap { attempts: 1.., .. })
+            )
+    }
+
+    pub(crate) fn readiness_timeout_ms(&self, agent: &RoomAgent) -> u64 {
+        if self.initial_sessionless(agent) {
+            INITIAL_STARTUP_GRACE_MS
+        } else {
+            STARTUP_TIMEOUT_MS
+        }
+    }
+
+    pub(super) fn holds_queued_work(&self, agent: &RoomAgent) -> bool {
+        self.reported || self.recovery.is_some() || agent.runtime_identity.session_id.is_none()
+    }
+}
 
 impl StartupFailure {
     pub(crate) const TIMEOUT: &str = "startup_timeout";
@@ -24,7 +53,7 @@ impl BusState {
             && agent
                 .startup
                 .as_ref()
-                .is_some_and(|s| s.reported || s.recovery.is_some())
+                .is_some_and(|startup| startup.holds_queued_work(agent))
         {
             // Like closing a dialog, readiness gives held work a fresh idle
             // interval even if the runtime remained Idle throughout the hold.

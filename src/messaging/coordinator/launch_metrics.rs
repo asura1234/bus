@@ -197,6 +197,13 @@ fn failure_cause(
     if fresh_exit {
         return Some("unavailable_at_launch");
     }
+    if agent
+        .startup
+        .as_ref()
+        .is_some_and(|startup| !startup.reported && startup.initial_sessionless(agent))
+    {
+        return None;
+    }
     if now < record.deadline_at_ms || record.dialog_wait_started_at_ms.is_some() {
         return None;
     }

@@ -5,9 +5,6 @@ use crate::messaging::{
     model::{AgentStartup, StartupFailure, StartupRecovery},
 };
 
-pub(super) const STARTUP_TIMEOUT_MS: u64 =
-    crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
-const INITIAL_STARTUP_GRACE_MS: u64 = 90_000;
 const SCREEN_LINES: u32 = 6;
 
 fn startup_failure(
@@ -307,18 +304,8 @@ impl Worker {
                 continue;
             }
             let name = identity::managed_name(agent.room_id, agent.id);
-            let sessionless = agent.runtime_identity.session_id.is_none();
-            let new_conversation = sessionless && startup.native_terminal_id.is_none();
-            let initial_sessionless = new_conversation
-                && !matches!(
-                    startup.recovery,
-                    Some(StartupRecovery::CodexBootstrap { attempts: 1.., .. })
-                );
-            let timeout_ms = if initial_sessionless {
-                INITIAL_STARTUP_GRACE_MS
-            } else {
-                STARTUP_TIMEOUT_MS
-            };
+            let initial_sessionless = startup.initial_sessionless(&agent);
+            let timeout_ms = startup.readiness_timeout_ms(&agent);
             let terminal_info = infos.iter().find(|info| {
                 Some(info.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
                     && Some(info.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
@@ -465,7 +452,7 @@ impl Worker {
         );
         let new_conversation = sessionless && startup.native_terminal_id.is_none();
         let mut failure = startup_failure(
-            new_conversation.then_some(cause),
+            (new_conversation || cause == StartupFailure::NATIVE_RESUME).then_some(cause),
             &reason,
             &evidence,
             sessionless,

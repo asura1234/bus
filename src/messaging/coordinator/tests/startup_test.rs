@@ -253,6 +253,62 @@ fn exited_startup_transport(dir: &std::path::Path) -> Box<dyn Transport> {
 }
 
 #[test]
+fn non_codex_sessionless_readiness_refreshes_idle_window_before_delivery() {
+    let mut ready = native_info("pane", "kimi", "session");
+    ready.native_ready = true;
+    ready.interactive_ready = true;
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::Kimi,
+        vec![Ok(ResponseResult::AgentPrompted {
+            agent: ready.clone(),
+            timestamps: Default::default(),
+        })],
+    );
+    let now = io::now_ms();
+    let old = now - crate::messaging::model::QUEUED_STALL_MS - 1;
+    let mut state = worker.state.clone();
+    let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    state.set_agent_runtime_identity(agent, identity).unwrap();
+    state.set_draft_text(room, "held until verified").unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    let request = state.submit_draft(room, old).unwrap()[0];
+    state
+        .observe_status(agent, RuntimeStatus::Idle, now)
+        .unwrap();
+    worker.save(state).unwrap();
+    worker
+        .watch_agent_startup(agent, vec!["kimi".into()])
+        .unwrap();
+    worker.expire_queued_requests(now).unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    ready.agent_session = None;
+    worker
+        .cleanup_failed_startups(&[ready], &mpsc::channel().0, now)
+        .unwrap();
+    assert_eq!(worker.state.agent(agent).unwrap().status_since_ms, now);
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| method.starts_with("agent.prompt"))
+            .count(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn slow_sessionless_codex_delivers_once_after_owned_interactive_confirmation() {
     let mut ready = native_info("pane", "codex", "session");
     ready.native_ready = true;
@@ -654,7 +710,20 @@ fn interactive_codex_without_session_or_hook_is_not_a_failed_startup() {
 
 #[test]
 fn startup_hook_consumed_before_cleanup_wins_over_an_expired_poll_snapshot() {
-    let (mut worker, agent, _, dir) = pending(Provider::ClaudeCode);
+    let (mut worker, agent, room, dir) = pending(Provider::ClaudeCode);
+    let now = io::now_ms();
+    let old = now - crate::messaging::model::QUEUED_STALL_MS - 1;
+    let mut state = worker.state.clone();
+    state
+        .set_draft_text(room, "held until session start")
+        .unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    let request = state.submit_draft(room, old).unwrap()[0];
+    state
+        .observe_status(agent, RuntimeStatus::Idle, now)
+        .unwrap();
+    assert!(state.agent(agent).unwrap().status_since_ms <= old);
+    worker.save(state).unwrap();
     record(
         &dir,
         Provider::ClaudeCode,
@@ -667,11 +736,25 @@ fn startup_hook_consumed_before_cleanup_wins_over_an_expired_poll_snapshot() {
         state_path: dir.join("state.json"),
     });
     consume(&mut worker, agent, &dir);
-    assert!(worker.state.agent(agent).unwrap().startup.is_none());
+    let saved = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    let bound = saved.agent(agent).unwrap();
+    assert!(bound.startup.is_none());
+    assert_eq!(
+        bound.runtime_identity.session_id.as_deref(),
+        Some("session")
+    );
+    assert_eq!(bound.status_since_ms, now);
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, u64::MAX)
         .unwrap();
-    assert!(worker.state.agent(agent).is_some());
+    worker.expire_queued_requests(now).unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

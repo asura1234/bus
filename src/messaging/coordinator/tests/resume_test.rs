@@ -264,9 +264,28 @@ impl Transport for RejectedResume {
 }
 
 #[test]
-fn restart_resume_rejection_surfaces_error_and_abandons_queued_work() {
+fn native_resume_failure_reaches_durable_request_status_and_sender() {
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
-    let request = queue(&mut worker, room, agent, "retained task");
+    let mut state = worker.state.clone();
+    let master = state.master_room().unwrap().id;
+    let sender = state
+        .create_agent(master, "sender", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    state.bind_orchestrator(sender, room).unwrap();
+    let request = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "retained task".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Agent(sender),
+            io::now_ms(),
+            true,
+        )
+        .unwrap()[0];
+    worker.save(state).unwrap();
     let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
     drop(worker);
     let mut worker = Worker::open(dir.clone(), Box::new(RejectedResume)).unwrap();
@@ -293,9 +312,10 @@ fn restart_resume_rejection_surfaces_error_and_abandons_queued_work() {
     let closed = worker.state.request(request).unwrap();
     assert_eq!(
         closed.failure_reason.as_deref(),
-        Some("agent_startup_failed")
+        Some("native_resume_failed")
     );
     let detail = closed.submission_error.clone().unwrap();
+    let message = closed.prompt.id;
     assert!(
         detail.contains("recreate") && detail.contains("Resend"),
         "{detail}"
@@ -304,7 +324,7 @@ fn restart_resume_rejection_surfaces_error_and_abandons_queued_work() {
     assert!(closed.submission_boundary.is_none());
     assert!(failed.startup.as_ref().unwrap().reported);
     drop(worker);
-    let worker = Worker::open(dir.clone(), Box::new(RejectedResume)).unwrap();
+    let mut worker = Worker::open(dir.clone(), Box::new(RejectedResume)).unwrap();
     assert!(
         worker
             .state
@@ -325,9 +345,22 @@ fn restart_resume_rejection_surfaces_error_and_abandons_queued_work() {
     assert_eq!(closed.phase, RequestPhase::Abandoned);
     assert_eq!(
         closed.failure_reason.as_deref(),
-        Some("agent_startup_failed")
+        Some("native_resume_failed")
     );
     assert_eq!(closed.submission_error.as_deref(), Some(detail.as_str()));
+    let status = worker.control_message_at(message, io::now_ms()).unwrap();
+    assert_eq!(status["requests"][0]["reason"], "native_resume_failed");
+    assert_eq!(status["requests"][0]["detail"], detail);
+    worker.state.retain_worker_outcomes(io::now_ms());
+    let events = worker
+        .state
+        .worker_events_for(worker.state.request(request).unwrap());
+    assert!(
+        events
+            .iter()
+            .any(|(_, text)| text.contains("native_resume_failed") && text.contains("Resend")),
+        "{events:?}"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
