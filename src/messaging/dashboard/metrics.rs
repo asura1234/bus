@@ -465,6 +465,9 @@ pub(super) fn room_label(state: &BusState, id: RoomId) -> String {
         .unwrap_or_else(|| format!("Room {} [deleted]", id.0))
 }
 
+/// Test helper for a dashboard with no reset baseline. The bin build does
+/// not call it; production always passes the stored baseline.
+#[cfg(test)]
 pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dashboard {
     snapshot_since(state, clock, None)
 }
