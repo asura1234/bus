@@ -350,7 +350,7 @@ fn an_undelivered_blocked_notice_keeps_its_failure_and_reaches_the_developer_onc
     );
     assert_eq!(
         notice.failure_reason.as_deref(),
-        Some("hook_setup_unconfirmed")
+        Some("dialog_notice_undelivered")
     );
     assert!(notice.completed_at_ms.is_some());
     let fallback = blocked.clone();

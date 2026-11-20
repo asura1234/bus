@@ -397,7 +397,10 @@ fn a_queued_message_refused_by_the_input_box_recovers_with_that_reason() {
 
 #[test]
 fn a_queued_message_without_a_refusal_recovers_with_the_wait_reason() {
-    let (state, agent, request) = idle_with_queued(1_000, "go");
+    let (mut state, agent, request) = idle_with_queued(1_000, "go");
+    // Confirmed hooks and an idle provider are an ordinary delivery opportunity.
+    // A launch or consent wait is not this refusal.
+    state.confirm_hook_setup(agent).unwrap();
     let expected = state
         .agent(agent)
         .unwrap()

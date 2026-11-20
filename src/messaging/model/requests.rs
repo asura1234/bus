@@ -7,6 +7,7 @@ use super::{
 };
 
 mod latency;
+mod launch_hold;
 mod policy;
 mod queue_order;
 mod rejection;
@@ -296,16 +297,10 @@ impl BusState {
             {
                 None
             }
-            // A recoverable startup wait has no submission opportunity.
-            // Conclusive failures close their queue when recorded or enqueued.
-            RequestPhase::Queued
-                if agent
-                    .startup
-                    .as_ref()
-                    .is_some_and(|s| s.reported || s.recovery.is_some()) =>
-            {
-                None
-            }
+            // Startup owns this queue. Its watcher closes it on exit, a
+            // rejected start, or the startup deadline, with that cause.
+            // Queue stall must not replace the cause with a consent wait.
+            RequestPhase::Queued if agent.startup.is_some() => None,
             // The owned turn occupies delivery even when its composer is Idle.
             // Its settlement (or unconfirmed-write bound) releases this queue;
             // waiting behind it is not a failed submission opportunity.
@@ -315,21 +310,20 @@ impl BusState {
             {
                 None
             }
-            RequestPhase::Queued => since(
-                QUEUED_STALL_MS,
-                lead.prompt
+            RequestPhase::Queued => {
+                let agent_id = agent.id;
+                let from = lead
+                    .prompt
                     .submitted_at_ms
                     .max(lead.progress_at_ms.unwrap_or(0))
                     .max(agent.status_since_ms)
-                    .max(self.last_progress_ms(lead.agent_id)),
-            )
-            .then(|| {
-                agent
-                    .delivery_rejection
-                    .clone()
-                    .or_else(|| agent.wait_reason().map(Into::into))
-                    .unwrap_or_else(|| "not_submitted".into())
-            }),
+                    .max(self.last_progress_ms(agent_id));
+                if !since(QUEUED_STALL_MS, from) {
+                    None
+                } else {
+                    self.queued_stall_reason(agent_id)
+                }
+            }
             RequestPhase::Submitting => {
                 let progress = lead
                     .progress_at_ms
