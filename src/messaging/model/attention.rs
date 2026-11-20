@@ -116,6 +116,7 @@ impl BusState {
             submitted_at_ms: now_ms,
             idle_agent_ids: Default::default(),
             attention_origin: Some(origin),
+            dialog_subject: None,
             in_reply_to: None,
         };
         room.latest_prompt = Some(prompt.clone());
@@ -216,6 +217,7 @@ impl BusState {
             .filter_map(move |notice| {
                 if !self.is_developer_attention_author(master?, &notice.author)
                     || crate::messaging::attention::text(&notice.text).is_none()
+                    || self.stale_dialog_notice(master?, notice)
                 {
                     return None;
                 }
