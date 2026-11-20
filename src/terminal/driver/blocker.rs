@@ -422,15 +422,16 @@ fn controls(rows: &[String]) -> Option<Controls> {
                 }
                 continue;
             }
-            // A cancel-only label can be the last visible transcript row.
-            // Require a current menu before treating it as an input shortcut.
-            if kind == ControlKind::Cancel && !menu.as_ref().is_some_and(|menu| menu.end <= start) {
-                continue;
-            }
             if tail_clear(rows, finish + 1, end, menu.as_ref(), &hint) {
                 let menu = menu
                     .clone()
                     .filter(|menu| tail_clear(rows, menu.end, end, None, &hint));
+                // A cancel-only label can be the last visible transcript row.
+                // Require a current menu before treating it as an input shortcut.
+                if kind == ControlKind::Cancel && menu.as_ref().is_none_or(|menu| menu.end > start)
+                {
+                    continue;
+                }
                 return Some(Controls {
                     kind: ControlKind::Foreground,
                     end: finish,

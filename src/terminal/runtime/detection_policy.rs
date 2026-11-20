@@ -785,10 +785,17 @@ mod tests {
 
     #[test]
     fn cancel_only_shortcut_with_focused_menu_stays_blocked() {
-        let screen = "Choose capture mode\n› Plain screen\n  ANSI screen\nEsc to cancel";
-        let result = published(AgentKind::Codex, screen, "⠋ project");
-        assert_eq!(result.state, AgentState::Blocked);
-        assert!(result.visible_blocker);
+        let menu = "Choose capture mode\n› Plain screen\n  ANSI screen";
+        for (screen, state) in [
+            (format!("{menu}\nEsc to cancel"), AgentState::Blocked),
+            (
+                format!("{menu}\n\nTranscript resumed\nEsc to cancel"),
+                AgentState::Working,
+            ),
+        ] {
+            let result = published(AgentKind::Codex, &screen, "⠋ project");
+            assert_eq!(result.state, state, "{screen}");
+        }
     }
 
     #[test]
