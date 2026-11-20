@@ -370,6 +370,16 @@ fn external(reason: &str) -> bool {
     crate::messaging::model::classify_request_failure(reason).is_external()
 }
 
+/// Pickup latency is interrupt sends only. Steer joins a running turn and
+/// queue waits for the next one, so those waits are not samples. An unset
+/// mode is the historical interrupt default. A steered record with no mode
+/// is steer (`Request::history_send_mode`).
+fn counts_toward_pickup_latency(request: &Request) -> bool {
+    request
+        .history_send_mode()
+        .is_none_or(|mode| mode == crate::messaging::model::SendMode::Interrupt)
+}
+
 #[derive(Default)]
 struct SeriesBuilder {
     counts: Counts,
@@ -400,8 +410,10 @@ impl SeriesBuilder {
             .or_insert_with(|| (hour.label.clone(), Counts::default()))
             .1
             .add(request, outcome);
-        if let Some(ms) = super::latency::accepted_to_picked_ms(request) {
-            self.accepted_to_picked.push(ms);
+        if counts_toward_pickup_latency(request) {
+            if let Some(ms) = super::latency::accepted_to_picked_ms(request) {
+                self.accepted_to_picked.push(ms);
+            }
         }
     }
     fn finish(self) -> Series {
