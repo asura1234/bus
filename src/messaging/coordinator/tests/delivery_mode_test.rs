@@ -538,6 +538,52 @@ fn room_composer_developer_send_interrupts_the_running_turn() {
 }
 
 #[test]
+fn composer_modes_steer_or_wait_without_stopping_a_running_turn() {
+    use crate::messaging::model::SendDelivery;
+
+    for mode in [SendDelivery::Steer, SendDelivery::Queue] {
+        let mut fixture = Fixture::new(Provider::ClaudeCode);
+        let lead = running(&mut fixture, "write the parser", "1");
+        let draft = Draft {
+            text: "also add tests".into(),
+            recipient_ids: [fixture.agent].into(),
+            ..Draft::default()
+        };
+        fixture
+            .worker
+            .command(
+                BusCommand::SubmitWithMode(fixture.room, draft, mode),
+                &mpsc::channel().0,
+            )
+            .unwrap();
+        assert!(stop_keys(&fixture).is_empty(), "{mode:?}");
+        let [request] = fixture.worker.state.queued_requests(fixture.agent) else {
+            panic!("expected a single composer request for {mode:?}");
+        };
+        let request = *request;
+        let persisted = fixture.worker.store.load().unwrap().unwrap();
+        assert_eq!(
+            persisted.request(request).unwrap().queue_only,
+            mode == SendDelivery::Queue
+        );
+
+        fixture.deliver();
+        if mode == SendDelivery::Steer {
+            assert_typed(&fixture, "also add tests", true);
+            assert_eq!(fixture.request(request).group, Some(lead));
+        } else {
+            assert_eq!(fixture.typed().len(), 1, "queue must wait for the lead");
+            assert_eq!(fixture.request(request).group, None);
+            fixture.stopped("1", "parser written");
+            fixture.consume();
+            fixture.status(RuntimeStatus::Idle);
+            fixture.deliver();
+            assert_typed(&fixture, "also add tests", false);
+        }
+    }
+}
+
+#[test]
 fn the_room_composer_interrupts_the_running_turn_for_either_key() {
     // Enter and Option/Alt+Enter both send the developer's message; neither
     // key can weaken it back to steer or queue.

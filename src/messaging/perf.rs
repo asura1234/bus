@@ -60,6 +60,7 @@ pub(crate) fn command_name(command: &super::coordinator::BusCommand) -> &'static
         C::RemoveFile(..) => "remove_file",
         C::Submit(..) => "submit",
         C::SubmitQueued(..) => "submit_queued",
+        C::SubmitWithMode(..) => "submit_with_mode",
         C::SetDetails(..) => "set_details",
         C::AddAgent(_) => "add_agent",
         C::AddOrchestrator(..) => "add_orchestrator",

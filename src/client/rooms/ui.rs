@@ -93,6 +93,7 @@ pub(in crate::client) struct BusUi {
     pub(super) deletion: Option<super::deletion::DeleteDialog>,
     pub(super) rename: Option<Rename>,
     pub(super) recipient_menu: bool,
+    pub(super) delivery_menu: Option<crate::messaging::model::SendDelivery>,
     pub(super) recipient_index: usize,
     pub(super) suggestions: Suggestions,
     pub(super) view: View,
@@ -214,6 +215,7 @@ impl BusUi {
             deletion: None,
             rename: None,
             recipient_menu: false,
+            delivery_menu: None,
             recipient_index: 0,
             suggestions: Suggestions::default(),
             view: View::default(),
@@ -337,7 +339,7 @@ impl BusUi {
             (Effect::Text(a,_),Effect::Text(b,_)) | (Effect::Recipients(a,_),Effect::Recipients(b,_)) if a==b));
         let id = self.next_id;
         self.next_id += 1;
-        if let BusCommand::Submit(room, _) | BusCommand::SubmitQueued(room, _) = &command {
+        if let Some(room) = command.submission_room() {
             tracing::info!(
                 event = "bus.message.submit",
                 room_id = room.0,
@@ -411,10 +413,7 @@ impl BusUi {
                         .retain(|origin| origin.id != command_id);
                 }
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == command_id) {
-                    if matches!(
-                        pending.command,
-                        BusCommand::Submit(..) | BusCommand::SubmitQueued(..)
-                    ) {
+                    if pending.command.submission_room().is_some() {
                         let enter_to_ack_ms = self
                             .submissions
                             .iter()

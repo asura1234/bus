@@ -5,37 +5,8 @@ use super::{
     Draft, ModelError, PathBuf, PromptId, Request, RequestId, RequestPhase, Response, RoomId,
     RuntimeStatus, Worker,
 };
+use crate::messaging::model::SendDelivery;
 use serde_json::{json, Value};
-
-/// What `message.send` does with a recipient that is running a turn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SendDelivery {
-    /// End the running turn now with the provider's stop key; the message is
-    /// the next turn.
-    Interrupt,
-    /// Join the running turn when the queue head is eligible, else wait.
-    Steer,
-    /// Wait for the next turn and never join the running one.
-    Queue,
-}
-
-impl SendDelivery {
-    fn parse(value: &Value) -> Result<Self, String> {
-        match value.as_str() {
-            Some("interrupt") => Ok(Self::Interrupt),
-            Some("steer") => Ok(Self::Steer),
-            Some("queue") => Ok(Self::Queue),
-            Some(other) => Err(format!(
-                "--mode must be interrupt, steer or queue, not {other:?}"
-            )),
-            None => Err("--mode must be interrupt, steer or queue".into()),
-        }
-    }
-
-    fn queue_only(self) -> bool {
-        matches!(self, Self::Interrupt | Self::Queue)
-    }
-}
 
 impl Worker {
     pub(super) fn execute_messages(
@@ -279,7 +250,7 @@ impl Worker {
 
     /// Resolve who may choose a delivery mode.
     ///
-    /// The developer's messages always interrupt and cannot be weakened. An
+    /// Developer sends through this control command always interrupt. An
     /// orchestrator may choose `--mode`; without it, today's steer-or-queue
     /// delivery is unchanged. Other agents keep that default and cannot
     /// interrupt a turn. `--queue` stays the legacy spelling of `--mode queue`.

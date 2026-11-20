@@ -7,6 +7,7 @@ use super::super::{
     thumbnails::Placement,
     BusUi, ComposerSize, LocalRoom,
 };
+use super::delivery_mode::{delivery_pill, delivery_pill_width};
 use super::dialogs::{search_panel, SEARCH_BOX_HEIGHT};
 use super::sidebar::message_name_color;
 use super::text::{display, wrap};
@@ -137,6 +138,9 @@ impl BusUi {
         }
         self.file_detail_view(view, layout);
         self.recipient_menu_view(view, room, local);
+        if let Some(mode) = self.delivery_menu {
+            view.delivery_menu(mode);
+        }
     }
 
     fn recipient_layout(&self, local: &LocalRoom, width: u16) -> RecipientLayout {
@@ -147,7 +151,7 @@ impl BusUi {
                     .agent(*id)
                     .map(|agent| (agent.id, agent.name.as_str()))
             }),
-            width,
+            width.saturating_sub(delivery_pill_width(width)),
         )
     }
 
@@ -447,15 +451,34 @@ impl BusUi {
             ..
         } = layout;
         let controls_y = composer_y + u16::from(bar_height > 1);
+        let pill_width = delivery_pill_width(width);
+        let pill = Rect::new(
+            x,
+            controls_y,
+            pill_width.saturating_sub(1).max(1).min(pill_width),
+            1,
+        );
+        delivery_pill(view, pill, local.delivery, self.delivery_menu.is_some());
+        let x = x + pill_width;
+        let width = width.saturating_sub(pill_width);
         view.row(
-            Rect::new(x, controls_y, 3, 1),
+            Rect::new(x, controls_y, width.min(3), 1),
             "+",
             Some(Action::Files),
             false,
             false,
         );
         view.row(
-            Rect::new(x + 3, controls_y, width.saturating_sub(3), 1),
+            Rect::new(
+                x + 3,
+                controls_y,
+                if local.recipients.is_empty() {
+                    width.saturating_sub(3)
+                } else {
+                    width.saturating_sub(3).min(3)
+                },
+                1,
+            ),
             if local.recipients.is_empty() {
                 "@  Choose agents"
             } else {
@@ -511,7 +534,10 @@ impl BusUi {
             view.composer,
             &local.text,
             Some(Action::Composer),
-            !self.recipient_menu && self.rename.is_none() && self.chat_search.is_none(),
+            !self.recipient_menu
+                && self.delivery_menu.is_none()
+                && self.rename.is_none()
+                && self.chat_search.is_none(),
             local.composer_scroll,
             self.view.composer_scroll,
         );

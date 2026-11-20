@@ -478,10 +478,7 @@ impl Worker {
                 }
                 Ok((id, command)) => {
                     self.active_command_id = id;
-                    let submitting = matches!(
-                        command,
-                        BusCommand::Submit(..) | BusCommand::SubmitQueued(..)
-                    );
+                    let submitting = command.submission_room().is_some();
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
                     let name = perf::command_name(&command);
                     let started = std::time::Instant::now();

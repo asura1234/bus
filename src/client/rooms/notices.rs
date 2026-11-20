@@ -261,7 +261,8 @@ pub(super) fn command_room(command: &BusCommand) -> Option<RoomId> {
         | BusCommand::AttachFile(room, _)
         | BusCommand::RemoveFile(room, _)
         | BusCommand::Submit(room, _)
-        | BusCommand::SubmitQueued(room, _) => Some(*room),
+        | BusCommand::SubmitQueued(room, _)
+        | BusCommand::SubmitWithMode(room, _, _) => Some(*room),
         BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _) => Some(input.room),
         _ => None,
     }

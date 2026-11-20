@@ -181,13 +181,14 @@ message as the next turn; `steer` joins the running turn and surfaces at its
 next model step; `queue` waits for the turn to end. Interrupt discards
 in-flight work, so use it to change course, never to hurry an answer.
 
-Every developer path — `bus send`, the room composer, and Feishu replies —
-always interrupts and cannot be weakened: `--queue` and `--mode steer`/`queue`
-are refused for the developer. Orchestrator messages default to steer when
-eligible, else queue, and may pass `--mode` explicitly; a request to an
-orchestrator recipient always waits for its own turn. Other agent messages keep
-that steer-or-queue default and cannot interrupt. `--queue` equals `--mode
-queue`.
+The developer's room composer defaults to Interrupt. Click the Mode pill or
+press F4 to choose Interrupt, Steer, or Queue for that room during the TUI
+session. Developer `bus send` and Feishu replies use Interrupt. The CLI refuses
+`--queue` and `--mode steer`/`queue` for developer sends. Orchestrator messages
+default to steer when eligible, else queue, and may pass `--mode` explicitly.
+An agent-authored request to an orchestrator recipient waits for its own turn.
+Other agent messages keep their steer-or-queue default and cannot interrupt.
+`--queue` equals `--mode queue`.
 
 ## Language and courtesy
 

@@ -33,6 +33,7 @@ mod requests;
 mod restart;
 mod restart_continuation;
 mod rooms;
+mod send_delivery;
 mod settlement;
 mod staffing;
 mod stall;
@@ -66,6 +67,7 @@ pub(crate) use recovery::ManualRecovery;
 pub(crate) use request_outcomes::{
     classify_request_failure, request_pre_start_failure, request_start_bound, RequestFailureClass,
 };
+pub(crate) use send_delivery::SendDelivery;
 pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::BusState;
 

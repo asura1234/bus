@@ -2,7 +2,7 @@
 use super::{editor::Editor, forms::Form, BusUi, Effect};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentRecipients, Draft, Room, RoomId},
+    model::{AgentRecipients, Draft, Room, RoomId, SendDelivery},
 };
 
 pub(super) fn attachment_path(input: &str) -> std::path::PathBuf {
@@ -34,7 +34,7 @@ pub(super) struct LocalSubmission {
     pub command_id: u64,
     pub room: RoomId,
     pub draft: Draft,
-    pub queued: bool,
+    pub delivery: SendDelivery,
     pub requested_at: std::time::Instant,
     pub submitted_at_ms: u64,
     pub status: LocalSendStatus,
@@ -70,6 +70,7 @@ pub(super) struct LocalRoom {
     pub text: Editor,
     pub recipients: AgentRecipients,
     pub composer_size: ComposerSize,
+    pub delivery: SendDelivery,
     // None follows the caret; Some is an independently scrolled viewport.
     pub composer_scroll: Option<usize>,
     pub recall: Vec<Recalled>,
@@ -87,6 +88,7 @@ impl From<&Room> for LocalRoom {
             text: Editor::new(room.draft.text.clone()),
             recipients: room.draft.recipient_ids.clone(),
             composer_size: ComposerSize::Auto,
+            delivery: SendDelivery::default(),
             composer_scroll: None,
             recall: Vec::new(),
             stash: Vec::new(),
@@ -116,8 +118,8 @@ impl BusUi {
         }
     }
 
-    /// Sends like Enter, but the message waits for each agent's own turn.
-    pub fn request_queued_send(&mut self, room: RoomId) {
+    /// Legacy Option+Enter alias for Enter.
+    pub fn request_alt_send(&mut self, room: RoomId) {
         self.request_send_with(room, true);
     }
 
@@ -125,7 +127,7 @@ impl BusUi {
         self.request_send_with(room, false);
     }
 
-    fn request_send_with(&mut self, room: RoomId, queued: bool) {
+    fn request_send_with(&mut self, room: RoomId, alt_enter: bool) {
         if let Some(local) = self
             .locals
             .get_mut(&room)
@@ -204,17 +206,21 @@ impl BusUi {
             local.composer_size = ComposerSize::Auto;
             local.composer_scroll = None;
         }
-        let command = if queued {
-            BusCommand::SubmitQueued(room, draft.clone())
-        } else {
-            BusCommand::Submit(room, draft.clone())
+        let delivery = self
+            .locals
+            .get(&room)
+            .map_or_else(SendDelivery::default, |local| local.delivery);
+        let command = match delivery {
+            SendDelivery::Interrupt if alt_enter => BusCommand::SubmitQueued(room, draft.clone()),
+            SendDelivery::Interrupt => BusCommand::Submit(room, draft.clone()),
+            _ => BusCommand::SubmitWithMode(room, draft.clone(), delivery),
         };
         let command_id = self.queue(command, Effect::Submit);
         self.submissions.push(LocalSubmission {
             command_id,
             room,
             draft,
-            queued,
+            delivery,
             requested_at,
             submitted_at_ms,
             status: LocalSendStatus::Pending,
@@ -341,7 +347,7 @@ impl BusUi {
                 submission.room,
                 submission.draft.clone(),
                 submission.submitted_at_ms,
-                submission.queued,
+                submission.delivery.queue_only(),
             ) else {
                 continue;
             };

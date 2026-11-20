@@ -65,10 +65,7 @@ impl BusUi {
                     Some(agent.id),
                 )
             }));
-        view.recipient_menu = menu;
-        view.recipient_rows_start = view.rows.len();
-        // Covered links/quote buttons cannot remain active through the panel.
-        view.hits.retain(|hit| !hit.rect.intersects(menu));
+        view.begin_picker(menu);
         for (index, (label, id)) in labels
             .enumerate()
             .skip(start)
@@ -81,10 +78,5 @@ impl BusUi {
                 index == selected,
             );
         }
-        view.cursor = None;
-        view.selection.retain(|rect| !rect.intersects(menu));
-        // Kitty graphics sit above text, so remove covered thumbnails too.
-        view.thumbnails
-            .retain(|thumbnail| !thumbnail.rect().intersects(menu));
     }
 }

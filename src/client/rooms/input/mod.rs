@@ -174,11 +174,21 @@ impl BusUi {
                 outcome.repaint = true;
             }
         }
+        if self.delivery_menu.is_some() {
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && !matches!(hit, Some(Action::DeliveryMode | Action::ChooseDelivery(_)))
+            {
+                self.delivery_menu = None;
+                outcome.repaint = true;
+            }
+            if self.view.picker.contains((mouse.column, mouse.row).into())
+                && !matches!(hit, Some(Action::ChooseDelivery(_)))
+            {
+                return Some(true);
+            }
+        }
         if self.recipient_menu
-            && self
-                .view
-                .recipient_menu
-                .contains((mouse.column, mouse.row).into())
+            && self.view.picker.contains((mouse.column, mouse.row).into())
             && matches!(
                 mouse.kind,
                 MouseEventKind::Down(_) | MouseEventKind::Drag(_) | MouseEventKind::Up(_)
@@ -240,12 +250,10 @@ impl BusUi {
             outcome.repaint = true;
             return true;
         }
-        if self.recipient_menu
-            && self
-                .view
-                .recipient_menu
-                .contains((mouse.column, mouse.row).into())
-        {
+        if self.view.picker.contains((mouse.column, mouse.row).into()) {
+            if !self.recipient_menu {
+                return true;
+            }
             let count = self
                 .room
                 .map_or(0, |room| self.snapshot.state.room_recipients(room).count());
@@ -328,6 +336,9 @@ impl BusUi {
 
     fn edit_room_event(&mut self, event: &RawInputEvent, outcome: &mut ClientShellInput) -> bool {
         match event {
+            RawInputEvent::Text(_) | RawInputEvent::Paste(_) if self.delivery_menu.is_some() => {
+                return true;
+            }
             RawInputEvent::Text(text) => {
                 self.insert(text.as_str());
                 self.keep_focused_selection(None);
@@ -387,6 +398,7 @@ impl BusUi {
             && self.form.is_none()
             && self.rename.is_none()
             && self.terminal.is_none()
+            && self.delivery_menu.is_none()
         {
             outcome
                 .actions
@@ -447,6 +459,7 @@ impl BusUi {
         self.clear_form();
         self.rename = None;
         self.recipient_menu = false;
+        self.delivery_menu = None;
         self.queue(BusCommand::LeaveRoom, Effect::None);
         if self.target_pane.is_none() {
             // A newly created agent may precede the snapshot carrying its identity.
@@ -480,6 +493,7 @@ impl BusUi {
         self.clear_form();
         self.rename = None;
         self.recipient_menu = false;
+        self.delivery_menu = None;
         self.main_scroll = 0;
         self.history_follow_tail = true;
         self.recipient_scroll = 0;
@@ -578,6 +592,23 @@ impl BusUi {
             Action::Search => {}
             Action::ToggleToYou => self.toggle_history_filter(true),
             Action::ToggleFromYou => self.toggle_history_filter(false),
+            Action::DeliveryMode => {
+                self.recipient_menu = false;
+                self.delivery_menu = if self.delivery_menu.is_none() {
+                    self.room
+                        .and_then(|room| self.locals.get(&room))
+                        .map(|local| local.delivery)
+                } else {
+                    None
+                };
+                self.last_esc = None;
+            }
+            Action::ChooseDelivery(mode) => {
+                if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
+                    local.delivery = mode;
+                }
+                self.delivery_menu = None;
+            }
             Action::Recipients => {
                 self.recipient_menu = !self.recipient_menu;
             }

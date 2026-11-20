@@ -4,7 +4,7 @@ use super::super::{
 };
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentId, AgentRecipients, RoomId},
+    model::{AgentId, AgentRecipients, RoomId, SendDelivery},
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -85,6 +85,10 @@ impl BusUi {
     }
 
     pub(super) fn key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        if let Some(mode) = self.delivery_menu {
+            self.delivery_menu_key(mode, code, modifiers);
+            return;
+        }
         if self.form.is_none() && self.rename.is_none() && !self.recipient_menu {
             match (code, modifiers) {
                 (KeyCode::Char('i' | 'I'), KeyModifiers::ALT) => {
@@ -106,6 +110,30 @@ impl BusUi {
         }
         if !self.composer_command_key(code, modifiers) {
             self.edit_composer_key(code, modifiers);
+        }
+    }
+
+    fn delivery_menu_key(&mut self, mode: SendDelivery, code: KeyCode, modifiers: KeyModifiers) {
+        if !modifiers.is_empty() {
+            return;
+        }
+        use SendDelivery::{Interrupt, Queue, Steer};
+        match code {
+            KeyCode::Esc | KeyCode::Tab | KeyCode::F(4) => self.delivery_menu = None,
+            KeyCode::Enter | KeyCode::Char(' ') => self.action(Action::ChooseDelivery(mode)),
+            KeyCode::Up => {
+                self.delivery_menu = Some(match mode {
+                    Interrupt | Steer => Interrupt,
+                    Queue => Steer,
+                })
+            }
+            KeyCode::Down => {
+                self.delivery_menu = Some(match mode {
+                    Interrupt => Steer,
+                    Steer | Queue => Queue,
+                })
+            }
+            _ => {}
         }
     }
 
@@ -187,6 +215,7 @@ impl BusUi {
 
     fn composer_command_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         match (code, modifiers) {
+            (KeyCode::F(4), KeyModifiers::NONE) => self.action(Action::DeliveryMode),
             (KeyCode::F(2), _) => {
                 if let Some(id) = self.terminal {
                     self.start_rename(RenameTarget::Agent(id));
@@ -257,7 +286,7 @@ impl BusUi {
             (KeyCode::Enter, _) if self.pending_line_continue => self.finish_line_continue(),
             (KeyCode::Enter, KeyModifiers::ALT) => {
                 if let Some(room) = self.room {
-                    self.request_queued_send(room);
+                    self.request_alt_send(room);
                 }
             }
             (KeyCode::Enter, _) => {

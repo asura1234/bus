@@ -2284,3 +2284,171 @@ fn scriptable_fake_resumes_without_reusing_prior_turns() {
         "the scripted turn is not reused after restart: {screen}"
     );
 }
+
+#[test]
+fn composer_mode_dropdown_sets_the_delivery_of_sent_messages() {
+    let session = Session::start("mdsend");
+    session.ok(&["wait", "--text", "Mode: Interrupt ⌄", "--timeout", "5s"]);
+
+    let work = session_dir(&session.0).join("work");
+    let (code, added) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "mode-agent",
+            "--provider",
+            "claude",
+            "--pwd",
+            work.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(code, 0, "{added}");
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+    session.ok(&["click", "--hit", "recipients"]);
+    session.ok(&["click", "--hit", "recipient:mode-agent"]);
+    session.ok(&["press", "esc"]);
+
+    session.ok(&["click", "--hit", "delivery-mode"]);
+    for description in [
+        "Stop the running turn",
+        "Join the running turn",
+        "Deliver after the current turn",
+    ] {
+        session.ok(&["wait", "--text", description]);
+    }
+    session.ok(&["click", "--hit", "delivery-mode:steer"]);
+    assert_composer_mode_send(&session, "Steer", "steered from composer", false);
+
+    session.ok(&["press", "f4"]);
+    session.ok(&["press", "down"]);
+    session.ok(&["press", "enter"]);
+    assert_composer_mode_send(&session, "Queue", "queued from composer", true);
+
+    session.ok(&["click", "--hit", "room:MASTER"]);
+    session.ok(&["wait", "--text", "Mode: Interrupt ⌄"]);
+    session.ok(&["click", "--hit", "room:bus"]);
+    session.ok(&["wait", "--text", "Mode: Queue ⌄"]);
+}
+
+fn assert_composer_mode_send(session: &Session, mode: &str, text: &str, queue: bool) {
+    session.ok(&["wait", "--text", &format!("Mode: {mode} ⌄")]);
+    session.ok(&["type", text]);
+    session.ok(&["press", "enter"]);
+    session.ok(&["wait", "--text", text]);
+    session.ok(&["wait", "--text", "[pending]", "--gone"]);
+    let (code, history) = parse(scratch_bus(
+        session,
+        &["history", "--room", "bus", "--limit", "20"],
+    ));
+    assert_eq!(code, 0, "{history}");
+    let message = history["result"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["prompt"]["text"] == text)
+        .expect("the composer message was persisted")["prompt"]["id"]
+        .to_string();
+    let (code, status) = parse(scratch_bus(session, &["message", "status", &message]));
+    assert_eq!(code, 0, "{status}");
+    let request = &status["result"]["requests"][0];
+    assert_eq!(request["queue"], queue, "{status}");
+    assert!(request["interrupt"].is_null(), "{status}");
+}
+
+#[test]
+fn composer_mode_dropdown_key_coexists_with_existing_composer_chords() {
+    let session = Session::start("mdkeys");
+    session.ok(&["wait", "--text", "# bus"]);
+    session.ok(&["press", "f4"]);
+    session.ok(&["wait", "--text", "Steer"]);
+    session.ok(&["press", "esc"]);
+    session.ok(&["wait", "--text", "Steer", "--gone"]);
+
+    for (key, text) in [("ctrl+p", "[ ] All"), ("ctrl+o", "Local file path")] {
+        session.ok(&["press", key]);
+        session.ok(&["wait", "--text", text]);
+        session.ok(&["press", "esc"]);
+    }
+    session.ok(&["press", "f2"]);
+    session.ok(&["press", "end"]);
+    session.ok(&["type", "-renamed"]);
+    session.ok(&["wait", "--text", "bus-renamed"]);
+    session.ok(&["press", "esc"]);
+    session.ok(&["type", "/help"]);
+    session.ok(&["press", "enter"]);
+    session.ok(&["wait", "--text", "F4"]);
+}
+
+#[test]
+fn composer_mode_dropdown_keeps_controls_separate_at_narrow_width() {
+    let session = Session::start("mdnarrow");
+    let work = session_dir(&session.0).join("work");
+    let (code, added) = parse(scratch_bus(
+        &session,
+        &[
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "recipient",
+            "--provider",
+            "claude",
+            "--pwd",
+            work.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(code, 0, "{added}");
+    session.ok(&["wait", "--text", "recipient"]);
+    session.ok(&["click", "--hit", "recipients"]);
+    session.ok(&["click", "--hit", "recipient:recipient"]);
+    session.ok(&["press", "esc"]);
+    session.ok(&["resize", "46x24"]);
+    session.ok(&["wait", "--text", "Interrupt"]);
+    let frame = session.ok(&["hits"]);
+    assert!(frame["stale"].is_null(), "{frame}");
+    let hits = frame["hits"].as_array().unwrap();
+    let find = |name: &str| hits.iter().find(|hit| hit["name"] == name).unwrap();
+    let right = |hit: &Value| hit["col"].as_u64().unwrap() + hit["width"].as_u64().unwrap();
+    let mode = find("delivery-mode");
+    let files = find("files");
+    assert_eq!(mode["row"], files["row"], "{frame}");
+    assert!(right(mode) <= files["col"].as_u64().unwrap(), "{frame}");
+    let recipients: Vec<_> = hits
+        .iter()
+        .filter(|hit| hit["name"] == "recipients")
+        .collect();
+    assert_eq!(
+        recipients.len(),
+        2,
+        "expected @ and a recipient chip: {frame}"
+    );
+    assert_eq!(recipients[0]["text"], "@", "{frame}");
+    assert!(
+        right(recipients[0]) <= recipients[1]["col"].as_u64().unwrap(),
+        "{frame}"
+    );
+    assert!(
+        recipients[1]["text"].as_str().unwrap().contains("rec"),
+        "{frame}"
+    );
+    assert!(
+        recipients
+            .iter()
+            .all(|hit| right(files) <= hit["col"].as_u64().unwrap() && right(hit) <= 46),
+        "{frame}"
+    );
+    session.ok(&["click", "--hit", "delivery-mode"]);
+    session.ok(&["click", "--hit", "delivery-mode:queue"]);
+    session.ok(&["wait", "--text", "Queue ⌄"]);
+}
