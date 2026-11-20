@@ -410,6 +410,61 @@ fn empty_denominators_are_absent_and_missing_reasons_are_bus_caused() {
 }
 
 #[test]
+fn withdrawn_worker_notice_does_not_change_attempts_failures_or_rates() {
+    let mut source = named_case("completed-without-text");
+    source.phase = RequestPhase::Abandoned;
+    source.failure_reason = Some("agent_startup_failed".into());
+    let mut unnamed = source.clone();
+    unnamed.id = RequestId(201);
+    unnamed.failure_reason = None;
+    let mut withdrawn = source.clone();
+    withdrawn.id = RequestId(202);
+    withdrawn.bus_generated = true;
+    withdrawn.failure_reason = Some("worker_notice_withdrawn".into());
+    let mut ordinary = named_case("completed-without-text");
+    ordinary.id = RequestId(203);
+
+    let baseline = snapshot(
+        &fixture_state([source.clone(), unnamed.clone(), ordinary.clone()]),
+        singapore_hour,
+    );
+    let report = snapshot(
+        &fixture_state([source, unnamed, ordinary, withdrawn]),
+        singapore_hour,
+    );
+    assert_eq!(report.all.counts.attempts, 3);
+    assert_eq!(report.all.counts.failed, 2);
+    assert_eq!(report.all.counts.bus_reasons["agent_startup_failed"], 1);
+    assert_eq!(report.all.counts.bus_reasons["missing_reason"], 1);
+    assert_eq!(report.all.rates.delivery.numerator, 1);
+    assert_eq!(report.all.rates.delivery.denominator, 3);
+    assert_eq!(
+        serde_json::to_value(report).unwrap(),
+        serde_json::to_value(baseline).unwrap()
+    );
+}
+
+#[test]
+fn uncertain_error_report_remains_a_delivery_failure_alongside_ordinary_work() {
+    let ordinary = named_case("completed-without-text");
+    let mut report = ordinary.clone();
+    report.id = RequestId(204);
+    report.prompt.author = crate::messaging::model::Author::Bus;
+    report.prompt.text = "Bus error: failure (x1 since last notice). Logs: /logs/client.log".into();
+    report.phase = RequestPhase::Abandoned;
+    report.failure_reason = Some("error_report_delivery_failed".into());
+    let dashboard = snapshot(&fixture_state([ordinary, report]), singapore_hour);
+
+    assert_eq!(dashboard.all.counts.attempts, 2);
+    assert_eq!(dashboard.all.counts.delivered, 1);
+    assert_eq!(dashboard.all.counts.delivery_bus, 1);
+    assert_eq!(dashboard.all.rates.delivery.numerator, 1);
+    assert_eq!(dashboard.all.rates.delivery.denominator, 2);
+    assert_eq!(dashboard.failures.len(), 1);
+    assert_eq!(dashboard.failures[0].reason, "error_report_delivery_failed");
+}
+
+#[test]
 fn retired_provider_identity_is_used_and_legacy_unknown_is_not_guessed() {
     let mut record = cases().remove(0).record;
     record.phase = RequestPhase::Completed;

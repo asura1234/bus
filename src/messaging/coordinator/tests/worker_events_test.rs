@@ -593,6 +593,117 @@ fn expired_queued_request_notifies_with_its_reason() {
 }
 
 #[test]
+fn acknowledging_the_final_queued_worker_outcome_persists_a_deliberate_withdrawal() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let ([source], notice) = queue_expired_worker_outcomes(&mut f, ["not submitted"]);
+
+    acknowledge_queued_outcome(&mut f, source);
+    f.reopen();
+    collect(&mut f);
+
+    let withdrawn = f.worker.state.request(notice).unwrap();
+    assert_eq!(withdrawn.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        withdrawn.failure_reason.as_deref(),
+        Some("worker_notice_withdrawn")
+    );
+    assert_eq!(withdrawn.latency.native_requested_at_ms, None);
+    assert!(f.worker.state.queued_requests(orch).is_empty());
+    assert!(f
+        .worker
+        .state
+        .agent(orch)
+        .unwrap()
+        .current_request
+        .is_none());
+    assert_eq!(f.notices().len(), 1);
+    assert!(f.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        f.worker
+            .state
+            .request(source)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("not_submitted")
+    );
+}
+
+#[test]
+fn acknowledging_one_queued_worker_outcome_delivers_only_the_remaining_component() {
+    let mut f = Fixture::new();
+    let orch = f.orch;
+    let ([first, second], notice) = queue_expired_worker_outcomes(
+        &mut f,
+        ["first unfinished request", "second unfinished request"],
+    );
+    let first_text = format!("request {}", first.0);
+    let second_text = format!("request {}", second.0);
+    let queued = f.worker.state.request(notice).unwrap();
+    assert!(queued.prompt.text.contains(&first_text), "{queued:?}");
+    assert!(queued.prompt.text.contains(&second_text), "{queued:?}");
+
+    acknowledge_queued_outcome(&mut f, first);
+    assert_eq!(f.worker.state.queued_requests(orch), &[notice]);
+    f.reopen();
+    f.worker.submit_ready().unwrap();
+    let delivered = f.worker.state.request(notice).unwrap();
+    assert_eq!(delivered.phase, RequestPhase::Active);
+    let delivered_text = delivered.prompt.text.clone();
+    acknowledge_queued_outcome(&mut f, second);
+    f.worker.submit_ready().unwrap();
+    let delivered = f.worker.state.request(notice).unwrap();
+    assert_eq!(delivered.phase, RequestPhase::Active);
+    assert_eq!(delivered.prompt.text, delivered_text);
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(!calls[0].contains(&first_text), "{}", calls[0]);
+    assert!(calls[0].contains(&second_text), "{}", calls[0]);
+}
+
+fn queue_expired_worker_outcomes<const COUNT: usize>(
+    f: &mut Fixture,
+    texts: [&str; COUNT],
+) -> ([RequestId; COUNT], RequestId) {
+    let now = io::now_ms();
+    let sent_at = now - crate::messaging::model::QUEUED_STALL_MS * 2;
+    ready_worker_at(f, sent_at);
+    let mut state = f.worker.state.clone();
+    let sources = texts.map(|text| {
+        state
+            .submit_message_from(
+                f.room,
+                Draft {
+                    text: text.into(),
+                    files: vec![],
+                    recipient_ids: [f.agent].into(),
+                },
+                Author::Agent(f.orch),
+                sent_at,
+            )
+            .unwrap()[0]
+    });
+    let expired = state.expire_stalled_queued_requests(now - 4_000).unwrap();
+    assert_eq!(expired, sources);
+    state.route_worker_replies(now, &BTreeSet::new()).unwrap();
+    f.worker.save(state).unwrap();
+    let notices = f.notices();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].phase, RequestPhase::Queued);
+    (sources, notices[0].id)
+}
+
+fn acknowledge_queued_outcome(f: &mut Fixture, request: RequestId) {
+    let event = format!("ended:{}", request.0);
+    let result = f.call(
+        "message.seen",
+        json!({"request":request.0.to_string(),"as":f.orch.0.to_string(),"events":[event]}),
+    );
+    assert!(result.ok, "{result:?}");
+}
+
+#[test]
 fn printed_reply_removes_only_its_component_of_a_queued_mixed_batch() {
     let mut f = Fixture::new();
     ready_worker(&mut f);

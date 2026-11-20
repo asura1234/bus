@@ -46,23 +46,23 @@ impl BusState {
         }
     }
 
-    pub(super) fn consume_failed_error_report(
+    pub(super) fn consume_uncertain_error_report(
         &mut self,
         request: RequestId,
         outcome: &SubmissionOutcome,
     ) -> Result<bool, ModelError> {
-        if !self.request(request).is_some_and(Request::is_error_report)
-            || matches!(outcome, SubmissionOutcome::Confirmed { .. })
-        {
+        let SubmissionOutcome::Uncertain { message } = outcome else {
             return Ok(false);
-        }
-        let error = match outcome {
-            SubmissionOutcome::DefinitelyRejected { message }
-            | SubmissionOutcome::Uncertain { message } => message.clone(),
-            SubmissionOutcome::ComposerBusy => "Report composer was busy".into(),
-            SubmissionOutcome::Confirmed { .. } => unreachable!(),
         };
-        self.request_failure_error(request, error);
+        let Some(record) = self
+            .requests
+            .get_mut(&request)
+            .filter(|record| record.is_error_report())
+        else {
+            return Ok(false);
+        };
+        record.uncertain_outcome = true;
+        self.request_failure_error(request, message.clone());
         self.close_turn_with_reason(
             request,
             crate::utils::time::now_ms(),

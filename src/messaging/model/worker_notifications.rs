@@ -1,6 +1,7 @@
 //! One batching/queue owner for replies and other worker events.
 use super::{
     reply_routing::{reply_key, ReplyRoute},
+    request_outcomes::WORKER_NOTICE_WITHDRAWN,
     worker_events::{preview, WorkerEventKind},
     AgentId, Author, BusState, Draft, ModelError, PromptId, Request, RequestId, RequestPhase,
     RoomId,
@@ -314,6 +315,9 @@ impl BusState {
         let parts = self.notification_parts(Some(notice), &BTreeSet::new());
         if parts.is_empty() {
             self.recover_idle_request(notice, now_ms)?;
+            if let Some(request) = self.requests.get_mut(&notice) {
+                request.failure_reason = Some(WORKER_NOTICE_WITHDRAWN.into());
+            }
         } else {
             let text = Self::notification_text(&parts);
             if let Some(request) = self.requests.get_mut(&notice) {
