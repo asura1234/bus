@@ -1,4 +1,4 @@
-//! History lists the messages. It does not project one shared final body.
+//! Developer history projects one body per shared final in a room.
 use super::*;
 
 fn batch_history_fixture() -> (Fixture, Vec<RequestId>) {
@@ -20,9 +20,10 @@ fn batch_history_assert_projection(f: &mut Fixture, requests: &[RequestId]) {
     let response = f.call("room.history", json!({"room":f.room.0.to_string()}));
     assert!(response.ok, "{response:?}");
     let rendered = response.result.to_string();
-    assert!(
-        !rendered.contains("SHARED_BATCH_ANSWER"),
-        "history contains the shared final: {rendered}"
+    assert_eq!(
+        rendered.matches("SHARED_BATCH_ANSWER").count(),
+        1,
+        "{rendered}"
     );
     let messages = response.result["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 3);
@@ -33,8 +34,13 @@ fn batch_history_assert_projection(f: &mut Fixture, requests: &[RequestId]) {
         );
         assert_eq!(message["delivery"]["complete"], true);
         let request = &message["delivery"]["requests"][0];
-        assert_eq!(request["stage"], "ended");
-        assert!(request["reply"].is_null(), "{request}");
+        if index == 0 {
+            assert_eq!(request["stage"], "replied");
+            assert_eq!(request["reply"]["text"], "SHARED_BATCH_ANSWER");
+        } else {
+            assert_eq!(request["stage"], "ended");
+            assert!(request["reply"].is_null(), "{request}");
+        }
         assert!(request["group"].is_null(), "{request}");
         assert!(request.get("answered_with_message").is_none());
         assert_ne!(request["reply_ack"], true, "{request}");
@@ -72,7 +78,7 @@ fn batch_history_projects_one_body_and_retains_full_status_after_archive_and_reo
 }
 
 #[test]
-fn batch_history_page_without_the_lead_keeps_a_stable_answer_reference() {
+fn batch_history_page_without_the_lead_does_not_repeat_the_answer() {
     let (mut f, requests) = batch_history_fixture();
     let messages: Vec<_> = requests
         .iter()
@@ -108,9 +114,10 @@ fn batch_history_equal_text_in_an_independent_turn_keeps_its_own_body() {
     let response = f.call("room.history", json!({"room":f.room.0.to_string()}));
     assert!(response.ok, "{response:?}");
     let rendered = response.result.to_string();
-    assert!(
-        !rendered.contains("SHARED_BATCH_ANSWER"),
-        "history contains the final text: {rendered}"
+    assert_eq!(
+        rendered.matches("SHARED_BATCH_ANSWER").count(),
+        2,
+        "{rendered}"
     );
     let messages = response.result["messages"].as_array().unwrap();
     let ids: Vec<_> = messages
@@ -121,4 +128,35 @@ fn batch_history_equal_text_in_an_independent_turn_keeps_its_own_body() {
         f.worker.state.request(requests[0]).unwrap().prompt.id
     )));
     assert!(ids.contains(&json!(f.worker.state.request(next).unwrap().prompt.id)));
+}
+
+#[test]
+fn identical_developer_post_and_final_appear_once_after_archive_and_reopen() {
+    let mut f = Fixture::new();
+    let id = f.send(Author::Developer, "question");
+    let now = io::now_ms();
+    let mut state = f.worker.state.clone();
+    state
+        .post_to_developer(f.room, f.agent, "ANSWER ALREADY POSTED".into(), vec![], now)
+        .unwrap();
+    state.finish_for_test(id, "ANSWER ALREADY POSTED", now + 1);
+    f.worker.save(state).unwrap();
+    f.worker
+        .archive_history(now + crate::messaging::model::ARCHIVE_AFTER_MS + 2)
+        .unwrap();
+    f.reopen();
+
+    let result = f.call("room.history", json!({"room":f.room.0.to_string()}));
+    assert!(result.ok, "{result:?}");
+    let messages = result.result["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[1]["prompt"]["text"], "ANSWER ALREADY POSTED");
+    assert_eq!(
+        result
+            .result
+            .to_string()
+            .matches("ANSWER ALREADY POSTED")
+            .count(),
+        1
+    );
 }

@@ -32,11 +32,11 @@ end marker and verifies the complete draft before removing that marker.
 such a draft directly in the native pane, its fake reply is `fake draft bytes:`
 followed by a JSON string of the exact submitted prompt, before whitespace
 trimming. Compare the decoded JSON string, including every space, tab, and LF.
-The ordinary incoming messages show their usual `fake reply:` output only in
-the native pane. Every incoming completion below requires its exact request to
+The native pane shows the fake provider's usual `fake reply:` output.
+Every incoming completion below requires its exact request to
 be `complete:true`, `stage:replied` with its native reply text, `reason:null`,
 with a trusted start, and its matching native output exactly once. The stored
-reply is the native final; no separate chat row is expected.
+reply is the native final and appears under its original developer message.
 
 Record PASS/FAIL for every step; no skips or failed-step retries. Capture the
 native composer before sending, while a message waits, and after restoration.

@@ -116,7 +116,7 @@ impl BusUi {
         }
     }
 
-    /// Sends like Enter, but the message waits for each agent's own turn.
+    /// Option+Enter uses the same interrupt delivery as Enter.
     pub fn request_queued_send(&mut self, room: RoomId) {
         self.request_send_with(room, true);
     }

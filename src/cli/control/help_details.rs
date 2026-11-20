@@ -356,10 +356,9 @@ Default is the full history. --limit N takes newest N in chronological order;
 Result: {room_id,room_name,deleted,messages:[{prompt,author_name,recipient_names,
   delivery}],has_more?,next_before?}. prompt holds id,author,text,files,
   recipient_ids,submitted_at_ms; delivery is null for notices. Otherwise it is
-  message status with a history projection: each shared reply body appears once
-  per room. Follower request rows set reply:null and
-  answered_with_message:LEAD_MESSAGE_ID. Use message status to read every
-  request's full reply.
+  message status with a history projection. Replies to developer messages
+  appear in their original exchanges, once per room for a shared reply.
+  Use message status to read any request's full reply.
   Pagination adds has_more/next_before; pass next_before for the older page.
   Text is raw Markdown; file/image paths are absolute. Deleted agent labels end
   in [deleted]; room_name stays plain and deleted:true marks a deleted room.
@@ -404,6 +403,8 @@ completes the original request.
 Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
 Interrupt-mode receipts include per-recipient stop outcomes in interrupts. A
 queued next turn can coexist with an in-progress or unconfirmed stop.
+In chat, [queued] marks queue mode and [pending] marks steer mode. An
+interrupt-mode message has no marker. Read stop outcomes with message status.
   --reply-to also returns requester_turn_queued:false and a notice: no requester
   turn was queued. If the requester must act, use a fresh normal send:
   bus send --room ROOM --as YOUR_AGENT_ID --to REQUESTER --text TEXT.

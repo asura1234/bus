@@ -103,6 +103,7 @@ pub(super) struct ThumbnailRow {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum MarkdownSource {
     Prompt(PromptId),
+    Reply(crate::messaging::model::RequestId),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -119,6 +120,8 @@ pub(super) struct RowAnchor {
 enum RowKind {
     PromptHeader,
     PromptBody,
+    ReplyHeader,
+    ReplyBody,
     File,
     Thumbnail,
     Gap,

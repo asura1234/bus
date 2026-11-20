@@ -6,6 +6,18 @@ of a session. Agent deletion retires a runtime and closes unfinished requests as
 requests as `room_deleted`. Neither operation erases the audit record. Context
 clear and provider compaction do not remove Bus messages.
 
+Chat shows `[queued]` for queue-mode messages and `[pending]` for steer-mode
+messages. The badge records how the message was sent, even after delivery.
+Interrupt-mode messages have no mode badge. Read their stop outcome with
+`bus message status`. Older records can identify steer when the message joined
+a running turn. A legacy independent-turn flag can represent several send modes
+and is insufficient to assign a badge.
+
+A developer's captured reply appears in the original exchange. Each room shows
+one copy of a shared answer. A correlated explicit reply takes precedence over
+the turn final. The answer stays on its request and is also readable with
+`bus message status`.
+
 Transient native provider failures do not settle a delivery. Bus retains the same
 request IDs and saved conversation, shows Working while it owns the retry, and
 retries overload/connection errors with capped exponential backoff. Quota errors

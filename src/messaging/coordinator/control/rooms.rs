@@ -128,24 +128,34 @@ impl Worker {
         Ok(result)
     }
 
-    /// History is a list of messages. Reply text, reply status, and group
-    /// badges stay off this projection. Message status remains lossless.
+    /// Attach developer answers to their message. Message status remains lossless.
     fn history_delivery(
         &self,
         message: PromptId,
         now: u64,
         requests: Vec<&Request>,
     ) -> Option<Value> {
+        let visible_replies: std::collections::BTreeSet<_> = requests
+            .iter()
+            .filter(|request| self.state.developer_history_reply(request).is_some())
+            .map(|request| request.id.0)
+            .collect();
         let mut delivery = self.control_message_from(message, now, requests).ok()?;
         for request in delivery.get_mut("requests")?.as_array_mut()? {
             let Some(object) = request.as_object_mut() else {
                 continue;
             };
-            object.insert("reply".into(), Value::Null);
+            let visible = object
+                .get("request_id")
+                .and_then(Value::as_u64)
+                .is_some_and(|id| visible_replies.contains(&id));
+            if !visible {
+                object.insert("reply".into(), Value::Null);
+            }
             object.insert("group".into(), Value::Null);
             object.remove("answered_with_message");
             object.insert("reply_ack".into(), Value::Bool(false));
-            if object.get("stage").and_then(Value::as_str) == Some("replied") {
+            if !visible && object.get("stage").and_then(Value::as_str) == Some("replied") {
                 object.insert("stage".into(), json!("ended"));
             }
         }

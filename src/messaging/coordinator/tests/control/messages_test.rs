@@ -218,8 +218,12 @@ fn dev_history_retains_twenty_ordered_messages_and_their_own_final_replies() {
         assert_eq!(message["prompt"]["id"], messages[i]);
         assert_eq!(message["delivery"]["complete"], true);
         let delivery = &message["delivery"]["requests"][0];
-        assert!(delivery["reply"].is_null(), "{delivery}");
-        assert_eq!(delivery["stage"], "ended");
+        assert_eq!(
+            delivery["reply"]["text"],
+            format!("reply-{i}"),
+            "{delivery}"
+        );
+        assert_eq!(delivery["stage"], "replied");
         assert_eq!(delivery["reply_ack"], false);
         assert!(delivery["group"].is_null());
     }

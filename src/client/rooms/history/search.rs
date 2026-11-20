@@ -52,7 +52,5 @@ impl SearchAnchor {
 }
 
 fn identity(line: &Line, _state: &BusState) -> RowAnchor {
-    // History rows are the message itself. A reply is not a separate row whose
-    // anchor has to follow a group member onto an older page.
     line.anchor
 }

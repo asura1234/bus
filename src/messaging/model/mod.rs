@@ -66,6 +66,7 @@ pub(crate) use recovery::ManualRecovery;
 pub(crate) use request_outcomes::{
     classify_request_failure, request_pre_start_failure, request_start_bound, RequestFailureClass,
 };
+pub(crate) use requests::submit::SendMode;
 pub(crate) use settlement::RecordedTurnEnd;
 pub(crate) use state::BusState;
 

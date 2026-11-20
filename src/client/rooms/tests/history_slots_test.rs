@@ -421,22 +421,23 @@ fn late_replies_stay_with_their_prompt_and_never_reorder_recipient_slots() {
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let first = text.find("first prompt").expect("first prompt");
-    let second = text.find("second prompt").expect("second prompt");
-    assert!(first < second, "{text}");
-    for absent in [
+    let expected = [
+        "first prompt",
         "cursor answer",
         "author answer",
         "claude answer",
+        "second prompt",
         "second answer",
-        "answered with message",
-        "Reply to message",
-    ] {
-        assert!(
-            !text.contains(absent),
-            "missing absence of {absent}:\n{text}"
-        );
-    }
+    ];
+    let positions: Vec<_> = expected
+        .iter()
+        .map(|body| text.find(body).expect(body))
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+    assert!(
+        !text.contains("answered with message") && !text.contains("Reply to message"),
+        "{text}"
+    );
     assert!(!text.contains('…'), "{text}");
 }
 
@@ -565,8 +566,8 @@ fn agent_identity_color_matches_sidebar_chip_and_reply_header() {
         }
     }
     assert_eq!(
-        labels, 3,
-        "one consistent agent identity in the sidebar, chip and recipient header"
+        labels, 4,
+        "one consistent agent identity in the sidebar, chip, recipient and reply headers"
     );
 }
 
@@ -894,7 +895,7 @@ fn file_detail_popup_hides_history_thumbnails_it_covers() {
 }
 
 #[test]
-fn a_steered_group_shows_one_reply_under_the_lead_and_a_follower_reference() {
+fn a_steered_group_shows_one_reply_under_the_lead() {
     let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let mut ids = Vec::new();
@@ -939,12 +940,13 @@ fn a_steered_group_shows_one_reply_under_the_lead_and_a_follower_reference() {
             .iter()
             .filter(|text| text.contains("streaming parser written"))
             .count(),
-        0,
+        1,
         "{texts:?}"
     );
     let write = position("write the parser").expect("lead prompt");
     let follow = position("use streaming instead").expect("follower prompt");
-    assert!(write < follow, "{texts:?}");
+    let answer = position("streaming parser written").expect("shared answer");
+    assert!(write < answer && answer < follow, "{texts:?}");
     assert!(texts
         .iter()
         .all(|text| !text.to_lowercase().contains("answered with message")));
@@ -1161,9 +1163,6 @@ fn two_images_in_one_message_render_in_order_with_distinct_placements() {
         order,
         [vec![first.clone(); 4], vec![second.clone(); 3]].concat()
     );
-    assert!(lines
-        .iter()
-        .all(|line| !line.text.starts_with("    author")));
     let last = lines
         .iter()
         .rposition(|line| line.thumbnail.is_some())
@@ -1172,6 +1171,7 @@ fn two_images_in_one_message_render_in_order_with_distinct_placements() {
         lines[last + 1].text.is_empty(),
         "a blank row follows the images"
     );
+    assert!(lines[last + 2].text.contains("author → You"));
 
     // Each one is placed, with a placement id no other thumbnail shares.
     let placed: Vec<_> = ui

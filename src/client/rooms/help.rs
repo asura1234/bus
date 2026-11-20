@@ -2,6 +2,8 @@
 pub(super) const TEXT: &str = "Composer
 Enter          Send; a developer message interrupts the running turn
 Option+Enter   Send with the same interrupt delivery
+History        [queued] marks queue mode. [pending] marks steer mode.
+               Interrupt-mode messages have no mode marker.
 Shift+Enter    New line
 Ctrl+J         New line (legacy terminal fallback)
 \\ then Enter   New line in any terminal

@@ -70,10 +70,9 @@ fn a_turn_final_settles_without_an_explicit_reply_and_delivers_the_queued_messag
     assert!(!stored, "the turn final was stored as a reply");
 }
 
-/// History is a list of messages. It does not show a reply notice, reply
-/// status, or group/reply badge for a delivered message.
+/// The answer is attached to the original developer message.
 #[test]
-fn history_omits_reply_notice_and_reply_status_for_a_delivered_message() {
+fn captured_developer_reply_is_present_in_room_history() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "do the work", "turn-1");
     fixture.stopped("turn-1", "FINAL_TEXT_SHOULD_NOT_LEAK");
@@ -85,7 +84,7 @@ fn history_omits_reply_notice_and_reply_status_for_a_delivered_message() {
         "history contains a reply notice: {rendered}"
     );
     assert!(
-        !rendered.contains("FINAL_TEXT_SHOULD_NOT_LEAK"),
+        rendered.matches("FINAL_TEXT_SHOULD_NOT_LEAK").count() == 1,
         "history contains the captured final: {rendered}"
     );
     assert!(
@@ -101,17 +100,21 @@ fn history_omits_reply_notice_and_reply_status_for_a_delivered_message() {
     let requests = message["delivery"]["requests"].as_array().unwrap();
     assert!(!requests.is_empty());
     for request in requests {
-        assert!(request["reply"].is_null(), "{request}");
+        assert!(
+            request["reply"]["text"] == "FINAL_TEXT_SHOULD_NOT_LEAK",
+            "{request}"
+        );
         assert!(request.get("group").is_none() || request["group"].is_null());
         assert!(request.get("answered_with_message").is_none());
-        assert_ne!(request["stage"], "replied", "{request}");
+        assert_eq!(request["stage"], "replied", "{request}");
         assert_ne!(request["reply_ack"], true, "{request}");
     }
 }
 
-/// An explicit reply settles the request while its turn is still open.
+/// Room 1 message 22856 / request 22857: status returned the explicit
+/// answer while the open turn's history row rewrote it to ended with no body.
 #[test]
-fn explicit_reply_to_settles_before_the_turn_ends() {
+fn explicit_work_room_reply_is_visible_before_the_turn_ends() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "question", "turn-1");
     let message = fixture.request(lead).prompt.id;
@@ -132,11 +135,24 @@ fn explicit_reply_to_settles_before_the_turn_ends() {
         fixture.worker.state.agent(agent).unwrap().current_request,
         Some(lead)
     );
+
+    let status = fixture.worker.control_message(message).unwrap();
+    let status_row = &status["requests"][0];
+    let projected = history(&mut fixture);
+    let history_row = &projected["messages"][0]["delivery"]["requests"][0];
+    assert_eq!(projected["messages"][0]["prompt"]["id"], json!(message));
+    assert_eq!(history_row["request_id"], json!(lead));
+    assert_eq!(status_row["stage"], "replied", "{status_row}");
+    assert_eq!(history_row["stage"], "replied", "{history_row}");
+    assert_eq!(history_row["turn_ended"], false, "{history_row}");
+    assert_eq!(history_row["reply_ack"], false, "{history_row}");
+    assert_eq!(history_row["reply"], status_row["reply"]);
+    assert_eq!(projected.to_string().matches("explicit answer").count(), 1);
 }
 
-/// History keeps a normal message and does not render an explicit reply as a reply row.
+/// The correlated answer is visible once, even when a final follows.
 #[test]
-fn history_shows_the_normal_message_and_strips_reply_status() {
+fn explicit_developer_reply_and_final_appear_as_one_answer() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "question", "turn-1");
     let message = fixture.request(lead).prompt.id;
@@ -168,6 +184,7 @@ fn history_shows_the_normal_message_and_strips_reply_status() {
         !rendered.contains("FINAL_TEXT_SHOULD_NOT_LEAK"),
         "history contains the turn final: {rendered}"
     );
+    assert_eq!(rendered.matches("explicit answer").count(), 1, "{rendered}");
     assert!(rendered.contains("question"), "{rendered}");
     assert!(rendered.contains("plain status"), "{rendered}");
     let prompt_id = json!(fixture.request(lead).prompt.id);
@@ -188,8 +205,8 @@ fn history_shows_the_normal_message_and_strips_reply_status() {
         .find(|entry| entry["prompt"]["id"] == prompt_id)
         .expect("original message");
     for request in original["delivery"]["requests"].as_array().unwrap() {
-        assert!(request["reply"].is_null(), "{request}");
-        assert_ne!(request["stage"], "replied", "{request}");
+        assert_eq!(request["reply"]["text"], "explicit answer", "{request}");
+        assert_eq!(request["stage"], "replied", "{request}");
         assert!(request.get("answered_with_message").is_none());
     }
     assert_eq!(fixture.request(plain).phase, RequestPhase::Queued);
