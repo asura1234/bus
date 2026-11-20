@@ -1,5 +1,7 @@
 use super::{BusState, Request, RequestPhase};
 
+pub(super) const WORKER_NOTICE_WITHDRAWN: &str = "worker_notice_withdrawn";
+
 pub(crate) fn request_pre_start_failure(request: &Request) -> bool {
     matches!(
         request
@@ -57,9 +59,11 @@ pub(crate) fn classify_request_failure(reason: &str) -> RequestFailureClass {
         | "room_digest_retired"
         | "messaging_onboarding_retired"
         | "operational_notice_retired" => RequestFailureClass::RetiredAutomation,
-        "interrupted" | "agent_deleted" | "room_deleted" | "background_wait_superseded" => {
-            RequestFailureClass::Deliberate
-        }
+        "interrupted"
+        | "agent_deleted"
+        | "room_deleted"
+        | "background_wait_superseded"
+        | WORKER_NOTICE_WITHDRAWN => RequestFailureClass::Deliberate,
         // Manual rescue closes stuck delivery and remains a Bus-caused failure.
         "manual_recovery" => RequestFailureClass::Bus,
         "provider_error" => RequestFailureClass::Provider,
