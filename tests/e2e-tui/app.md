@@ -53,9 +53,10 @@ highlight and leave the typed PWD untouched; Tab and Shift+Tab move focus and do
 not move that highlight. Enter from PWD or Additional launch args submits Add with
 the typed directory. Leave args empty, press Tab if focus is still on PWD, then
 press Enter
-→ agent appears and its fake terminal opens. If a hook-write consent form appears,
-capture it and click Add only for the isolated scratch project → creation continues.
-Wait for the fake terminal's identifiable ready screen, press F6 → original room.
+→ the room reopens immediately with an agent row that shows launch progress. If a
+hook-write consent form appears, capture it and click Add only for the isolated
+scratch project → creation continues. Once the agent is ready, click its row and
+verify the fake terminal's ready screen. Press F6 → original room.
 Verify agent name/provider/PWD/membership in scratch state. Consent is not approval
 of provider permissions; a real-provider prompt means setup is unsuitable.
 
@@ -105,11 +106,11 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 **Preconditions/setup:** R(`qa-agents`); scratch provider launchers ready.
 
-1. Press Ctrl+N, click Add without completing fields → the form remains editable, no agent is created, no validation text is drawn, and the client log records one validation failure covering the missing Name/Model fields. Press Esc → closes.
+1. Press Ctrl+N, click Add without completing fields → the form remains editable, no agent is created, inline validation explains the missing fields, and the client log records one validation failure covering the missing Name/Model fields. Press Esc → closes.
 2. Use A to create `qa-codex` (Codex), `qa-claude` (Claude Code), `qa-cursor` (Cursor), returning with F6 after each → every fake terminal is identifiable; sidebar lists the matching name/provider, state records the supplied PWD.
 3. Open Ctrl+N, type `cancel-agent`, press Esc → no extra agent or terminal.
 
-**Evidence:** absence of validation text, client-log entries with field context, provider-choice text, ready terminal captures, state.
+**Evidence:** inline validation text, client-log entries with field context, provider-choice text, ready terminal captures, state.
 
 **Pass criteria:** required fields enforced; three provider choices create only their agents.
 
@@ -118,8 +119,8 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 **Preconditions/setup:** R(`qa-master-target`), no orchestrator; fake Claude ready.
 
 1. Click `# MASTER`, press Ctrl+N → form includes `Orchestrates room` and a populated system prompt. Tab to Agent field → menu offers Claude Code and Cursor.
-2. Fill name `qa-master`, select Claude Code, set scratch PWD to the absolute scratch workspace with a trailing slash, at 120×40. With directory suggestions visible, Up/Down move the highlight and leave the typed PWD unchanged; Tab focuses Additional launch args and Shift+Tab returns to PWD, without moving the highlight or rewriting PWD. Tab again focuses `Orchestrates room`; use Left/Right until `qa-master-target` is shown, then press Enter. Add submits the typed directory and the fake terminal opens. A Tab that only moves the highlight, or an Enter that rewrites PWD to the highlighted directory instead of adding, is a FAIL.
-3. Press F6 → MASTER chat; click `# qa-master-target` beneath that agent → target room opens. Click MASTER, then agent name → its terminal opens, not target chat.
+2. Fill name `qa-master`, select Claude Code, set scratch PWD to the absolute scratch workspace with a trailing slash, at 120×40. With directory suggestions visible, Up/Down move the highlight and leave the typed PWD unchanged; Tab focuses Additional launch args and Shift+Tab returns to PWD, without moving the highlight or rewriting PWD. Tab again focuses `Orchestrates room`; use Left/Right until `qa-master-target` is shown, then press Enter. Add submits the typed directory and returns to MASTER with the new agent row. A Tab that only moves the highlight, or an Enter that rewrites PWD to the highlighted directory instead of adding, is a FAIL.
+3. Click `# qa-master-target` beneath that agent → target room opens. Click MASTER, then agent name → its terminal opens, not target chat.
 4. Press F6, press F2 on MASTER → no rename field or error text opens; the client log records the fixed-room refusal, the name stays MASTER, and no delete × is offered for it.
 
 **Evidence:** form/options, suggestion-list screenshot opened and judged before Enter, highlight cells and the exact typed PWD before and after Up/Down and Tab, no agent before Enter, navigation screenshots/text, state relationship and IDs, absence of MASTER error text and the client-log refusal.

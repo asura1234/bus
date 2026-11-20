@@ -3,7 +3,7 @@ use super::{state::normalized_name, AgentId, Author, BusState, ModelError};
 use std::collections::BTreeSet;
 
 impl BusState {
-    pub(super) fn available_agent_name(
+    pub(crate) fn available_agent_name(
         &self,
         name: &str,
         except: Option<AgentId>,

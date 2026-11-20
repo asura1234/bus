@@ -5,6 +5,7 @@ pub(super) use super::drafts::{
 use super::editor::Editor;
 use super::notices::{command_agent, command_room};
 use super::{
+    agent_creation::AgentCreation,
     forms::{Form, Rename, Suggestions},
     render::View,
 };
@@ -89,6 +90,8 @@ pub(in crate::client) struct BusUi {
     pub(super) native_focus_pending: bool,
     pub(super) terminal_navigation: u64,
     pub(super) form: Option<Form>,
+    pub(super) agent_form_error: Option<String>,
+    pub(super) agent_creations: BTreeMap<u64, AgentCreation>,
     pub(super) form_generation: u64,
     pub(super) deletion: Option<super::deletion::DeleteDialog>,
     pub(super) rename: Option<Rename>,
@@ -210,6 +213,8 @@ impl BusUi {
             native_focus_pending: false,
             terminal_navigation: 0,
             form: None,
+            agent_form_error: None,
+            agent_creations: BTreeMap::new(),
             form_generation: 0,
             deletion: None,
             rename: None,
@@ -481,17 +486,13 @@ impl BusUi {
                 }
             }
             BusEvent::SetupRequired {
+                command_id,
                 input,
                 orchestrator,
                 notice,
             } => {
-                self.suggestions.entries.clear();
-                self.suggestions.query_id += 1;
-                self.set_form(Form::Consent {
-                    input,
-                    orchestrator,
-                    notice,
-                });
+                self.take_creation_origin(command_id);
+                self.receive_agent_setup(command_id, input, orchestrator, notice);
             }
             _ => {}
         }
@@ -593,6 +594,9 @@ impl BusUi {
             let Some(pending) = self.pending.pop_front() else {
                 break;
             };
+            if let Some(result) = &pending.result {
+                self.settle_agent_creation(pending.id, result);
+            }
             match pending.result.as_ref() {
                 Some(Err(error)) => {
                     self.settle_deletion(pending.id);

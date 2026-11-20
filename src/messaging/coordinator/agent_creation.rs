@@ -80,6 +80,7 @@ impl Worker {
                 launch::setup_notice(identity::provider_kind(input.provider), &project, &binary)
             {
                 let _ = events.send(BusEvent::SetupRequired {
+                    command_id: self.active_command_id,
                     input,
                     orchestrator,
                     notice,

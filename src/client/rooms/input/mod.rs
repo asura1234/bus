@@ -571,6 +571,8 @@ impl BusUi {
             Action::Agent(agent) => self.open_terminal(agent),
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
             Action::NewAgent => self.open_agent_form(),
+            Action::ReviewAgentSetup(id) if self.form.is_none() => self.review_agent_setup(id),
+            Action::ReviewAgentSetup(_) => {}
             Action::Orchestrates => self.cycle_orchestrates_setting(),
             Action::Composer => {
                 self.recipient_menu = false;

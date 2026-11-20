@@ -179,13 +179,13 @@ fn failed_agent_add_logs_its_worker_projected_cause_once() {
     });
     let logs = capture.text();
     eprintln!("worker rejection logs:\n{logs}");
-    assert!(matches!(ui.form, Some(forms::Form::Agent { .. })));
+    assert!(ui.form.is_none());
     assert!(ui
         .snapshot
         .state
         .agents()
         .all(|agent| agent.name != "worker"));
-    assert!(!room_screen(&mut ui, 100, 40).contains(error));
+    assert!(room_screen(&mut ui, 100, 40).contains(error));
     assert!(
         logs.contains(&format!("room_id=Some({})", room.0)),
         "{logs}"
