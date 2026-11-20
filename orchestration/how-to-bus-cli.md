@@ -64,13 +64,6 @@ messages default to steer-or-queue and may pass `--mode`. Other agent messages
 keep that default and cannot interrupt. Interrupt stops in-flight builds, Git
 operations and device runs, so use it only to change course.
 
-In the TUI, click the **Mode** pill at the left of the composer controls or
-press **F4**. Use **Up** and **Down** to highlight a mode, **Enter** or
-**Space** to apply it, and **Esc**, **Tab**, or **F4** to close the menu.
-The composer starts with **Interrupt** in each room and remembers your choice
-for that room during the TUI session. **Steer** joins a running turn when
-eligible. **Queue** waits for the next turn. Both Enter and Option/Alt+Enter
-send using the room's selection.
 See [the guide](orchestrator-guide.md#immediate-reaction-or-waiting).
 Explicit replies settle individual requests without ending the turn; a turn ending settles outstanding group requests and stores its captured final as each request's reply (never as a new message, and never over an explicit `--reply-to` answer).
 
@@ -213,9 +206,10 @@ a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2 3.7+, inline images in 
 tmux, disabled terminal.kitty_graphics, missing/unreadable images and unsupported hosts use clickable
 file rows. Clicking an image opens file detail.
 
-Ctrl+J or supported Shift+Enter adds a newline. `bus --help` lists other
-keyboard shortcuts. Settings exposes details
-visibility and color-blind mode; `bus settings --help` explains shared defaults.
+Click **Mode** or press **F4**. Move with **Up/Down**, apply with **Enter/Space**, and close with **Esc/Tab/F4**.
+The room remembers its mode for the TUI session. Enter and Option/Alt+Enter send with that mode, initially Interrupt.
+Ctrl+J or supported Shift+Enter adds a newline. See `bus --help` for shortcuts and `bus settings --help` for shared defaults.
+Settings exposes details visibility and color-blind mode.
 Room sound rings for agent finals/posts, never developer sends. MASTER defaults
 on, work rooms off; startup/resume has a two-second grace and bursts ring once.
 YOU alerts have a separate enabled-by-default sound selector and bypass ordinary
