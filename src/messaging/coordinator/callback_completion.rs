@@ -44,14 +44,16 @@ impl Worker {
             {
                 self.apply_request_callback(id, state, callback)?;
             }
-        } else if record.manifest.provider == ProviderKind::Agy
-            && state
+        } else if record.manifest.provider == ProviderKind::Agy {
+            let _ = self.record_agy_transcript(id, record, &session);
+            if state
                 .agent(id)
                 .and_then(|agent| agent.current_request)
                 .and_then(|request| state.request(request))
                 .is_some_and(|request| request.provider_turn_id.as_deref() != Some(&turn))
-        {
-            self.settle_prior_agy_turn_before_start(id, state, record, &session)?;
+            {
+                self.settle_prior_agy_turn_before_start(id, state, record, &session)?;
+            }
         }
         Ok(started)
     }

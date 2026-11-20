@@ -589,11 +589,6 @@ fn commands_route_to_exact_methods_with_string_selectors() {
 }
 
 #[test]
-fn request_recovery_rejects_the_removed_destructive_flag() {
-    assert!(command(&["request", "recover", "64", "--confirm", "--retire-terminal"]).is_err());
-}
-
-#[test]
 fn agent_add_maps_launch_options_and_explicit_hook_consent() {
     for provider in [
         "claude",

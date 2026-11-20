@@ -54,14 +54,22 @@ fn each_supported_provider_selects_its_verified_draft_preservation_path() {
             "[Pasted text #147 +20 lines]",
             "[Pasted Content 2048 chars]",
         ] {
-            let chosen = observer.draft_preservation(&screen(kind, opaque));
-            assert_eq!(
-                chosen.is_some(),
-                kind == AgentKind::Claude,
-                "{kind:?}: {opaque}"
-            );
-            if let Some(chosen) = chosen {
+            let chosen = observer
+                .draft_preservation(&screen(kind, opaque))
+                .expect("non-empty composer always preserves or copies without blocking");
+            if kind == AgentKind::Claude {
                 assert!(matches!(chosen, DraftPreservation::Native { .. }));
+            } else {
+                assert!(
+                    matches!(
+                        chosen,
+                        DraftPreservation::Copy {
+                            restore_bytes: None,
+                            ..
+                        }
+                    ),
+                    "{kind:?}: {opaque}"
+                );
             }
         }
     }
@@ -91,19 +99,29 @@ fn claude_accepted_suggestion_with_cursor_at_start_is_preserved() {
 }
 
 #[test]
-fn an_existing_native_stash_and_an_unconfigured_binding_are_left_untouched() {
+fn an_existing_native_stash_and_an_unconfigured_binding_fall_back_to_copy() {
     let observer = inspector(AgentKind::Claude);
     let occupied_slot = format!(
         "{}\n› stashed",
         screen(AgentKind::Claude, "new developer draft")
     );
-    assert!(observer.draft_preservation(&occupied_slot).is_none());
+    assert!(matches!(
+        observer.draft_preservation(&occupied_slot),
+        Some(DraftPreservation::Copy {
+            restore_bytes: Some(_),
+            ..
+        })
+    ));
     for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Cursor] {
         let observer =
             PreservingComposer::new(kind, "from bus".into(), "unused".into(), Vec::new());
-        assert!(observer
-            .draft_preservation(&screen(kind, "developer draft"))
-            .is_none());
+        assert!(matches!(
+            observer.draft_preservation(&screen(kind, "developer draft")),
+            Some(DraftPreservation::Copy {
+                restore_bytes: Some(_),
+                ..
+            })
+        ));
     }
 }
 

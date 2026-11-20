@@ -110,33 +110,6 @@ impl App {
         }
     }
 
-    /// Check both registries, including detached terminals. Never mutate a
-    /// pane or infer absence from its public pane ID being reassigned.
-    pub(super) fn handle_terminal_require_absent(
-        &self,
-        id: String,
-        target: crate::protocol::api::schema::TerminalTarget,
-    ) -> String {
-        if target.terminal_id.is_empty() {
-            return encode_error(id, "invalid_request", "Exact terminal identity is required");
-        }
-        if self
-            .state
-            .terminals
-            .keys()
-            .any(|terminal| terminal.to_string() == target.terminal_id)
-            || self.terminal_runtimes.contains_id(&target.terminal_id)
-        {
-            return encode_error(id, "terminal_present", "The original terminal still exists");
-        }
-        encode_success(
-            id,
-            ResponseResult::TerminalAbsent {
-                terminal_id: target.terminal_id,
-            },
-        )
-    }
-
     pub(super) fn handle_pane_close_if_identity(
         &mut self,
         id: String,

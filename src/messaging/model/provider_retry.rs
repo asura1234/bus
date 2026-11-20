@@ -152,17 +152,6 @@ impl BusState {
             return None;
         }
         let hold = owner.provider_retry.as_ref()?;
-        if self
-            .requests
-            .get(&hold.lead)
-            .is_some_and(|r| r.interrupt_retirement_pending)
-            || owner
-                .current_request
-                .and_then(|id| self.requests.get(&id))
-                .is_some_and(|r| r.interrupt_retirement_pending)
-        {
-            return None;
-        }
         // begin_submission parks prepared ids while that lead is Submitting.
         // This callback is that attempt, not a later native input.
         if !hold.queued
@@ -283,17 +272,7 @@ impl BusState {
         let mut changed = false;
         for (agent, hold) in holds {
             let owner = &self.agents[&agent];
-            if owner.deletion_pending
-                || owner.interrupt_pending
-                || owner
-                    .current_request
-                    .and_then(|id| self.requests.get(&id))
-                    .is_some_and(|r| r.interrupt_retirement_pending)
-                || self
-                    .requests
-                    .get(&hold.lead)
-                    .is_some_and(|r| r.interrupt_retirement_pending)
-            {
+            if owner.deletion_pending || owner.interrupt_pending {
                 continue;
             }
             let mut pending = self.group_members(hold.lead);
@@ -390,20 +369,9 @@ impl BusState {
         let Some(request) = self.requests.get(&id) else {
             return false;
         };
-        // A provider error cannot authorize replay of an unretired native copy.
-        if request.interrupt_retirement_pending {
-            return true;
-        }
         let Some(owner) = self.agents.get(&request.agent_id) else {
             return false;
         };
-        if owner
-            .current_request
-            .and_then(|id| self.requests.get(&id))
-            .is_some_and(|r| r.interrupt_retirement_pending)
-        {
-            return true;
-        }
         if !request.trusted_start_bound || owner.deletion_pending {
             return false;
         }

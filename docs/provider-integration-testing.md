@@ -1132,18 +1132,3 @@ idle then deliver, and an approval card without `--yolo`.
   endpoint, standalone fallback, queued delivery, and a fresh runtime on the
   same pane. Native-wire fixtures are regression evidence, not real-model
   acceptance; repeat first-launch acceptance on the final head separately.
-
-## Claude interruption and native draft recovery
-
-- In a scratch session, exercise Claude and Claude DS with a short prompt and a
-  prompt that soft-wraps in the composer. Interrupt from both the room composer
-  and the CLI while the provider is working. Confirm the developer send uses
-  interrupt mode and becomes a separate turn. Verify the original draft was
-  retired before the follower delivered, without a duplicate submit.
-- Repeat with a missing or revoked ownership receipt and a developer draft.
-  An idle status or an empty intermediate render must leave the queue held.
-  Run `bus request recover <request-id> --confirm` as a read-only evidence
-  retry for the hold. After the original provider exits normally and Bus can
-  verify the exit, verify the shell stays open, unanswered work closes as
-  `interrupt_outcome_unknown`, and the queue drains in order on the ready
-  provider. Preserve finals already attributable to their own requests.

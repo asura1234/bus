@@ -400,9 +400,6 @@ impl BusState {
 
     /// Marks the agent's provider context as reset by `agent clear`.
     pub(crate) fn begin_session_reset(&mut self, id: AgentId) -> Result<(), ModelError> {
-        if self.interrupt_retirement_owner(id).is_some() {
-            return Err(ModelError::InterruptRetirementPending);
-        }
         let agent = self
             .agents
             .get_mut(&id)
@@ -544,10 +541,6 @@ impl BusState {
     ) -> Result<bool, ModelError> {
         let agent = self.agent(id).ok_or(ModelError::UnknownAgent(id))?;
         let mut changed = agent.working_directory_error.as_ref() != Some(&error);
-        if self.interrupt_retirement_owner(id).is_some() {
-            self.observe_working_directory_error(id, Some(error))?;
-            return Ok(changed);
-        }
         let previous_error = agent.actionable_error.clone();
         let running = agent.current_request.filter(|current| {
             self.request(*current).is_some_and(|request| {

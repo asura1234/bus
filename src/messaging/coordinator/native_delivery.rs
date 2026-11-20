@@ -1,6 +1,6 @@
 //! Native writes are independent per recipient; all model mutations stay on the coordinator.
 use super::delivery::submission::{native_response_timestamps, record_native_timestamps};
-use super::{callbacks, BusState, RequestId, RoomAgent, Worker};
+use super::{BusState, RequestId, RoomAgent, Worker};
 use crate::messaging::native::{NativeCall, NativeResult, TransportError};
 use crate::protocol::api::schema::Method;
 use std::{sync::mpsc, time::Instant};
@@ -17,33 +17,19 @@ impl Worker {
     pub(super) fn stamp_steering_origin(
         &self,
         state: &mut BusState,
-        agent: &RoomAgent,
+        _agent: &RoomAgent,
         request: RequestId,
         terminal: &str,
         pane: &str,
     ) -> Result<(), String> {
-        let boundary = if agent.provider.uses_claude_harness() {
-            let launch = agent
-                .runtime_identity
-                .launch_id
-                .as_ref()
-                .ok_or("Missing launch identity")?;
-            Some(
-                callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
-                    .map_err(|error| error.to_string())?,
-            )
-        } else {
-            None
-        };
         state
-            .stamp_native_delivery_epoch(
+            .stamp_delivery_epoch(
                 request,
                 crate::messaging::model::DeliveryEpoch {
                     generation: self.serving_generation,
                     terminal_id: terminal.to_owned(),
                     pane_id: pane.to_owned(),
                 },
-                boundary,
             )
             .map_err(|error| error.to_string())
     }

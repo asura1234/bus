@@ -91,45 +91,15 @@ impl Worker {
                 .map_err(|error| error.to_string());
         }
         let explicit_terminal = optional_text(p, "terminal_id")?;
-        let (pane_id, terminal_id) = if let Some(terminal) = managed_terminal {
-            (target.clone(), terminal)
+        let terminal_id = if let Some(terminal) = managed_terminal {
+            terminal
         } else {
             let observation = native_observe(&target, None, None, &mut |method| {
                 self.transport.request(method)
             })
             .map_err(|error| error.message)?;
-            (observation.pane_id, observation.terminal_id)
+            observation.terminal_id
         };
-        if self.state.agents().any(|agent| {
-            let Some(owner) = self.state.interrupt_retirement_owner(agent.id) else {
-                return false;
-            };
-            let matches = |identity: &crate::messaging::model::AgentRuntimeIdentity| {
-                identity.terminal_id.as_ref() == Some(&terminal_id)
-                    || identity.pane_id.as_ref() == Some(&pane_id)
-            };
-            matches(&agent.runtime_identity)
-                || std::iter::once(owner)
-                    .chain(self.state.group_members(owner))
-                    .filter_map(|id| self.state.request(id))
-                    .filter(|request| request.id == owner || !request.settled())
-                    .any(|request| {
-                        [
-                            request.interrupt_retirement_identity.as_ref(),
-                            request.native_delivery_identity.as_ref(),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .any(matches)
-                            || request.delivery_epoch.as_ref().is_some_and(|epoch| {
-                                epoch.terminal_id == terminal_id || epoch.pane_id == pane_id
-                            })
-                    })
-        }) {
-            return Err(
-                crate::messaging::model::ModelError::InterruptRetirementPending.to_string(),
-            );
-        }
         if explicit_terminal.is_some_and(|expected| expected != terminal_id) {
             return Err("Agent terminal identity changed; observe it again".into());
         }
