@@ -1093,14 +1093,24 @@ impl Delivery {
             .filter(|row| row["request_id"].as_u64() == Some(request.0))
             .collect();
         assert_eq!(replies.len(), 1, "request missing/duplicated: {history}");
-        assert!(
-            replies[0]["reply"].is_null(),
-            "history must not show a reply body: {history}"
-        );
+        let developer_reply = r.prompt.author == Author::Developer
+            && !self.state().requests().any(|earlier| {
+                earlier.id < r.id
+                    && earlier.room_id == r.room_id
+                    && earlier.prompt.author == Author::Developer
+                    && earlier.reply().is_some()
+                    && earlier.reply_key() == r.reply_key()
+            });
+        if developer_reply {
+            assert_eq!(replies[0]["reply"]["text"], text, "{history}");
+            assert_eq!(replies[0]["stage"], "replied");
+        } else {
+            assert!(replies[0]["reply"].is_null(), "{history}");
+            assert_eq!(replies[0]["stage"], "ended");
+        }
         assert!(replies[0].get("answered_with_message").is_none());
         assert_eq!(replies[0]["reply_ack"], json!(false));
         assert!(replies[0]["group"].is_null());
-        assert_eq!(replies[0]["stage"], "ended");
     }
 }
 impl Drop for Delivery {

@@ -130,8 +130,8 @@ def scenario(binary, root, provider, master, retain_failure=False):
         assert len(rows) == 1, history
         assert len(rows[0]["delivery"]["requests"]) == 1, history
         delivered_request = rows[0]["delivery"]["requests"][0]
-        assert delivered_request["reply"] is None, history
-        assert delivered_request["stage"] == "ended", history
+        assert delivered_request["reply"] == status["requests"][0]["reply"], history
+        assert delivered_request["stage"] == "replied", history
         # A captured reply is stored on its request and publishes no wake
         # message, so the unviewed source room gains no unread mark. Repeated
         # reads must not add one.

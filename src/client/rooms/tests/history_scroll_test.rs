@@ -33,7 +33,7 @@ fn late_reply_expansion_above_viewport_preserves_the_visible_anchor() {
     );
     ui.compute_view(100, 24);
 
-    // Settling adds no reply body. The message that was on screen stays in the viewport.
+    // The new reply expands an earlier exchange while the viewport keeps its anchor.
     let at = ui
         .history
         .cached()
@@ -53,7 +53,7 @@ fn late_reply_expansion_above_viewport_preserves_the_visible_anchor() {
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(!text.contains("one\ntwo\nthree"), "{text}");
+    assert!(text.contains("    one\n    two\n    three"), "{text}");
     assert!(text.contains("anchor-prompt-0"), "{text}");
     assert!(text.contains(anchor), "{text}");
 }
@@ -68,7 +68,7 @@ fn saved_round_trips_scroll_oldest_to_newest_with_fixed_chrome() {
         "newest message is visible on opening"
     );
     assert!(!bottom.contains("prompt-00"));
-    assert!(!bottom.contains("answer-19"));
+    assert!(bottom.contains("answer-19"));
     let composer = composer_rect(&ui);
     let mut seen = String::new();
     for _ in 0..=ui.view.history_max_scroll {
@@ -85,8 +85,8 @@ fn saved_round_trips_scroll_oldest_to_newest_with_fixed_chrome() {
             "missing prompt-{i:02}"
         );
         assert!(
-            !seen.contains(&format!("answer-{i:02}")),
-            "reply answer-{i:02} is not history text"
+            seen.contains(&format!("answer-{i:02}")),
+            "missing reply answer-{i:02}"
         );
     }
     // New arrivals do not yank the viewport away while reading older messages.

@@ -5,35 +5,18 @@ use super::{
     Draft, ModelError, PathBuf, PromptId, Request, RequestId, RequestPhase, Response, RoomId,
     RuntimeStatus, Worker,
 };
+use crate::messaging::model::SendMode;
 use serde_json::{json, Value};
 
-/// What `message.send` does with a recipient that is running a turn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SendDelivery {
-    /// End the running turn now with the provider's stop key; the message is
-    /// the next turn.
-    Interrupt,
-    /// Join the running turn when the queue head is eligible, else wait.
-    Steer,
-    /// Wait for the next turn and never join the running one.
-    Queue,
-}
-
-impl SendDelivery {
-    fn parse(value: &Value) -> Result<Self, String> {
-        match value.as_str() {
-            Some("interrupt") => Ok(Self::Interrupt),
-            Some("steer") => Ok(Self::Steer),
-            Some("queue") => Ok(Self::Queue),
-            Some(other) => Err(format!(
-                "--mode must be interrupt, steer or queue, not {other:?}"
-            )),
-            None => Err("--mode must be interrupt, steer or queue".into()),
-        }
-    }
-
-    fn queue_only(self) -> bool {
-        matches!(self, Self::Interrupt | Self::Queue)
+fn parse_send_mode(value: &Value) -> Result<SendMode, String> {
+    match value.as_str() {
+        Some("interrupt") => Ok(SendMode::Interrupt),
+        Some("steer") => Ok(SendMode::Steer),
+        Some("queue") => Ok(SendMode::Queue),
+        Some(other) => Err(format!(
+            "--mode must be interrupt, steer or queue, not {other:?}"
+        )),
+        None => Err("--mode must be interrupt, steer or queue".into()),
     }
 }
 
@@ -246,11 +229,15 @@ impl Worker {
                 },
                 author.map_or(Author::Developer, Author::Agent),
                 now,
-                delivery.queue_only(),
+                matches!(delivery, SendMode::Interrupt | SendMode::Queue),
             )
             .map_err(|e| e.to_string())?;
-        if delivery == SendDelivery::Interrupt {
+        if delivery == SendMode::Interrupt {
             stage_send_interrupts(&mut state, &ids)?;
+        } else {
+            state
+                .record_send_mode(&ids, delivery)
+                .map_err(|e| e.to_string())?;
         }
         let message = state
             .request(ids[0])
@@ -259,7 +246,7 @@ impl Worker {
             .id;
         self.save(state)?;
         let mut receipt = json!({"message_id":message,"request_ids":ids,"stage":"queued"});
-        if delivery == SendDelivery::Interrupt {
+        if delivery == SendMode::Interrupt {
             receipt["interrupts"] = json!(self.dispatch_committed_send_interrupts(&ids, now));
         }
         self.note_requests_queued(&ids);
@@ -283,8 +270,8 @@ impl Worker {
     /// orchestrator may choose `--mode`; without it, today's steer-or-queue
     /// delivery is unchanged. Other agents keep that default and cannot
     /// interrupt a turn. `--queue` stays the legacy spelling of `--mode queue`.
-    fn send_delivery(&self, author: Option<AgentId>, p: &Value) -> Result<SendDelivery, String> {
-        let explicit = p.get("mode").map(SendDelivery::parse).transpose()?;
+    fn send_delivery(&self, author: Option<AgentId>, p: &Value) -> Result<SendMode, String> {
+        let explicit = p.get("mode").map(parse_send_mode).transpose()?;
         let queue = match p.get("queue") {
             None => false,
             Some(Value::Bool(queue)) => *queue,
@@ -294,12 +281,12 @@ impl Worker {
             return Err("--queue equals --mode queue; pass only one of them".into());
         }
         let Some(author) = author else {
-            if queue || matches!(explicit, Some(SendDelivery::Steer | SendDelivery::Queue)) {
+            if queue || matches!(explicit, Some(SendMode::Steer | SendMode::Queue)) {
                 return Err(
                     "The developer's messages always interrupt the running turn; --mode interrupt is the only choice (--queue and --mode steer/queue are refused)".into(),
                 );
             }
-            return Ok(SendDelivery::Interrupt);
+            return Ok(SendMode::Interrupt);
         };
         let orchestrator = self.state.agent(author).is_some_and(|agent| {
             agent.orchestrates.is_some()
@@ -309,12 +296,12 @@ impl Worker {
                     .is_some_and(|master| agent.room_id == master.id)
         });
         match explicit {
-            Some(SendDelivery::Interrupt) if !orchestrator => Err(
+            Some(SendMode::Interrupt) if !orchestrator => Err(
                 "Only the developer and orchestrators choose --mode interrupt; agent messages keep their steer-or-queue delivery".into(),
             ),
             Some(mode) => Ok(mode),
-            None if queue => Ok(SendDelivery::Queue),
-            None => Ok(SendDelivery::Steer),
+            None if queue => Ok(SendMode::Queue),
+            None => Ok(SendMode::Steer),
         }
     }
 
