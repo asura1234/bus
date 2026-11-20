@@ -567,3 +567,207 @@ fn restart_stale_idle_owner_never_expires_new_messages_as_prior_request_active()
         }
     }
 }
+
+fn hook_unconfirmed_queue(idle: bool) -> (BusState, RoomId, AgentId, RequestId, RequestId) {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    if idle {
+        state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+    }
+    let first = submit_text(&mut state, room, agent, "first while launching");
+    let second = submit_text(&mut state, room, agent, "second while launching");
+    assert_eq!(
+        state.agent(agent).unwrap().wait_reason(),
+        Some("hook_setup_unconfirmed")
+    );
+    assert_eq!(state.queued_requests(agent), &[first, second]);
+    (state, room, agent, first, second)
+}
+
+fn track_launch(state: &mut BusState, room: RoomId, agent: AgentId, at_ms: u64) -> u64 {
+    let attempt =
+        state.begin_launch_attempt("builder", Provider::Codex, room, LaunchKind::Create, at_ms);
+    state.attach_launch_attempt(attempt, agent).unwrap();
+    let identity = state.agent(agent).unwrap().runtime_identity.clone();
+    assert!(state.bind_launch_identity(attempt, &identity));
+    attempt
+}
+
+fn assert_queue_kept(state: &BusState, agent: AgentId, ids: &[RequestId]) {
+    assert_eq!(state.queued_requests(agent), ids);
+    for id in ids {
+        let request = state.request(*id).unwrap();
+        assert_eq!(request.phase, RequestPhase::Queued);
+        assert!(request.failure_reason.is_none(), "{id:?}");
+    }
+}
+
+fn assert_closed(state: &BusState, agent: AgentId, ids: &[RequestId], reason: &str) {
+    assert!(state.queued_requests(agent).is_empty(), "{reason}");
+    for id in ids {
+        let request = state.request(*id).unwrap();
+        assert_eq!(request.phase, RequestPhase::Abandoned, "{reason}");
+        assert_eq!(request.failure_reason.as_deref(), Some(reason), "{id:?}");
+    }
+}
+
+/// Past the ordinary idle stall, and past a launch attempt's own 30s timer.
+fn long_after_stall() -> u64 {
+    10 + QUEUED_STALL_MS * 4
+}
+
+#[test]
+fn a_launching_hook_unconfirmed_agent_keeps_its_queue_and_position() {
+    for idle in [false, true] {
+        let (mut state, _, agent, first, second) = hook_unconfirmed_queue(idle);
+        assert!(state
+            .expire_stalled_queued_requests(long_after_stall())
+            .unwrap()
+            .is_empty());
+        assert_queue_kept(&state, agent, &[first, second]);
+    }
+}
+
+#[test]
+fn an_idle_hook_wait_keeps_its_queue_past_a_stale_launch_deadline() {
+    let (mut state, room, agent, first, second) = hook_unconfirmed_queue(true);
+    track_launch(&mut state, room, agent, 1);
+    assert!(state.current_launch_attempt(agent).unwrap().deadline_at_ms < long_after_stall());
+    assert!(state
+        .expire_stalled_queued_requests(long_after_stall())
+        .unwrap()
+        .is_empty());
+    assert_queue_kept(&state, agent, &[first, second]);
+}
+
+#[test]
+fn an_open_launch_consent_dialog_keeps_the_queue_past_the_deadline() {
+    let (mut state, room, agent, first, second) = hook_unconfirmed_queue(false);
+    track_launch(&mut state, room, agent, 1);
+    state.observe_launch_dialog(agent, true, 5);
+    assert_eq!(state.agent(agent).unwrap().status, RuntimeStatus::Launching);
+    assert!(state
+        .expire_stalled_queued_requests(long_after_stall())
+        .unwrap()
+        .is_empty());
+    assert_queue_kept(&state, agent, &[first, second]);
+}
+
+#[test]
+fn an_exited_provider_closes_the_hook_unconfirmed_queue_with_that_cause() {
+    let (mut state, _, agent, first, second) = hook_unconfirmed_queue(true);
+    state
+        .record_exit_snapshot(
+            agent,
+            ExitSnapshot {
+                launch_id: Some("launch-codex".into()),
+                terminal_id: "terminal-1".into(),
+                path: None,
+                error: Some("process exited".into()),
+                tail: String::new(),
+                at_ms: 20,
+                terminal_closed: Some(true),
+            },
+        )
+        .unwrap();
+    let expired = state
+        .expire_stalled_queued_requests(long_after_stall())
+        .unwrap();
+    assert_eq!(expired, vec![first, second]);
+    assert_closed(&state, agent, &[first, second], "provider_exited");
+}
+
+#[test]
+fn a_definitive_launch_rejection_closes_the_hook_unconfirmed_queue_with_that_cause() {
+    let (mut state, room, agent, first, second) = hook_unconfirmed_queue(false);
+    let attempt = track_launch(&mut state, room, agent, 1);
+    let identity = state.agent(agent).unwrap().runtime_identity.clone();
+    assert!(state.settle_launch_attempt(
+        attempt,
+        &identity,
+        LaunchOutcome::Failed,
+        Some("native_resume_failed"),
+        2,
+    ));
+    let expired = state
+        .expire_stalled_queued_requests(long_after_stall())
+        .unwrap();
+    assert_eq!(expired, vec![first, second]);
+    assert_closed(&state, agent, &[first, second], "native_resume_failed");
+}
+
+#[test]
+fn a_pending_launch_past_its_timer_keeps_the_queue_until_the_failure_is_recorded() {
+    let (mut state, room, agent, first, second) = hook_unconfirmed_queue(false);
+    let attempt = track_launch(&mut state, room, agent, 1);
+    assert!(state.current_launch_attempt(agent).unwrap().deadline_at_ms < long_after_stall());
+    assert!(state
+        .expire_stalled_queued_requests(long_after_stall())
+        .unwrap()
+        .is_empty());
+    assert_queue_kept(&state, agent, &[first, second]);
+
+    let identity = state.agent(agent).unwrap().runtime_identity.clone();
+    assert!(state.settle_launch_attempt(
+        attempt,
+        &identity,
+        LaunchOutcome::Failed,
+        Some("startup_timeout"),
+        long_after_stall(),
+    ));
+    let expired = state
+        .expire_stalled_queued_requests(long_after_stall())
+        .unwrap();
+    assert_eq!(expired, vec![first, second]);
+    assert_closed(&state, agent, &[first, second], "startup_timeout");
+}
+
+#[test]
+fn a_hook_confirmed_agent_that_is_still_launching_keeps_its_queue() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.confirm_hook_setup(agent).unwrap();
+    let queued = submit_text(&mut state, room, agent, "wait for launch");
+    assert_eq!(
+        state.agent(agent).unwrap().wait_reason(),
+        Some("agent_launching")
+    );
+    assert!(state
+        .expire_stalled_queued_requests(long_after_stall())
+        .unwrap()
+        .is_empty());
+    assert_eq!(state.queued_requests(agent), &[queued]);
+    assert_eq!(state.request(queued).unwrap().phase, RequestPhase::Queued);
+    assert!(state.request(queued).unwrap().failure_reason.is_none());
+}
+
+#[test]
+fn a_confirmed_idle_agent_missing_its_terminal_still_expires() {
+    let (mut state, room, _, claude) = state_with_room_and_agents();
+    state.confirm_hook_setup(claude).unwrap();
+    state
+        .observe_status(claude, RuntimeStatus::Idle, 1)
+        .unwrap();
+    let queued = submit_text(&mut state, room, claude, "ordinary missing terminal");
+    assert_eq!(
+        state.agent(claude).unwrap().wait_reason(),
+        Some("terminal_identity_missing")
+    );
+    let expired = state
+        .expire_stalled_queued_requests(long_after_stall())
+        .unwrap();
+    assert_eq!(expired, vec![queued]);
+    assert_closed(&state, claude, &[queued], "terminal_identity_missing");
+}
+
+#[test]
+fn a_genuinely_idle_agent_still_expires_queued_work_as_not_submitted() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.confirm_hook_setup(agent).unwrap();
+    state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+    assert_eq!(state.agent(agent).unwrap().wait_reason(), None);
+    let queued = submit_text(&mut state, room, agent, "ordinary idle");
+    let expired = state
+        .expire_stalled_queued_requests(10 + QUEUED_STALL_MS)
+        .unwrap();
+    assert_eq!(expired, vec![queued]);
+    assert_closed(&state, agent, &[queued], "not_submitted");
+}

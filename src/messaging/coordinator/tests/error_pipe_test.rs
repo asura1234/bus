@@ -106,6 +106,25 @@ fn reporting_worker() -> (Worker, RoomId, AgentId, PathBuf) {
     (worker, room, agent, root)
 }
 
+/// Ordinary idle expiry still applies once hooks are confirmed and the provider is idle.
+fn settle_as_idle(state: &mut crate::messaging::model::BusState, agent: AgentId, at: u64) {
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(agent).unwrap();
+    state
+        .observe_status(agent, crate::messaging::model::RuntimeStatus::Idle, at)
+        .unwrap();
+}
+
 fn emit_logged_failure(log: PathBuf, times: usize) {
     use tracing_subscriber::prelude::*;
     let _interest = tracing::Dispatch::new(tracing_subscriber::registry());
@@ -391,6 +410,7 @@ fn error_pipe_expired_queued_report_does_not_create_an_agent_error_projection() 
     let (worker, room, agent, root) = reporting_worker();
     let mut state = worker.state.clone();
     let now = crate::utils::time::now_ms();
+    settle_as_idle(&mut state, agent, now);
     let report = state
         .submit_message_with(
             room,
@@ -423,6 +443,7 @@ fn error_pipe_expired_report_preserves_an_existing_real_error() {
     let (worker, room, agent, root) = reporting_worker();
     let mut state = worker.state.clone();
     let now = crate::utils::time::now_ms();
+    settle_as_idle(&mut state, agent, now);
     let report = state
         .submit_message_with(
             room,

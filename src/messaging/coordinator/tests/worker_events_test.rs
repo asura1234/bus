@@ -558,6 +558,23 @@ fn pending_autonomous_burst_survives_restart_and_duplicate_turn_callbacks() {
 #[test]
 fn expired_queued_request_notifies_with_its_reason() {
     let mut f = Fixture::new();
+    let mut state = f.worker.state.clone();
+    state
+        .set_agent_runtime_identity(
+            f.agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("worker".into()),
+                terminal_id: Some("worker-terminal".into()),
+                pane_id: Some("worker-pane".into()),
+                session_id: Some("worker-session".into()),
+            },
+        )
+        .unwrap();
+    state.confirm_hook_setup(f.agent).unwrap();
+    state
+        .observe_status(f.agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    f.worker.save(state).unwrap();
     let orch = f.orch;
     let source = f.send(Author::Agent(orch), "not submitted");
     let mut state = f.worker.state.clone();
@@ -572,7 +589,7 @@ fn expired_queued_request_notifies_with_its_reason() {
     f.worker.save(state).unwrap();
     f.worker.submit_ready().unwrap();
     assert_eq!(f.notices().len(), 1);
-    assert!(f.calls.lock().unwrap()[0].contains("hook_setup_unconfirmed"));
+    assert!(f.calls.lock().unwrap()[0].contains("not_submitted"));
 }
 
 #[test]
