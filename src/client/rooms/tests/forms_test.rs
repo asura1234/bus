@@ -1491,6 +1491,36 @@ fn async_pwd_rejection_reaches_the_room_and_keeps_its_diagnostic_log() {
 }
 
 #[test]
+fn failed_native_launch_stays_bound_to_its_saved_agent() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    let command_id = ui.creation_origins.back().unwrap().id;
+    let error = "Shell waiting for input after 30 seconds";
+    let mut snapshot = (*ui.snapshot).clone();
+    let agent = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+    snapshot.state.set_agent_error(agent, Some(error.into())).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot.clone()));
+    ui.settle_agent_creation(command_id, &Err(error.into()));
+    assert!(room_screen(&mut ui, 100, 40).contains(error));
+
+    snapshot.state.rename_agent(agent, "renamed-worker").unwrap();
+    ui.receive_snapshot(Arc::new(snapshot.clone()));
+    assert_eq!(ui.provisional_agents().count(), 0);
+    snapshot.state.delete_agent(agent, 0).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    assert!(!room_screen(&mut ui, 100, 40).contains(error));
+}
+
+#[test]
 fn suggestion_failure_is_logged_without_a_form_error_dialog() {
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::NewAgent);

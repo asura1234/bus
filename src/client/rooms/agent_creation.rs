@@ -4,7 +4,7 @@ use crate::{
     agents::providers::launch::SetupNotice,
     messaging::{
         coordinator::{agents::AddAgent, BusCommand},
-        model::{LaunchKind, LaunchOutcome, RoomId},
+        model::{AgentId, LaunchKind, LaunchOutcome, RoomId},
         orchestration::OrchestratorSpec,
     },
 };
@@ -13,6 +13,7 @@ pub(super) struct AgentCreation {
     pub(super) room: RoomId,
     pub(super) name: String,
     pub(super) state: CreationState,
+    pub(super) roster_agent: Option<AgentId>,
     form_generation: u64,
 }
 
@@ -27,6 +28,7 @@ impl BusUi {
     pub(super) fn provisional_agents(&self) -> impl Iterator<Item = (&u64, &AgentCreation)> {
         self.agent_creations.iter().filter(|(_, creation)| {
             Some(creation.room) == self.room
+                && creation.roster_agent.is_none()
                 && !self
                     .snapshot
                     .state
@@ -49,11 +51,10 @@ impl BusUi {
         let state = &self.snapshot.state;
         let failed_startups = state.agents().filter_map(move |agent| {
             if agent.room_id != room
-                || self.agent_creations.values().any(|creation| {
-                    creation.room == room
-                        && creation.name == agent.name
-                        && matches!(creation.state, CreationState::Failed(_))
-                })
+                || self
+                    .agent_creations
+                    .values()
+                    .any(|creation| creation.roster_agent == Some(agent.id))
             {
                 return None;
             }
@@ -97,6 +98,7 @@ impl BusUi {
                 room,
                 name,
                 state: CreationState::Launching,
+                roster_agent: None,
                 form_generation: self.form_generation,
             },
         );
@@ -153,7 +155,18 @@ impl BusUi {
                 self.agent_creations.remove(&command_id);
             }
             Ok(()) => {}
-            Err(error) => creation.state = CreationState::Failed(error.clone()),
+            Err(error) => {
+                // A native refusal can arrive after Bus saved the roster entry.
+                // Bind its notice to that exact agent so rename or deletion
+                // cannot turn it back into a provisional row.
+                creation.roster_agent = self.snapshot.state.agents().find_map(|agent| {
+                    (agent.room_id == creation.room
+                        && agent.name == creation.name
+                        && agent.actionable_error.as_deref() == Some(error.as_str()))
+                    .then_some(agent.id)
+                });
+                creation.state = CreationState::Failed(error.clone());
+            }
         }
     }
 }
