@@ -138,8 +138,9 @@ impl BusState {
         self.request(id).is_some_and(|request| {
             !request.settled()
                 && self.dialog_notice_worker(id).is_some_and(|worker| {
-                    self.notice_orchestrator(worker.room_id, Some(worker.id))
-                        == Some(request.agent_id)
+                    !worker.deletion_pending
+                        && self.notice_orchestrator(worker.room_id, Some(worker.id))
+                            == Some(request.agent_id)
                 })
         })
     }
@@ -213,6 +214,7 @@ impl BusState {
         &mut self,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
+        self.retire_deleted_queued_requests(now_ms)?;
         // Retained replies must stay available, but a refused wake must not
         // monopolize the recipient across conversation rooms. Keep FIFO within
         // each class and give unattempted work the next submission opportunity.
@@ -298,6 +300,7 @@ impl BusState {
     ) -> Vec<(super::AgentId, RequestId, u64)> {
         self.agents
             .values()
+            .filter(|worker| !worker.deletion_pending)
             .filter_map(|worker| {
                 let Some(DialogNoticeTo::Orchestrator(id)) = worker.dialog_notice_to else {
                     return None;
@@ -329,7 +332,10 @@ impl BusState {
         let Some((agent, room)) = self
             .agents
             .values()
-            .find(|agent| agent.dialog_notice_to == Some(DialogNoticeTo::Orchestrator(request)))
+            .find(|agent| {
+                !agent.deletion_pending
+                    && agent.dialog_notice_to == Some(DialogNoticeTo::Orchestrator(request))
+            })
             .map(|agent| (agent.id, agent.room_id))
         else {
             return Ok(());
@@ -364,7 +370,7 @@ impl BusState {
         // Delivery diagnostics are not part of the actionable question. The
         // client logs this agent diagnostic with its room/agent context.
         self.set_agent_error(agent, Some(format!("{delivery} ({reason}).{observation}")))?;
-        self.post_bus_notice(room, None, question, now_ms)?;
+        self.post_dialog_notice_to_developer(room, agent, question, now_ms)?;
         self.set_dialog_notice_to(agent, Some(DialogNoticeTo::Developer))
     }
 

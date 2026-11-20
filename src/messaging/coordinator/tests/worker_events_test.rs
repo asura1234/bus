@@ -849,6 +849,26 @@ fn interrupted_and_deleted_agent_requests_end_without_a_notice() {
 }
 
 #[test]
+fn deleting_a_queued_send_author_does_not_create_a_no_reply_wake() {
+    let mut f = Fixture::new();
+    let mut state = f.worker.state.clone();
+    let peer = state
+        .create_agent(f.room, "peer", Provider::ClaudeCode, f.dir.clone(), None)
+        .unwrap();
+    f.worker.save(state).unwrap();
+    let source = f.send(Author::Agent(peer), "queued peer request");
+    let mut state = f.worker.state.clone();
+    state.delete_agent(peer, io::now_ms()).unwrap();
+    assert_eq!(
+        state.request(source).unwrap().failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
+    f.worker.save(state).unwrap();
+    collect(&mut f);
+    assert!(f.notices().is_empty());
+}
+
+#[test]
 fn provider_error_does_not_spend_the_later_real_final() {
     let mut f = Fixture::new();
     let orch = f.orch;
