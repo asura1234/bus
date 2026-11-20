@@ -3,6 +3,7 @@
 
 #![cfg(unix)]
 
+use std::collections::HashMap;
 use std::fs;
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
@@ -11,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 struct Session {
     root: PathBuf,
@@ -43,17 +44,9 @@ fn session() -> Session {
 }
 
 fn open_session(extra_env: &[(&str, &str)]) -> Session {
-    // macOS Unix sockets reject paths past 104 bytes. `/var/folders/...` is
-    // already too long once `herdr-config/sessions/bus/herdr.sock` is appended.
-    let root = PathBuf::from(format!(
-        "/tmp/b{}{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-            % 100_000
-    ));
+    // The shared allocator stays under macOS's Unix-socket path limit because
+    // its root is /tmp, unlike `std::env::temp_dir()`.
+    let root = crate::fixture_dirs::unique_temp_path("life");
     fs::create_dir_all(&root).unwrap();
     let mut perms = fs::metadata(&root).unwrap().permissions();
     perms.set_mode(0o700);
@@ -263,29 +256,48 @@ fn stdin_path(pid: u32) -> String {
         .to_string()
 }
 
-fn sorted_tty_readers(binary: &str) -> Vec<u32> {
-    let mut pids = tty_readers(binary);
-    pids.sort_unstable();
-    pids
-}
-
-fn tty_readers(binary: &str) -> Vec<u32> {
+fn sorted_tty_readers(supervisor: u32, binary: &str) -> Vec<u32> {
     let output = Command::new("ps")
-        .args(["-axo", "pid=,command="])
+        .args(["-axo", "pid=,ppid=,command="])
         .output()
         .unwrap();
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let (pid, command) = line.trim().split_once(' ')?;
-            if !command.contains(binary) || command.contains(" server") {
-                return None;
-            }
-            let pid = pid.parse().ok()?;
-            let stdin = stdin_path(pid);
-            stdin.starts_with("/dev/tty").then_some(pid)
-        })
-        .collect()
+    let mut parent = HashMap::new();
+    let mut readers = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        let Some(pid) = parts.next().and_then(|text| text.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(ppid) = parts.next().and_then(|text| text.parse::<u32>().ok()) else {
+            continue;
+        };
+        parent.insert(pid, ppid);
+        let command = parts.collect::<Vec<_>>().join(" ");
+        if !command.contains(binary) || command.contains(" server") {
+            continue;
+        }
+        if stdin_path(pid).starts_with("/dev/tty") && descends_from(pid, supervisor, &parent) {
+            readers.push(pid);
+        }
+    }
+    readers.sort_unstable();
+    readers
+}
+
+fn descends_from(mut pid: u32, ancestor: u32, parent: &HashMap<u32, u32>) -> bool {
+    for _ in 0..8 {
+        if pid == ancestor {
+            return true;
+        }
+        let Some(next) = parent.get(&pid).copied() else {
+            return false;
+        };
+        if next == 0 || next == pid {
+            return false;
+        }
+        pid = next;
+    }
+    false
 }
 
 fn restart(session: &Session) {
@@ -354,7 +366,7 @@ fn restart_handoff_reaps_the_previous_tui_and_a_second_restart_leaves_one() {
     let second = tui_pid(&session).expect("replacement tui.json");
     assert_ne!(second, first);
     assert!(alive(second));
-    assert_eq!(sorted_tty_readers(binary), vec![second]);
+    assert_eq!(sorted_tty_readers(supervisor, binary), vec![second]);
     restart(&session);
     assert!(
         wait_until(3, || !alive(second)),
@@ -362,7 +374,7 @@ fn restart_handoff_reaps_the_previous_tui_and_a_second_restart_leaves_one() {
     );
     let third = tui_pid(&session).expect("third tui.json");
     assert!(alive(third));
-    assert_eq!(sorted_tty_readers(binary), vec![third]);
+    assert_eq!(sorted_tty_readers(supervisor, binary), vec![third]);
     assert!(alive(supervisor));
     assert!(!stdin_path(supervisor).starts_with("/dev/tty"));
 }
@@ -404,13 +416,13 @@ fn closed_tty_reaps_the_tui() {
 
 #[test]
 fn forced_quit_reaps_the_tui() {
-    let session = open_session(&[("BUS_QUIT_SAVE_TIMEOUT_MS", "1")]);
-    assert!(wait_until(30, || tui_pid(&session).is_some()
-        && server_pid(&session).is_some()));
-    let server = server_pid(&session).expect("server pid");
-    // A finished save leaves through quit.saved on its own. Freeze the server
-    // so Shutdown cannot be acknowledged and the force window stays open.
-    assert_eq!(unsafe { libc::kill(server as i32, libc::SIGSTOP) }, 0);
+    let session = open_session(&[
+        ("BUS_QUIT_SAVE_TIMEOUT_MS", "1"),
+        // Shutdown is in-process and otherwise acks in a few milliseconds,
+        // before the 100ms stdin poll can deliver the confirming key.
+        ("BUS_QUIT_SHUTDOWN_DELAY_MS", "400"),
+    ]);
+    assert!(wait_until(30, || tui_pid(&session).is_some()));
     unsafe {
         assert_eq!(libc::write(session.master, b"\x11".as_ptr().cast(), 1), 1);
     }
@@ -427,10 +439,6 @@ fn forced_quit_reaps_the_tui() {
         "forced quit did not record bus.quit.forced: {}",
         client_log(&session)
     );
-    // stop_server would otherwise wait 15s on a peer that cannot run.
-    unsafe {
-        libc::kill(server as i32, libc::SIGKILL);
-    }
     let tui = tui_pid(&session).unwrap();
     let supervisor = session.child.id();
     assert!(
