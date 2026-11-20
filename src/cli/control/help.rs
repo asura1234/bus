@@ -279,9 +279,21 @@ pub(crate) fn command_tree(dev: bool) -> Command {
     if dev {
         command.subcommand(restart_command()).subcommand(
             Command::new("dashboard")
-                .about("Serve local-hour delivery reliability on a random loopback port; read-only")
-                .long_about("Read the selected session's persisted requests, journal and history. Prints a random http://127.0.0.1:PORT/ URL and serves an auto-refreshing page that leads with delivery: delivered ÷ attempted for the whole session and for each provider and room, plus pending (with the oldest age) and delivery failures split into Bus-caused and external. A delivered message with no reply counts as delivered. Bus reliability is a note under delivery: of conclusive deliveries, how many succeeded, or an em dash when there is no conclusive outcome. Provider and room rows include p50, p90 and p99 delay from send accepted until the agent turn takes the message, plus the sample count, in human units. The headline shows that delivery percentage beside the mean of that delay. Pending and failed share one card. The hourly graph stays and the hourly table does not. An empty group is an em dash, not zero. There is no separate latency page. No session state is written; read failures go to dashboard.log in the session logs directory. Stop with Ctrl+C.")
-                .after_help("Example: bus --dev dashboard"),
+                .about("Serve local-hour delivery reliability on a random loopback port")
+                .long_about("Read the selected session's persisted requests, journal and history. Prints a random http://127.0.0.1:PORT/ URL and serves an auto-refreshing page that leads with delivery: delivered ÷ attempted for the whole session and for each provider and room, plus pending (with the oldest age) and delivery failures split into Bus-caused and external. A delivered message with no reply counts as delivered. Bus reliability is a note under delivery: of conclusive deliveries, how many succeeded, or an em dash when there is no conclusive outcome. Provider and room rows include p50, p90 and p99 delay from send accepted until the agent turn takes the message, plus the sample count, in human units. The headline shows that delivery percentage beside the mean of that delay. Pending and failed share one card. The hourly graph stays and the hourly table does not. An empty group is an em dash, not zero. There is no separate latency page. Reset stats stores one session baseline and counts only later events. It does not change messages, replies or history. Other routes do not write session state. Read failures go to dashboard.log in the session logs directory. Stop with Ctrl+C.")
+                .subcommand(
+                    Command::new("reset")
+                        .about("Count dashboard metrics only after this moment")
+                        .long_about("Record one session baseline timestamp. Messaging, Agent and Errors then count only events after it. Messages, replies and history stay. The baseline survives restarts. A second reset moves it forward.")
+                        .arg(
+                            Arg::new("confirm")
+                                .long("confirm")
+                                .action(clap::ArgAction::SetTrue)
+                                .help("Confirm the stats window reset"),
+                        )
+                        .after_help("Example: bus --dev dashboard reset --confirm"),
+                )
+                .after_help("Example: bus --dev dashboard\n         bus --dev dashboard reset --confirm"),
         )
     } else {
         command

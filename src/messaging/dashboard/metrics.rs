@@ -454,6 +454,14 @@ pub(super) fn room_label(state: &BusState, id: RoomId) -> String {
 }
 
 pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dashboard {
+    snapshot_since(state, clock, None)
+}
+
+pub(super) fn snapshot_since(
+    state: &BusState,
+    clock: impl Fn(u64) -> HourKey,
+    since_ms: Option<u64>,
+) -> Dashboard {
     let mut all = SeriesBuilder::default();
     let mut providers: BTreeMap<_, _> = PROVIDERS
         .into_iter()
@@ -462,6 +470,11 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
     let mut rooms: BTreeMap<String, GroupBuilder> = BTreeMap::new();
     let mut failures = Vec::new();
     for request in state.requests() {
+        // One window for every messaging series: delivery, latency, pending,
+        // failures and the hourly graph. Live and archived requests share it.
+        if !super::baseline::after_baseline(request.prompt.submitted_at_ms, since_ms) {
+            continue;
+        }
         // Deliberate closures remain in message history, outside every dashboard
         // population (including delivery rates and latency samples). Successful
         // replies/turns still win over stale closure reasons.

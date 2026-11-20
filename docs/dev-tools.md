@@ -15,6 +15,7 @@ Dev tools (answer only in a session started with `bus --dev`):
   ui release-acks (dev variant only)
   restart [--binary PATH] [--clear-data] --confirm
   dashboard
+  dashboard reset --confirm
 
 Bus's control commands come in two tiers. The agent tier (`bus --help`) is how
 orchestrators and workers coordinate, and every session answers it. Dev tools
@@ -105,7 +106,14 @@ session, including an exited server. It prints a random `http://127.0.0.1:PORT/`
 URL, serves one page with inline assets, and refreshes every thirty seconds.
 `BUS_DATA_DIR` selects an exact session root; otherwise the last session is read
 without recording a resume. It reads persisted state, journal and archived
-requests; it never sends control commands or saves session state. Stop with Ctrl+C.
+requests and does not send control commands. `bus --dev dashboard reset --confirm`
+stores one baseline timestamp in that session (`dashboard-stats.json`, field
+`since_ms`). The page's Reset stats button does the same after a confirmation.
+Messaging, Agent and Errors then count only events after that time, and the
+header shows `since <local time>`. Messages, replies and history stay. The
+baseline survives restarts. A second reset moves it forward. Stop the page
+with Ctrl+C.
+
 The page has Messaging, Agent, and Errors tabs. Messaging leads with delivery.
 A direct message counts as delivered once Bus hands it off, including when the
 recipient has not replied. Delivery % is

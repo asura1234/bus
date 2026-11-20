@@ -137,7 +137,7 @@ fn last_session(
 ) -> io::Result<sessions::LocalSession> {
     let reads_perf =
         matches!(action, Action::Control(args) if args.first().is_some_and(|arg| arg == "perf"));
-    if reads_perf || matches!(action, Action::Dashboard) {
+    if reads_perf || matches!(action, Action::Dashboard | Action::ResetDashboard { .. }) {
         registry.last()
     } else {
         registry.resume(ResumeTarget::Last)
@@ -298,13 +298,15 @@ fn session_root(
             return Ok(None);
         }
         // Stop targets the same session as control commands.
-        Action::Control(_) | Action::Stop | Action::Dashboard => match explicit_root.clone() {
-            Some(root) => (root, None),
-            None => {
-                let session = last_session(registry, &invocation.action)?;
-                (session.root, Some(session.id))
+        Action::Control(_) | Action::Stop | Action::Dashboard | Action::ResetDashboard { .. } => {
+            match explicit_root.clone() {
+                Some(root) => (root, None),
+                None => {
+                    let session = last_session(registry, &invocation.action)?;
+                    (session.root, Some(session.id))
+                }
             }
-        },
+        }
         // An inherited BUS_DATA_DIR is not an override when it is that session's
         // own directory. Last-opened can name a session opened later.
         Action::Restart(_) => {
@@ -346,6 +348,20 @@ fn bind_session_env(root: &std::path::Path, session_id: Option<&str>) -> io::Res
         coordinator::DEFAULT_SESSION.to_owned(),
     ];
     crate::utils::paths::configure_from_args(&session).map_err(io::Error::other)?;
+    Ok(())
+}
+
+fn reset_dashboard_stats(root: &std::path::Path, confirm: bool) -> io::Result<()> {
+    if !confirm {
+        return Err(io::Error::other(
+            "Reset dashboard stats requires --confirm. Example: bus --dev dashboard reset --confirm",
+        ));
+    }
+    let since = crate::messaging::dashboard::reset_stats(root)?;
+    help::write_stdout_line(format_args!(
+        "{}",
+        crate::messaging::dashboard::stats_since_label(since)
+    ));
     Ok(())
 }
 
@@ -407,6 +423,7 @@ fn run_invocation(invocation: session_pick::Invocation) -> io::Result<()> {
             perf::run(&crate::utils::paths::data_dir(), &control_args[1..])
         }
         Action::Control(control_args) => control::run(&root, &control_args),
+        Action::ResetDashboard { confirm } => reset_dashboard_stats(&root, confirm),
         Action::Dashboard => {
             let mut options = logging_options();
             options.dev = false;

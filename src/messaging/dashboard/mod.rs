@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::messaging::storage::state_store::JsonStore;
 
+mod baseline;
 mod clock;
 mod latency;
 mod launch_metrics;
@@ -18,6 +19,14 @@ const REQUEST_DEADLINE: Duration = Duration::from_secs(1);
 
 pub(crate) fn run(root: &Path) -> io::Result<()> {
     serve(root)
+}
+
+pub(crate) fn reset_stats(root: &Path) -> io::Result<u64> {
+    baseline::reset(root, crate::utils::time::now_ms())
+}
+
+pub(crate) fn stats_since_label(ms: u64) -> String {
+    baseline::label(ms)
 }
 
 fn serve(root: &Path) -> io::Result<()> {
@@ -85,6 +94,12 @@ impl Response {
 }
 
 fn response_for(root: &Path, method: &str, path: &str) -> Response {
+    if method == "POST" && path == "/reset-stats?confirm=1" {
+        return reset_response(root);
+    }
+    if method == "POST" && path == "/reset-stats" {
+        return Response::empty("400 Bad Request");
+    }
     if method != "GET" {
         return Response::empty("405 Method Not Allowed");
     }
@@ -96,6 +111,7 @@ fn response_for(root: &Path, method: &str, path: &str) -> Response {
         },
         "/data" => {
             let now = crate::utils::time::now_ms();
+            let since_ms = baseline::since_ms(root);
             let state = match JsonStore::new(root.join("state.json")).load() {
                 Ok(state) => state,
                 Err(error) => {
@@ -105,10 +121,10 @@ fn response_for(root: &Path, method: &str, path: &str) -> Response {
             };
             let metrics = state
                 .as_ref()
-                .map(|state| metrics::snapshot(state, metrics::local_hour));
+                .map(|state| metrics::snapshot_since(state, metrics::local_hour, since_ms));
             let launches = state
                 .as_ref()
-                .map(|state| launch_metrics::snapshot(state, metrics::local_hour));
+                .map(|state| launch_metrics::snapshot_since(state, metrics::local_hour, since_ms));
             let hour = metrics::local_hour(now);
             let offset = hour
                 .label
@@ -119,9 +135,29 @@ fn response_for(root: &Path, method: &str, path: &str) -> Response {
                 Some(serde_json::json!(launches)),
                 now,
                 offset,
+                since_ms,
             )
         }
         _ => Response::empty("404 Not Found"),
+    }
+}
+
+fn reset_response(root: &Path) -> Response {
+    match baseline::reset(root, crate::utils::time::now_ms()) {
+        Ok(since) => Response {
+            status: "200 OK",
+            content_type: "application/json; charset=utf-8",
+            body: serde_json::json!({
+                "stats_since_ms": since,
+                "stats_since": baseline::label(since),
+            })
+            .to_string()
+            .into_bytes(),
+        },
+        Err(error) => {
+            tracing::warn!(event = "bus.dashboard.reset_failed", %error);
+            Response::empty("500 Internal Server Error")
+        }
     }
 }
 
@@ -130,6 +166,7 @@ fn data_envelope(
     launches: Option<serde_json::Value>,
     now: u64,
     offset: &str,
+    since_ms: Option<u64>,
 ) -> Response {
     let zone = std::env::var("TZ")
         .ok()
@@ -149,6 +186,8 @@ fn data_envelope(
         "generated_at_ms": now,
         "timezone": timezone,
         "metrics": metrics,
+        "stats_since_ms": since_ms,
+        "stats_since": since_ms.map(baseline::label),
     });
     if let (Some(object), Some(launches)) = (data.as_object_mut(), launches) {
         object.insert("launches".to_owned(), launches);
@@ -245,6 +284,9 @@ fn serve_connection(
     stream.write_all(&response.body)
 }
 
+#[cfg(test)]
+#[path = "tests/baseline_test.rs"]
+mod baseline_tests;
 #[cfg(test)]
 #[path = "tests/page_render_test.rs"]
 mod page_render_tests;

@@ -21,6 +21,9 @@ pub(super) enum Action {
     Run,
     Sessions,
     Dashboard,
+    ResetDashboard {
+        confirm: bool,
+    },
     Resume(ResumeTarget),
     Stop,
     Restart(RestartRequest),
@@ -65,8 +68,8 @@ pub(super) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 if !dev {
                     return Err("dev tool: run `bus --dev dashboard`".into());
                 }
-                action = Some(Action::Dashboard);
                 index += 1;
+                action = Some(parse_dashboard(args, &mut index)?);
             }
             "sessions" if action.is_none() => {
                 action = Some(Action::Sessions);
@@ -119,6 +122,27 @@ pub(super) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         yolo,
         action: action.unwrap_or(Action::Run),
     })
+}
+
+const DASHBOARD_RESET_USAGE: &str = "Usage: bus --dev dashboard [reset --confirm]";
+
+fn parse_dashboard(args: &[String], index: &mut usize) -> Result<Action, String> {
+    if args.get(*index).map(String::as_str) != Some("reset") {
+        if *index < args.len() {
+            return Err(DASHBOARD_RESET_USAGE.to_owned());
+        }
+        return Ok(Action::Dashboard);
+    }
+    *index += 1;
+    let mut confirm = false;
+    while *index < args.len() {
+        match args[*index].as_str() {
+            "--confirm" if !confirm => confirm = true,
+            _ => return Err(DASHBOARD_RESET_USAGE.to_owned()),
+        }
+        *index += 1;
+    }
+    Ok(Action::ResetDashboard { confirm })
 }
 
 fn parse_restart(

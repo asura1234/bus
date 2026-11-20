@@ -6,6 +6,33 @@ fn dashboard_is_dev_only_and_session_selection_does_not_write_the_registry() {
     let invocation = parse_invocation(&args(&["--dev", "dashboard"])).unwrap();
     assert_eq!(format!("{:?}", invocation.action), "Dashboard");
     assert!(parse_invocation(&args(&["--dev", "dashboard", "extra"])).is_err());
+    assert_eq!(
+        format!(
+            "{:?}",
+            parse_invocation(&args(&["--dev", "dashboard", "reset"]))
+                .unwrap()
+                .action
+        ),
+        "ResetDashboard { confirm: false }"
+    );
+    assert_eq!(
+        format!(
+            "{:?}",
+            parse_invocation(&args(&["--dev", "dashboard", "reset", "--confirm"]))
+                .unwrap()
+                .action
+        ),
+        "ResetDashboard { confirm: true }"
+    );
+    assert!(parse_invocation(&args(&[
+        "--dev",
+        "dashboard",
+        "reset",
+        "--confirm",
+        "extra"
+    ]))
+    .is_err());
+    assert!(parse_invocation(&args(&["dashboard", "reset", "--confirm"])).is_err());
     let root = crate::utils::test_temp::unique_temp_path("dashboard-registry");
     let registry = crate::messaging::storage::sessions::LocalSessionRegistry::new(root.clone());
     let session = registry.create().unwrap();
