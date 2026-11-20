@@ -36,8 +36,7 @@ fn startup_failure(
 
 fn startup_failure_cause(
     startup: &AgentStartup,
-    input_error: bool,
-    native_error: bool,
+    explicit_cause: Option<&'static str>,
     process_exited: bool,
 ) -> (&'static str, &'static str) {
     if matches!(
@@ -48,15 +47,27 @@ fn startup_failure_cause(
         })
     ) {
         (StartupFailure::CODEX_BOOTSTRAP, "unavailable_at_launch")
-    } else if input_error {
-        (StartupFailure::LAUNCH_INPUT, StartupFailure::LAUNCH_INPUT)
-    } else if native_error {
-        (StartupFailure::NATIVE_RESUME, StartupFailure::NATIVE_RESUME)
+    } else if let Some(cause) = explicit_cause {
+        (cause, cause)
     } else if process_exited {
         (StartupFailure::PROVIDER_EXIT, "unavailable_at_launch")
     } else {
         (StartupFailure::TIMEOUT, StartupFailure::TIMEOUT)
     }
+}
+
+pub(super) fn explicit_startup_error<'a>(
+    agent: &super::RoomAgent,
+    info: &'a schema::AgentInfo,
+) -> Option<(&'static str, &'a str)> {
+    super::resume::native_attempt(agent, info)
+        .and_then(|attempt| attempt.error.as_deref())
+        .map(|detail| (StartupFailure::NATIVE_RESUME, detail))
+        .or_else(|| {
+            info.launch_input_error
+                .as_deref()
+                .map(|detail| (StartupFailure::LAUNCH_INPUT, detail))
+        })
 }
 
 fn describe_exhausted_retry(failure: &mut StartupFailure, recovery: Option<&StartupRecovery>) {
@@ -321,15 +332,11 @@ impl Worker {
                     && (info.name.as_deref() == Some(&name)
                         || super::resume::native_attempt(&agent, info).is_some())
             });
-            let input_error = info.and_then(|info| info.launch_input_error.as_deref());
-            let native_error = info
-                .and_then(|info| super::resume::native_attempt(&agent, info))
-                .and_then(|attempt| attempt.error.as_deref())
-                .or(input_error);
+            let explicit_error = info.and_then(|info| explicit_startup_error(&agent, info));
             // Codex defers SessionStart until its first prompt. Native
             // interactive confirmation, or a provider already waiting at its
             // own startup dialog, proves it started. Preserve that help wait.
-            if native_error.is_none()
+            if explicit_error.is_none()
                 && info.is_some_and(|info| {
                     info.agent
                         .as_deref()
@@ -372,7 +379,7 @@ impl Worker {
                     || !startup.reported
                         && terminal_info.is_none_or(|info| !info.launch_pending)
                         && self.startup_process_exited(&agent));
-            if native_error.is_none()
+            if explicit_error.is_none()
                 && self.handle_codex_startup_retry(&agent, &mut startup, process_exited, now_ms)?
             {
                 continue;
@@ -380,7 +387,7 @@ impl Worker {
             // Startup confirmation is bounded independently of native ownership;
             // only exit/replacement releases it. A failed list request never
             // reaches here, so silence is not failure.
-            if !startup.reported && !expired && !process_exited && native_error.is_none() {
+            if !startup.reported && !expired && !process_exited && explicit_error.is_none() {
                 if !startup.process_observed && process_present && info.is_some() {
                     startup.process_observed = true;
                     let mut state = self.state.clone();
@@ -395,8 +402,8 @@ impl Worker {
                 self.close_startup_failure(
                     &agent,
                     startup,
-                    input_error.is_some(),
-                    native_error,
+                    info.is_some_and(|info| info.launch_input_error.is_some()),
+                    explicit_error,
                     process_exited,
                     timeout_ms,
                     now_ms,
@@ -412,20 +419,20 @@ impl Worker {
         &mut self,
         agent: &super::RoomAgent,
         mut startup: AgentStartup,
-        input_error: bool,
-        native_error: Option<&str>,
+        launch_input_failed: bool,
+        explicit_error: Option<(&'static str, &str)>,
         process_exited: bool,
         timeout_ms: u64,
         now_ms: u64,
     ) -> Result<(), String> {
         let sessionless = agent.runtime_identity.session_id.is_none();
-        let evidence = if input_error && !sessionless {
+        let evidence = if launch_input_failed && !sessionless {
             "> Conversation screen omitted".into()
         } else {
             self.startup_screen(agent.id)
         };
         let diagnostics = self.startup_diagnostics(agent);
-        let reason = if let Some(reason) = native_error {
+        let reason = if let Some((_, reason)) = explicit_error {
             reason.to_owned()
         } else if process_exited {
             "provider exited during startup".into()
@@ -446,13 +453,14 @@ impl Worker {
             .unwrap_or_default();
         let (cause, metric_cause) = startup_failure_cause(
             &startup,
-            input_error,
-            native_error.is_some(),
+            explicit_error.map(|(cause, _)| cause),
             process_exited,
         );
         let new_conversation = sessionless && startup.native_terminal_id.is_none();
+        let restore_failure = explicit_error.is_some()
+            && (startup.native_terminal_id.is_some() || cause == StartupFailure::NATIVE_RESUME);
         let mut failure = startup_failure(
-            (new_conversation || cause == StartupFailure::NATIVE_RESUME).then_some(cause),
+            (new_conversation || restore_failure).then_some(cause),
             &reason,
             &evidence,
             sessionless,

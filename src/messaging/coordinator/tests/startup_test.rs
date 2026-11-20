@@ -253,6 +253,48 @@ fn exited_startup_transport(dir: &std::path::Path) -> Box<dyn Transport> {
 }
 
 #[test]
+fn saved_session_startup_releases_held_queue_with_a_fresh_idle_window() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let now = io::now_ms();
+    let old = now - crate::messaging::model::QUEUED_STALL_MS - 1;
+    let mut state = worker.state.clone();
+    state
+        .set_draft_text(room, "held during saved-session startup")
+        .unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    let request = state.submit_draft(room, old).unwrap()[0];
+    state
+        .observe_status(agent, RuntimeStatus::Idle, now)
+        .unwrap();
+    worker.save(state).unwrap();
+    worker
+        .watch_agent_startup(agent, vec!["claude".into()])
+        .unwrap();
+    worker.expire_queued_requests(now).unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+
+    let mut ready = native_info("pane", "claude", "session");
+    ready.native_ready = true;
+    ready.interactive_ready = true;
+    worker
+        .cleanup_failed_startups(&[ready], &mpsc::channel().0, now)
+        .unwrap();
+    let ready_agent = worker.state.agent(agent).unwrap();
+    assert!(ready_agent.startup.is_none());
+    assert_eq!(ready_agent.status_since_ms, now);
+    worker.expire_queued_requests(now).unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn non_codex_sessionless_readiness_refreshes_idle_window_before_delivery() {
     let mut ready = native_info("pane", "kimi", "session");
     ready.native_ready = true;

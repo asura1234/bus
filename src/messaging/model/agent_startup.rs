@@ -24,10 +24,6 @@ impl AgentStartup {
             STARTUP_TIMEOUT_MS
         }
     }
-
-    pub(super) fn holds_queued_work(&self, agent: &RoomAgent) -> bool {
-        self.reported || self.recovery.is_some() || agent.runtime_identity.session_id.is_none()
-    }
 }
 
 impl StartupFailure {
@@ -49,17 +45,10 @@ impl BusState {
             .agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
-        if startup.is_none()
-            && agent
-                .startup
-                .as_ref()
-                .is_some_and(|startup| startup.holds_queued_work(agent))
-        {
+        if startup.is_none() && agent.startup.is_some() {
             // Like closing a dialog, readiness gives held work a fresh idle
             // interval even if the runtime remained Idle throughout the hold.
             agent.status_since_ms = agent.status_since_ms.max(agent.observed_at_ms);
-        }
-        if startup.is_none() && agent.startup.is_some() {
             // Startup snapshots remain as files. The now-running provider must
             // get its own fresh snapshot if it exits later on this same terminal.
             agent.exit_snapshot = None;

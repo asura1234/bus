@@ -174,14 +174,10 @@ fn failure_cause(
     if previous.missing_binary.is_none() && agent.missing_binary.is_some() {
         return Some("missing_executable");
     }
-    if info.is_some_and(|i| i.launch_input_error.is_some()) {
-        return Some("launch_input_failed");
-    }
-    if info
-        .and_then(|i| resume::native_attempt(agent, i))
-        .is_some_and(|r| r.error.is_some())
+    if let Some((cause, _)) =
+        info.and_then(|info| super::startup::explicit_startup_error(agent, info))
     {
-        return Some("native_resume_failed");
+        return Some(cause);
     }
     // Startup cleanup owns the bounded bootstrap retry decision. A captured
     // exit is evidence, not the final outcome of a recoverable launch.
