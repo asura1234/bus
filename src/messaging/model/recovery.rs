@@ -1,6 +1,6 @@
 //! Explicit recovery and terminal failure of unsubmitted queued requests.
 use super::{
-    AgentId, Author, BusState, DialogNoticeDelivery, DialogNoticeTo, ModelError, Provider, Request,
+    AgentId, Author, BusState, DialogNoticeDelivery, DialogNoticeTo, ModelError, Request,
     RequestId, RequestPhase, RoomAgent, RuntimeStatus, SubmissionOutcome, QUEUED_STALL_MS,
 };
 
@@ -36,31 +36,25 @@ impl BusState {
             .max(self.last_progress_ms(lead.agent_id))
     }
 
-    pub(crate) fn queued_expiry_baseline(
+    pub(crate) fn queued_expiry_window(
         &self,
         request: &Request,
         reason: &str,
         now_ms: u64,
-    ) -> Option<u64> {
-        if reason == "dialog_notice_undelivered" {
-            return Some(request.prompt.submitted_at_ms);
-        }
-        let lead = request
-            .group
-            .and_then(|id| self.requests.get(&id))
-            .unwrap_or(request);
-        let agent = self.agent(lead.agent_id)?;
-        if self.expired_queue_rejection(lead, now_ms).is_some() {
-            let rejected_at = lead.queued_rejection.as_ref()?.at_ms;
-            return Some(if agent.provider == Provider::Agy {
-                rejected_at
-                    .max(agent.status_since_ms)
-                    .max(self.last_progress_ms(agent.id))
-            } else {
-                rejected_at
-            });
-        }
-        Some(self.queued_stall_baseline(lead, agent))
+    ) -> Option<(u64, u64)> {
+        let baseline = if reason == "dialog_notice_undelivered" {
+            request.prompt.submitted_at_ms
+        } else {
+            let lead = request
+                .group
+                .and_then(|id| self.request(id))
+                .unwrap_or(request);
+            match self.expired_queue_rejection(lead, now_ms) {
+                Some((_, since)) => since,
+                None => self.queued_stall_baseline(lead, self.agent(lead.agent_id)?),
+            }
+        };
+        Some((baseline, baseline.saturating_add(QUEUED_STALL_MS)))
     }
 
     /// Only request.recover uses this boundary. Automatic callers keep their

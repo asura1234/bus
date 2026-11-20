@@ -251,7 +251,7 @@ impl BusState {
         {
             return None;
         }
-        if let Some(reason) = self.expired_queue_rejection(lead, now_ms) {
+        if let Some((reason, _)) = self.expired_queue_rejection(lead, now_ms) {
             return Some(reason.into());
         }
         let since = |grace: u64, from: u64| now_ms.saturating_sub(from) >= grace;

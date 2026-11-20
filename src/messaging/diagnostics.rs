@@ -42,7 +42,8 @@ pub(crate) fn queued_expiries(
             continue;
         }
         let agent = previous.agent(old.agent_id);
-        let baseline = previous.queued_expiry_baseline(old, reason, now_ms);
+        let identity = agent.map(|agent| &agent.runtime_identity);
+        let window = previous.queued_expiry_window(old, reason, now_ms);
         let latency = &old.latency;
         let native = &latency.native;
         tracing::info!(
@@ -50,14 +51,20 @@ pub(crate) fn queued_expiries(
             reason = "queued_stalled",
             failure_reason = reason,
             request_id = id.0,
+            prompt_id = old.prompt.id.0,
             room_id = old.room_id.0,
             agent_id = old.agent_id.0,
+            provider = ?agent.map(|agent| agent.provider),
+            launch_id = ?identity.and_then(|identity| identity.launch_id.as_deref()),
+            terminal_id = ?identity.and_then(|identity| identity.terminal_id.as_deref()),
+            pane_id = ?identity.and_then(|identity| identity.pane_id.as_deref()),
             phase = ?old.phase,
             status = ?agent.map(|agent| agent.status),
             status_revision = agent.map(|agent| agent.status_revision),
             current_request_id = ?agent.and_then(|agent| agent.current_request).map(|owner| owner.0),
-            baseline_at_ms = baseline,
-            elapsed_ms = baseline.map(|at| now_ms.saturating_sub(at)),
+            baseline_at_ms = window.map(|(baseline, _)| baseline),
+            deadline_at_ms = window.map(|(_, deadline)| deadline),
+            elapsed_ms = window.map(|(baseline, _)| now_ms.saturating_sub(baseline)),
             accepted_at_ms = latency.accepted_at_ms,
             queued_at_ms = latency.queued_at_ms,
             eligible_at_ms = latency.eligible_at_ms,

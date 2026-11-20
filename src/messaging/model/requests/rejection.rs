@@ -43,7 +43,7 @@ impl BusState {
         &self,
         request: &'a Request,
         now_ms: u64,
-    ) -> Option<&'a str> {
+    ) -> Option<(&'a str, u64)> {
         if request.phase != RequestPhase::Queued
             || self
                 .agent(request.agent_id)
@@ -82,6 +82,7 @@ impl BusState {
                 .max(agent.status_since_ms)
                 .max(self.last_progress_ms(agent.id));
         }
-        (now_ms.saturating_sub(since) >= QUEUED_STALL_MS).then_some(rejected.reason.as_str())
+        (now_ms.saturating_sub(since) >= QUEUED_STALL_MS)
+            .then_some((rejected.reason.as_str(), since))
     }
 }

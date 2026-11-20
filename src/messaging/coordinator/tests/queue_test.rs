@@ -50,6 +50,14 @@ fn reopening_logs_stalled_queue_before_resetting_the_agent_status() {
         format!("status_revision={revision}"),
         "current_request_id=None".into(),
         format!("baseline_at_ms={baseline}"),
+        format!(
+            "deadline_at_ms={}",
+            baseline + crate::messaging::model::QUEUED_STALL_MS
+        ),
+        "provider=Some(Codex)".into(),
+        "launch_id=Some(\"launch\")".into(),
+        "terminal_id=Some(\"terminal\")".into(),
+        "pane_id=Some(\"pane\")".into(),
     ] {
         assert!(events[0].contains(&field), "missing {field}: {text}");
     }
@@ -89,12 +97,160 @@ fn queued_stall_logs_persisted_reason_and_pre_recovery_idle_no_pick() {
         format!("status_revision={revision}"),
         format!("baseline_at_ms={baseline}"),
         format!("elapsed_ms={elapsed}"),
+        format!("deadline_at_ms={}", baseline + elapsed),
+        "provider=Some(Codex)".into(),
+        "launch_id=Some(\"launch\")".into(),
+        "terminal_id=Some(\"terminal\")".into(),
+        "pane_id=Some(\"pane\")".into(),
         format!("accepted_at_ms={accepted}"),
     ] {
         assert!(event.contains(&field), "missing {field}: {event}");
     }
     assert!(!event.contains("picked_at_ms"), "{event}");
     assert!(!text.contains("PRIVATE_QUEUE_EXPIRY_PROMPT"), "{text}");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn queued_rejection_logs_fixed_and_agy_extended_deadlines() {
+    use crate::messaging::model::{SubmissionOutcome, QUEUED_STALL_MS};
+    for provider in [Provider::Codex, Provider::Agy] {
+        let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let request = queue(&mut worker, room, agent, "PRIVATE_REJECTED_PROMPT");
+        let rejected_at = worker
+            .state
+            .request(request)
+            .unwrap()
+            .prompt
+            .submitted_at_ms;
+        let idle_at = rejected_at + 10_000;
+        let mut state = worker.state.clone();
+        state
+            .begin_submission(request, "launch", rejected_at)
+            .unwrap();
+        state
+            .record_submission(
+                request,
+                SubmissionOutcome::DefinitelyRejected {
+                    message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
+                },
+            )
+            .unwrap();
+        state
+            .observe_status(agent, RuntimeStatus::Working, rejected_at + 1)
+            .unwrap();
+        state
+            .observe_status(agent, RuntimeStatus::Idle, idle_at)
+            .unwrap();
+        worker.save(state).unwrap();
+        let baseline = if provider == Provider::Agy {
+            idle_at
+        } else {
+            rejected_at
+        };
+        let deadline = baseline + QUEUED_STALL_MS;
+        let logs = crate::utils::logging::test_capture::Capture::default();
+        logs.run(|| {
+            worker.expire_queued_requests(deadline - 1).unwrap();
+            assert_eq!(
+                worker.state.request(request).unwrap().phase,
+                RequestPhase::Queued
+            );
+            worker.expire_queued_requests(deadline).unwrap();
+        });
+        let text = logs.text();
+        let event = text
+            .lines()
+            .find(|line| line.contains("queued_stalled"))
+            .expect(&text);
+        for field in [
+            "failure_reason=\"prompt_not_shown\"".into(),
+            format!("baseline_at_ms={baseline}"),
+            format!("deadline_at_ms={deadline}"),
+        ] {
+            assert!(event.contains(&field), "missing {field}: {event}");
+        }
+        assert!(!text.contains("PRIVATE_REJECTED_PROMPT"), "{text}");
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn queued_dialog_notice_fallback_logs_the_original_submission_deadline() {
+    use crate::messaging::model::{DialogNoticeTo, QUEUED_STALL_MS};
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let baseline = io::now_ms();
+    let mut state = worker.state.clone();
+    let master = state.master_room().unwrap().id;
+    let orchestrator = state
+        .create_agent(master, "orch", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    state.bind_orchestrator(orchestrator, room).unwrap();
+    state
+        .observe_status(orchestrator, RuntimeStatus::Working, baseline + 1_000)
+        .unwrap();
+    state
+        .set_dialog_notice(agent, Some("dialog-id".into()))
+        .unwrap();
+    let Some(DialogNoticeTo::Orchestrator(request)) =
+        state.post_blocked_notice(agent, baseline).unwrap()
+    else {
+        panic!("expected a queued orchestrator notice");
+    };
+    state
+        .set_dialog_notice_to(agent, Some(DialogNoticeTo::Orchestrator(request)))
+        .unwrap();
+    worker.save(state).unwrap();
+    let deadline = baseline + QUEUED_STALL_MS;
+    let logs = crate::utils::logging::test_capture::Capture::default();
+    logs.run(|| worker.expire_queued_requests(deadline).unwrap());
+    let text = logs.text();
+    let event = text
+        .lines()
+        .find(|line| line.contains("queued_stalled"))
+        .expect(&text);
+    assert!(
+        event.contains("failure_reason=\"dialog_notice_undelivered\""),
+        "{event}"
+    );
+    assert!(
+        event.contains(&format!("baseline_at_ms={baseline}")),
+        "{event}"
+    );
+    assert!(
+        event.contains(&format!("deadline_at_ms={deadline}")),
+        "{event}"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn failed_expiry_save_does_not_emit_queued_stalled() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "never log before save");
+    let baseline = worker
+        .state
+        .request(request)
+        .unwrap()
+        .prompt
+        .submitted_at_ms;
+    worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempWrite);
+    let logs = crate::utils::logging::test_capture::Capture::default();
+    logs.run(|| {
+        assert!(worker
+            .expire_queued_requests(baseline + crate::messaging::model::QUEUED_STALL_MS)
+            .is_err())
+    });
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert!(!logs.text().contains("queued_stalled"));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
