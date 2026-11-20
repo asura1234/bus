@@ -91,7 +91,7 @@ pub(super) fn begin_handoff(
             request.as_who.as_deref(),
             std::env::var("USER").ok().as_deref(),
         ),
-        tui: tui.process,
+        tui: tui.worker.unwrap_or(tui.process),
         session_id: launch.session_id,
         explicit_data_dir: launch.explicit_data_dir,
         dev: launch.dev,
@@ -123,8 +123,7 @@ fn rollback_tui(
     old_sha: &str,
 ) -> io::Result<restart_record::TuiBuild> {
     let tui = restart_record::read_tui_build(root).filter(|tui| {
-        restart_record::valid_build_sha(&tui.sha)
-            && crate::platform::process_still_live(tui.process.pid, tui.process.birth)
+        restart_record::valid_build_sha(&tui.sha) && super::session::tui_processes_live(tui)
     }).ok_or_else(|| record_refused(root, &refused_record(
         request, new_binary, old_binary, old_sha, &identity.sha,
         "the running TUI has no whole-session restart receipt; quit with Ctrl+Q, then run the new binary with the same --dev, --yolo and resume/session settings",
