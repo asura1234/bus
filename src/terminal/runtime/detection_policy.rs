@@ -723,6 +723,66 @@ mod tests {
     }
 
     #[test]
+    fn codex_working_with_shortcut_output_stays_working() {
+        // Bus observe: mode-dropdown, room 1, revision 18578 (112 × 43).
+        let screen =
+            include_str!("../../../tests/fixtures/codex-activity/working-with-shortcut-output.txt");
+        for title in ["project", "⠋ project", "Action Required"] {
+            let result = published(AgentKind::Codex, screen, title);
+            assert_eq!(result.state, AgentState::Working, "{title}");
+            assert!(result.visible_working);
+            assert!(!result.visible_blocker);
+        }
+        assert!(crate::terminal::driver::blocker_from_text(screen, true).is_none());
+    }
+
+    #[test]
+    fn codex_tool_output_shortcuts_do_not_create_a_dialog() {
+        const OUTPUT: &str =
+            "• Ran cat docs/help.md\n  └ Ctrl+Enter     Confirm form\n    Esc            Cancel";
+        for screen in [
+            OUTPUT.to_owned(),
+            format!("• Working (3s • esc to interrupt)\n\n{OUTPUT}"),
+            format!("{OUTPUT}\n    Remaining tool output"),
+            format!(
+                "{OUTPUT}\n\n• Working (3s • esc to interrupt) · 1 background terminal running"
+            ),
+            "Esc            Cancel\n\n• Working (3s • esc to interrupt) · 1 background terminal running"
+                .to_owned(),
+        ] {
+            assert!(
+                !crate::terminal::driver::has_input_controls(&screen),
+                "{screen}"
+            );
+            assert!(crate::terminal::driver::blocker_from_text(&screen, true).is_none());
+            assert_eq!(
+                published(AgentKind::Codex, &screen, "⠋ project").state,
+                AgentState::Working,
+                "{screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_live_permission_stays_blocked_after_quoted_options() {
+        let permission = include_str!(
+            "../../server/api/agents/tests/fixtures/codex_soft_wrapped_permission.txt"
+        );
+        let quoted = permission
+            .lines()
+            .map(|row| format!("    {row}\n"))
+            .collect::<String>();
+        let screen = format!(
+            "• Ran cat docs/permission.txt\n  └ Example permission dialog:\n{quoted}\n\
+             • Working (3s • esc to interrupt)\n\n{permission}"
+        );
+        let result = published(AgentKind::Codex, &screen, "⠋ project");
+        assert_eq!(result.state, AgentState::Blocked);
+        assert!(result.visible_blocker);
+        assert!(crate::terminal::driver::blocker_from_text(&screen, true).is_some());
+    }
+
+    #[test]
     fn action_required_title_does_not_block_a_live_working_screen() {
         // Captured from codex worker 12114 while Bus had posted false Blocked
         // notices and `bus state` showed working with dialog=false. The working

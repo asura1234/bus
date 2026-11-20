@@ -200,6 +200,7 @@ fn agy_footer_index(
 }
 
 fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
+    hide_codex_tool_output(&mut rows);
     if let Some(region) = editable_composer_region(&rows) {
         let border = |row: &str| row.starts_with(['─', '╭', '╰', '┌', '└', '▀']);
         let closing_border = region
@@ -239,6 +240,26 @@ fn outside_composer(mut rows: Vec<String>) -> Vec<String> {
         }
     }
     rows
+}
+
+fn hide_codex_tool_output(rows: &mut [String]) {
+    // Codex renders completed shell calls as a column-zero header followed
+    // by an output branch and indented continuation rows. Keep the header
+    // as a boundary and exclude the output from both hints and menu options.
+    let mut command_header = false;
+    let mut output = false;
+    for row in rows {
+        if (command_header || output) && row.starts_with("  └ ")
+            || output && row.starts_with("    ")
+        {
+            row.clear();
+            command_header = false;
+            output = true;
+        } else {
+            command_header = row.starts_with("• Ran ") || row.starts_with("• Exited (status ");
+            output = false;
+        }
+    }
 }
 
 fn plain(row: &str) -> &str {
@@ -340,6 +361,9 @@ fn tail_clear(
         }
         if row == "⟩" {
             return true;
+        }
+        if live_activity_row(&rows[index]) {
+            return false;
         }
         if super::selection::option_body(row).1 && !numbered(row) {
             return false;
