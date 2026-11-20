@@ -324,7 +324,7 @@ impl BusState {
                 if !since(QUEUED_STALL_MS, from) {
                     None
                 } else {
-                    self.queued_stall_reason(agent_id)
+                    self.queued_stall_reason(agent_id, lead.id)
                 }
             }
             RequestPhase::Submitting => {
@@ -760,6 +760,8 @@ pub(crate) fn rejection_reason(message: &str) -> &'static str {
         "agent_blocked"
     } else if message.contains("not ready") || message.contains("not an active") {
         "agent_not_ready"
+    } else if message.contains("not idle") {
+        "agent_not_idle"
     } else {
         "delivery_rejected"
     }

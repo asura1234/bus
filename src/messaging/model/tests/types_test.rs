@@ -405,6 +405,7 @@ fn native_refusals_map_to_recovery_reasons() {
             "agent_not_ready",
         ),
         ("agent is blocked on a dialog", "agent_blocked"),
+        ("Agent is not idle; prompt was not sent", "agent_not_idle"),
         ("something else", "delivery_rejected"),
     ] {
         assert_eq!(rejection_reason(message), reason, "{message}");

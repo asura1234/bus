@@ -12,7 +12,10 @@ impl BusState {
         };
         // A turn/dialog/startup race is a legitimate wait. Only the observed
         // composer failure needs a deadline independent of unrelated work.
-        if rejection_reason(message) != "prompt_not_shown" {
+        // A not-idle refusal is remembered so the stall cannot rename it
+        // `not_submitted` after the agent-level rejection is cleared.
+        let reason = rejection_reason(message);
+        if reason != "prompt_not_shown" && reason != "agent_not_idle" {
             return;
         }
         let Some(request) = self.requests.get(&id) else {
@@ -29,7 +32,7 @@ impl BusState {
                 request.queued_rejection.get_or_insert_with(|| {
                     crate::messaging::model::QueuedRejection {
                         at_ms,
-                        reason: rejection_reason(message).into(),
+                        reason: reason.into(),
                     }
                 });
             }
@@ -49,6 +52,18 @@ impl BusState {
             return None;
         }
         let rejected = request.queued_rejection.as_ref()?;
+        // Busy means "try again when idle", not "the send failed". The latest
+        // agent-level refusal wins over an older composer deadline. Close only
+        // once the target is gone, and name that refusal.
+        let delivery_not_idle = self
+            .agent(request.agent_id)
+            .is_some_and(|agent| agent.delivery_rejection.as_deref() == Some("agent_not_idle"));
+        if rejected.reason == "agent_not_idle" || delivery_not_idle {
+            let alive = self
+                .agent(request.agent_id)
+                .is_some_and(|agent| agent.exit_snapshot.is_none() && !agent.deletion_pending);
+            return (!alive).then_some("agent_not_idle");
+        }
         let mut since = rejected.at_ms;
         if let Some(agent) = self
             .agent(request.agent_id)
