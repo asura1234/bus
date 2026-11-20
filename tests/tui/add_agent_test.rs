@@ -232,5 +232,8 @@ fn project_hook_consent_remains_required_after_the_form_closes() {
         "15s",
     ]);
     assert!(project.join(".codex/hooks.json").is_file());
-    assert!(screen(&session).contains("codex-worker"));
+    // The sidebar can shorten the name while it still shows Unavailable.
+    // Only the real roster row has a provider label.
+    session.ok(&["wait", "--text", "Codex"]);
+    assert_eq!(bus_state(&session)["agents"][0]["name"], "codex-worker");
 }
