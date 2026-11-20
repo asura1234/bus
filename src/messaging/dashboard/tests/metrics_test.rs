@@ -1036,6 +1036,49 @@ fn absent_delivery_rate_is_not_drawn_as_zero_percent() {
     );
 }
 
+#[test]
+fn average_latency_counts_only_interrupt_sends() {
+    use crate::messaging::model::SendMode;
+    let mut state = BusState::new();
+    let room = state.create_room("modes").unwrap();
+    let agent = state
+        .create_agent(room, "grok", Provider::Grok, "/scratch".into(), None)
+        .unwrap();
+    let base = 1_793_577_600_000;
+    let interrupt = submit_latency(&mut state, room, agent, base);
+    let steer = submit_latency(&mut state, room, agent, base + 1_000);
+    let queue = submit_latency(&mut state, room, agent, base + 2_000);
+    let legacy_steer = submit_latency(&mut state, room, agent, base + 3_000);
+    // No recorded mode and not steered: older sends default to interrupt.
+    let historical = submit_latency(&mut state, room, agent, base + 4_000);
+    state
+        .record_send_mode(&[interrupt], SendMode::Interrupt)
+        .unwrap();
+    state.record_send_mode(&[steer], SendMode::Steer).unwrap();
+    state.record_send_mode(&[queue], SendMode::Queue).unwrap();
+    let mut document = serde_json::to_value(&state).unwrap();
+    document["requests"][legacy_steer.0.to_string()]["steered"] = true.into();
+    state = serde_json::from_value(document).unwrap();
+    stamp_pickup(&mut state, interrupt, base, Some(base + 100));
+    stamp_pickup(&mut state, steer, base + 1_000, Some(base + 6_000));
+    stamp_pickup(&mut state, queue, base + 2_000, Some(base + 11_000));
+    stamp_pickup(&mut state, legacy_steer, base + 3_000, Some(base + 23_000));
+    stamp_pickup(&mut state, historical, base + 4_000, Some(base + 4_040));
+    let report = snapshot(&state, singapore_hour);
+    assert_eq!(
+        report.all.counts.attempts, 5,
+        "delivery still counts every mode"
+    );
+    let latency = &report.all.accepted_to_picked;
+    assert_eq!((latency.n, latency.mean), (2, Some(70)));
+    assert_eq!(report.providers["grok"].accepted_to_picked.n, 2);
+    assert_eq!(report.providers["grok"].accepted_to_picked.mean, Some(70));
+    let room_latency = &report.rooms[&room.0.to_string()].series.accepted_to_picked;
+    assert_eq!((room_latency.n, room_latency.mean), (2, Some(70)));
+    let page = include_str!("../page.html");
+    assert!(page.contains("interrupt sends only") || page.contains("Interrupt sends only"));
+}
+
 fn submit_latency(
     state: &mut BusState,
     room: crate::messaging::model::RoomId,

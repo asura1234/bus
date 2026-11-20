@@ -370,6 +370,16 @@ fn external(reason: &str) -> bool {
     crate::messaging::model::classify_request_failure(reason).is_external()
 }
 
+/// Pickup latency is interrupt sends only. Steer joins a running turn and
+/// queue waits for the next one, so those waits are not samples. An unset
+/// mode is the historical interrupt default. A steered record with no mode
+/// is steer (`Request::history_send_mode`).
+fn counts_toward_pickup_latency(request: &Request) -> bool {
+    request
+        .history_send_mode()
+        .is_none_or(|mode| mode == crate::messaging::model::SendMode::Interrupt)
+}
+
 #[derive(Default)]
 struct SeriesBuilder {
     counts: Counts,
@@ -400,8 +410,10 @@ impl SeriesBuilder {
             .or_insert_with(|| (hour.label.clone(), Counts::default()))
             .1
             .add(request, outcome);
-        if let Some(ms) = super::latency::accepted_to_picked_ms(request) {
-            self.accepted_to_picked.push(ms);
+        if counts_toward_pickup_latency(request) {
+            if let Some(ms) = super::latency::accepted_to_picked_ms(request) {
+                self.accepted_to_picked.push(ms);
+            }
         }
     }
     fn finish(self) -> Series {
@@ -453,7 +465,18 @@ pub(super) fn room_label(state: &BusState, id: RoomId) -> String {
         .unwrap_or_else(|| format!("Room {} [deleted]", id.0))
 }
 
+/// Test helper for a dashboard with no reset baseline. The bin build does
+/// not call it; production always passes the stored baseline.
+#[cfg(test)]
 pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dashboard {
+    snapshot_since(state, clock, None)
+}
+
+pub(super) fn snapshot_since(
+    state: &BusState,
+    clock: impl Fn(u64) -> HourKey,
+    since_ms: Option<u64>,
+) -> Dashboard {
     let mut all = SeriesBuilder::default();
     let mut providers: BTreeMap<_, _> = PROVIDERS
         .into_iter()
@@ -462,6 +485,11 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
     let mut rooms: BTreeMap<String, GroupBuilder> = BTreeMap::new();
     let mut failures = Vec::new();
     for request in state.requests() {
+        // One window for every messaging series: delivery, latency, pending,
+        // failures and the hourly graph. Live and archived requests share it.
+        if !super::baseline::after_baseline(request.prompt.submitted_at_ms, since_ms) {
+            continue;
+        }
         // Deliberate closures remain in message history, outside every dashboard
         // population (including delivery rates and latency samples). Successful
         // replies/turns still win over stale closure reasons.

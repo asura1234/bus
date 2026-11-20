@@ -30,13 +30,14 @@ fn page_keeps_hourly_and_failure_sections_and_drops_recipient_grouping() {
     assert!(!page.contains("not measured yet"));
     assert!(page.contains("Delivery success"));
     assert!(page.contains("Average latency"));
-    assert!(page.contains("no samples"));
+    assert!(page.contains("no interrupt samples"));
+    assert!(page.contains("Latency covers interrupt sends only."));
     assert!(page.contains("accepted_to_picked"));
     assert!(page.contains("duration(e.mean)"));
     assert!(!page.contains("end_to_end"));
     assert!(!page.contains("reply_delivered_at"));
     assert!(!page.contains("reply_captured_at"));
-    assert!(page.contains("e.n?`n=${e.n}`:'no samples'"));
+    assert!(page.contains("e.n?`n=${e.n} · interrupt only`:'no interrupt samples'"));
     assert!(!page.contains("mean??0"));
     assert!(!page.contains("p50??0"));
     assert!(page.contains("selectGroup"));

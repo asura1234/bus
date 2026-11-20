@@ -127,7 +127,11 @@ struct Failure {
     record_reference: String,
     inspect_command: &'static str,
 }
-pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dashboard {
+pub(super) fn snapshot_since(
+    state: &BusState,
+    clock: impl Fn(u64) -> HourKey,
+    since_ms: Option<u64>,
+) -> Dashboard {
     let mut all = Builder::default();
     let mut providers: BTreeMap<String, Builder> = PROVIDERS
         .into_iter()
@@ -135,6 +139,9 @@ pub(super) fn snapshot(state: &BusState, clock: impl Fn(u64) -> HourKey) -> Dash
         .collect();
     let mut failures = Vec::new();
     for attempt in state.launch_attempts() {
+        if !super::baseline::after_baseline(attempt.started_at_ms, since_ms) {
+            continue;
+        }
         let hour = clock(attempt.started_at_ms);
         all.add(attempt, &hour);
         providers

@@ -15,6 +15,7 @@ Dev tools (answer only in a session started with `bus --dev`):
   ui release-acks (dev variant only)
   restart [--binary PATH] [--clear-data] --confirm
   dashboard
+  dashboard reset --confirm
 
 Bus's control commands come in two tiers. The agent tier (`bus --help`) is how
 orchestrators and workers coordinate, and every session answers it. Dev tools
@@ -105,7 +106,14 @@ session, including an exited server. It prints a random `http://127.0.0.1:PORT/`
 URL, serves one page with inline assets, and refreshes every thirty seconds.
 `BUS_DATA_DIR` selects an exact session root; otherwise the last session is read
 without recording a resume. It reads persisted state, journal and archived
-requests; it never sends control commands or saves session state. Stop with Ctrl+C.
+requests and does not send control commands. `bus --dev dashboard reset --confirm`
+stores one baseline timestamp in that session (`dashboard-stats.json`, field
+`since_ms`). The page's Reset stats button does the same after a confirmation.
+Messaging, Agent and Errors then count only events after that time, and the
+header shows `since <local time>`. Messages, replies and history stay. The
+baseline survives restarts. A second reset moves it forward. Stop the page
+with Ctrl+C.
+
 The page has Messaging, Agent, and Errors tabs. Messaging leads with delivery.
 A direct message counts as delivered once Bus hands it off, including when the
 recipient has not replied. Delivery % is
@@ -114,8 +122,10 @@ counts. Pending is still open, with the oldest pending age. Failed messages
 are split into Bus-caused and external, with causes. The order is the delivery
 headline, provider table, room table, then the hourly delivery graph. The
 headline shows delivery success beside the mean delay from send accepted
-until the agent turn takes the message. Provider and room rows include p50,
-p90, p99 and the sample count for that same delay, in human units. Pending
+until the agent turn takes an interrupt send. Steer and queue waits are
+not latency samples. n, p50, p90 and p99 use that interrupt set only.
+Provider and room rows include p50, p90, p99 and the sample count for
+that same delay, in human units. Pending
 and failed share one card. The hourly graph stays; the hourly table does not.
 An empty group renders an em dash, not zero. There is no separate latency page.
 Bus reliability sits below delivery as a note: of conclusive deliveries, how
