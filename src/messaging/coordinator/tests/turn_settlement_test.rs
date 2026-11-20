@@ -558,12 +558,13 @@ fn reply_capture_diagnostics_record_a_settlement_once_after_a_failed_save_is_ret
         fixture.deliver();
         fixture.started("turn-1", "PRIVATE_STEERING");
         fixture.consume();
-        if reason == "provider_error" {
+        if reason != "agent_unavailable" {
             let rollout = fixture.dir.join("rollout-error.jsonl");
+            let error = (reason == "provider_error").then(|| json!({"message":"PRIVATE_ERROR"}));
             std::fs::write(
                 &rollout,
                 json!({"type":"event_msg","payload":{
-                    "type":"task_complete","turn_id":"turn-1","error":{"message":"PRIVATE_ERROR"}
+                    "type":"task_complete","turn_id":"turn-1","error":error
                 }})
                 .to_string(),
             )
@@ -597,7 +598,7 @@ fn reply_capture_diagnostics_record_a_settlement_once_after_a_failed_save_is_ret
         });
         let log = capture.text();
         if reason == "reply_not_captured" {
-            // Idle grace with no recorded end completes the claimed turn.
+            // An owned textless completion closes the claimed turn.
             // It is not an abandoned capture, and a failed save must not log one.
             for id in [lead, follower] {
                 assert_completed_without_reply(&fixture, id);
@@ -959,6 +960,7 @@ fn a_claude_turn_ended_by_an_api_error_reports_that_error() {
 fn a_turn_closed_without_a_reply_or_provider_error_says_so_in_its_reason() {
     let mut fixture = Fixture::new(Provider::Codex);
     let lead = running(&mut fixture, "implement the change", "turn-1");
+    fixture.stopped("turn-1", "");
     fixture.status(RuntimeStatus::Idle);
     fixture.now += CALLBACK_GRACE_MS;
     fixture.status(RuntimeStatus::Idle);
@@ -1154,6 +1156,7 @@ fn an_ended_turn_whose_agent_reattaches_within_the_window_settles_as_idle() {
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    fixture.stopped("turn-1", "");
     fixture.now += CALLBACK_GRACE_MS;
     fixture.status(RuntimeStatus::Idle);
     fixture.consume();
@@ -1692,12 +1695,11 @@ fn an_unbound_codex_turn_without_its_prompt_in_the_rollout_stays_reply_not_captu
     }
 }
 
-/// A bound turn whose rollout records no answer for it (the turn's
-/// `task_complete` is missing, names another turn, or carries no message)
-/// still closes once the agent is idle, without inventing a reply.
+/// Missing or foreign completion stays uncertain; owned textless completion
+/// still settles on the ordinary cadence without inventing a reply.
 #[test]
-fn a_codex_turn_whose_rollout_has_no_answer_for_it_stays_reply_not_captured() {
-    for recorded in [
+fn a_bound_codex_turn_requires_owned_completion_to_settle_silently() {
+    for (index, recorded) in [
         codex_turn("2026-10-20T05:06:51.361Z", "turn-1", "merge the PR", None),
         codex_turn(
             "2026-10-20T05:06:51.361Z",
@@ -1709,7 +1711,10 @@ fn a_codex_turn_whose_rollout_has_no_answer_for_it_stays_reply_not_captured() {
             "last_agent_message":null}})
         .to_string()
             + "\n",
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut fixture = Fixture::new(Provider::Codex);
         let rollout = fixture.dir.join("rollout-2026-10-20T13-06-43-abc.jsonl");
         append(&rollout, &recorded);
@@ -1721,7 +1726,22 @@ fn a_codex_turn_whose_rollout_has_no_answer_for_it_stays_reply_not_captured() {
         );
         fixture.consume();
         end_without_stop(&mut fixture);
-        assert_completed_without_reply(&fixture, lead);
+        if index == 2 {
+            assert_completed_without_reply(&fixture, lead);
+        } else {
+            assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+            fixture.now += 300_000;
+            fixture.status(RuntimeStatus::Idle);
+            fixture.consume();
+            let request = fixture.request(lead);
+            assert_eq!(request.phase, RequestPhase::Abandoned);
+            assert_eq!(
+                request.failure_reason.as_deref(),
+                Some("turn_end_unconfirmed")
+            );
+            assert!(request.uncertain_outcome);
+            assert!(request.turn_ended_at_ms.is_none());
+        }
         assert_eq!(
             fixture.request(lead).provider_turn_id.as_deref(),
             Some("turn-1")

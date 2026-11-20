@@ -174,3 +174,89 @@ fn idle_backstop_still_exempts_agy() {
     fixture.worker.settle_requests().unwrap();
     assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
 }
+
+#[test]
+fn idle_backstop_keeps_codex_final_after_a_false_working_to_idle_edge() {
+    let (mut fixture, lead, rollout, typed) = idle_codex_turn();
+    append(
+        &rollout,
+        &codex_turn(&rollout_at(&fixture, 0), "turn-1", &typed, None),
+    );
+    let screen = include_str!("../../../../tests/fixtures/codex-activity/working-room-1.txt");
+    let detect = |screen: &str| {
+        crate::agents::detect_agent_with_osc(
+            Some(crate::agents::AgentKind::Codex),
+            screen,
+            "project",
+            "",
+        )
+        .state
+    };
+    assert_eq!(detect(screen), crate::agents::AgentState::Working);
+    fixture.status(RuntimeStatus::Working);
+    let clipped = screen.replace(
+        "› Ask Codex to do anything",
+        &format!(
+            "• Ran check\n  └ output\n{}› Ask Codex to do anything",
+            "    output\n".repeat(20)
+        ),
+    );
+    assert_eq!(detect(&clipped), crate::agents::AgentState::Idle);
+    fixture.status(RuntimeStatus::Idle);
+    let idle = fixture.now;
+    fixture.now += CALLBACK_GRACE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    append_owned_completion(&rollout, &fixture);
+    fixture.status(RuntimeStatus::Idle);
+    assert!(fixture.now < idle + 30_000);
+    fixture.worker.settle_requests().unwrap();
+    assert_completed_without_reply(&fixture, lead);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("late owned final"));
+}
+
+#[test]
+fn idle_backstop_retains_validated_codex_progress_when_the_rollout_tail_rotates() {
+    let (mut fixture, lead, rollout, typed) = idle_codex_turn();
+    let idle = fixture.now;
+    append(
+        &rollout,
+        &codex_turn(&rollout_at(&fixture, 0), "turn-1", &typed, None),
+    );
+    fixture.now = idle + 299_000;
+    let progress = json!({"timestamp":rollout_at(&fixture, 0),"type":"response_item",
+        "payload":{"type":"function_call","name":"exec_command","call_id":"tool-1","arguments":"{}"}});
+    append(&rollout, &format!("{progress}\n"));
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+
+    let output = json!({"type":"response_item","payload":{
+        "type":"function_call_output","call_id":"tool-1","output":"x".repeat(270_000)}});
+    append(&rollout, &format!("{output}\n"));
+    assert_eq!(
+        crate::agents::providers::codex::usage::read_codex_turn_activity(&rollout, "turn-1")
+            .unwrap(),
+        None
+    );
+    fixture.worker.state = fixture.worker.store.load().unwrap().unwrap();
+    fixture.now = idle + 301_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+    reload(&mut fixture);
+    fixture.status(RuntimeStatus::Idle);
+    append_owned_completion(&rollout, &fixture);
+    fixture.now += 30_000;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_completed_without_reply(&fixture, lead);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("late owned final"));
+}
+
+fn append_owned_completion(rollout: &std::path::Path, fixture: &Fixture) {
+    let complete = json!({"timestamp":rollout_at(fixture, 0),"type":"event_msg",
+        "payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"late owned final"}});
+    append(rollout, &format!("{complete}\n"));
+}

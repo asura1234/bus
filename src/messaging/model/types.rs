@@ -543,6 +543,8 @@ pub(crate) struct BoundTurnActivity {
     pub(crate) idle_since_ms: Option<u64>,
     /// Working seen during this native turn; additional input never clears it.
     pub(crate) working_seen: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) codex_progress_at_ms: Option<u64>,
 }
 
 /// Positive runtime loss retains the task until verified resume or conclusive failure.

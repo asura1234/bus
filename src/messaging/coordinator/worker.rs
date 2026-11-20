@@ -756,6 +756,14 @@ impl Worker {
                     |request| codex_settlement::recorded_codex_progress(rollout?, request),
                 )
                 .is_some();
+            if let Some(id) = current {
+                changed |= state
+                    .request(id)
+                    .and_then(|request| request.bound_turn_activity.as_ref())
+                    != state_snapshot
+                        .request(id)
+                        .and_then(|request| request.bound_turn_activity.as_ref());
+            }
         }
         if changed {
             self.save(state)?;

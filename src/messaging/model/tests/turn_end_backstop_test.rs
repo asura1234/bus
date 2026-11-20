@@ -237,7 +237,7 @@ fn idle_backstop_requires_continuous_idle_and_a_fresh_poll_including_after_legac
                     .settle_ended_request(agent, 180_000, |_| None)
                     .is_none());
             }
-            let deadline = if dialog {
+            let deadline = if dialog || provider == Provider::Codex {
                 unconfirmed_idle_deadline(provider, 150_001)
             } else {
                 180_001
