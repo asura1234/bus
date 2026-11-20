@@ -129,6 +129,7 @@ impl BusState {
             return Err(ModelError::InvalidTransition);
         }
         let restart_continuation = request_state.restart_continuation;
+        let error_report = request_state.is_error_report();
         if matches!(
             &outcome,
             SubmissionOutcome::DefinitelyRejected { .. } | SubmissionOutcome::ComposerBusy
@@ -136,7 +137,7 @@ impl BusState {
         {
             return Err(ModelError::InvalidTransition);
         }
-        if self.consume_failed_error_report(request, &outcome)? {
+        if self.consume_uncertain_error_report(request, &outcome)? {
             return Ok(());
         }
         self.record_queue_rejection(request, &outcome);
@@ -181,7 +182,9 @@ impl BusState {
                         .map_or("composer_busy", rejection_reason)
                         .into(),
                 );
-                agent.actionable_error = rejection;
+                if !error_report {
+                    agent.actionable_error = rejection;
+                }
                 self.transfer_requeued_stop_claim(request);
                 self.retain_rejected_provider_retry(request);
             }

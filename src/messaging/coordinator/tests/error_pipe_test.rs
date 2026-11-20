@@ -185,47 +185,95 @@ fn error_pipe_queues_one_counted_request_preserves_the_draft_and_off_discards_re
 }
 
 #[test]
-fn error_pipe_rejected_or_uncertain_reports_close_without_retry_or_later_agent_error() {
-    for outcome in [
-        SubmissionOutcome::DefinitelyRejected {
-            message: "broken pipe".into(),
-        },
-        SubmissionOutcome::Uncertain {
-            message: "lost response".into(),
-        },
-    ] {
-        let (mut worker, room, agent, root) = reporting_worker();
-        let mut state = worker.state.clone();
-        let report = state
-            .submit_message_with(
-                room,
-                Draft {
-                    text: "Bus error: failure (x1 since last notice). Logs: /logs/client.log"
-                        .into(),
-                    files: vec![],
-                    recipient_ids: [agent].into(),
-                },
-                Author::Bus,
-                1,
-                true,
-            )
-            .unwrap()[0];
-        state.begin_submission(report, "launch", 0).unwrap();
-        state.record_submission(report, outcome).unwrap();
-        assert!(
-            state.request(report).unwrap().settled(),
-            "a failed report is consumed"
-        );
-        assert!(state.queued_requests(agent).is_empty(), "no report retry");
-        assert_eq!(
-            state.agent(agent).unwrap().actionable_error,
-            None,
-            "no deferred client warning can feed back"
-        );
-        worker.save(state).unwrap();
-        drop(worker);
-        std::fs::remove_dir_all(root).unwrap();
-    }
+fn error_pipe_definite_refusal_requeues_the_same_report_once_until_confirmed() {
+    assert_report_requeues_once(SubmissionOutcome::DefinitelyRejected {
+        message: "agent not idle".into(),
+    });
+}
+
+#[test]
+fn error_pipe_composer_busy_requeues_the_same_report_once_until_confirmed() {
+    assert_report_requeues_once(SubmissionOutcome::ComposerBusy);
+}
+
+fn assert_report_requeues_once(outcome: SubmissionOutcome) {
+    let (worker, room, agent, root) = reporting_worker();
+    let mut state = worker.state.clone();
+    let report = queue_report(&mut state, room, agent);
+    state.begin_submission(report, "launch", 0).unwrap();
+    state.record_submission(report, outcome).unwrap();
+    let request = state.request(report).unwrap();
+    assert_eq!(request.phase, RequestPhase::Queued);
+    assert!(request.failure_reason.is_none());
+    assert_eq!(state.queued_requests(agent), &[report]);
+    assert_eq!(state.next_queued_request(agent), Some(report));
+    assert_eq!(state.agent(agent).unwrap().actionable_error, None);
+
+    state.begin_submission(report, "launch", 1).unwrap();
+    assert!(state.next_queued_request(agent).is_none());
+    state
+        .record_submission(
+            report,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: None,
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(state.request(report).unwrap().phase, RequestPhase::Active);
+    assert_eq!(state.agent(agent).unwrap().current_request, Some(report));
+    assert!(state.queued_requests(agent).is_empty());
+    assert!(state.begin_submission(report, "launch", 2).is_err());
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn error_pipe_uncertain_report_stays_terminal_across_reopen_without_replay() {
+    let (mut worker, room, agent, root) = reporting_worker();
+    let mut state = worker.state.clone();
+    let report = queue_report(&mut state, room, agent);
+    state.begin_submission(report, "launch", 0).unwrap();
+    state
+        .record_submission(
+            report,
+            SubmissionOutcome::Uncertain {
+                message: "lost response".into(),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    drop(worker);
+
+    let mut worker = Worker::open(root.clone(), Box::new(NoTerminals)).unwrap();
+    let request = worker.state.request(report).unwrap();
+    assert_eq!(request.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        request.failure_reason.as_deref(),
+        Some("error_report_delivery_failed")
+    );
+    assert!(worker.state.queued_requests(agent).is_empty());
+    assert!(worker.state.agent(agent).unwrap().current_request.is_none());
+    assert_eq!(worker.state.agent(agent).unwrap().actionable_error, None);
+    assert!(worker.state.begin_submission(report, "launch", 1).is_err());
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn queue_report(state: &mut BusState, room: RoomId, agent: AgentId) -> RequestId {
+    state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "Bus error: failure (x1 since last notice). Logs: /logs/client.log".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Bus,
+            io::now_ms(),
+            true,
+        )
+        .unwrap()[0]
 }
 
 #[test]
@@ -477,19 +525,7 @@ fn error_pipe_expired_report_preserves_an_existing_real_error() {
 fn error_pipe_rejected_report_preserves_an_existing_real_error() {
     let (worker, room, agent, root) = reporting_worker();
     let mut state = worker.state.clone();
-    let report = state
-        .submit_message_with(
-            room,
-            Draft {
-                text: "Bus error: failure (x1 since last notice). Logs: /logs/client.log".into(),
-                files: vec![],
-                recipient_ids: [agent].into(),
-            },
-            Author::Bus,
-            100,
-            true,
-        )
-        .unwrap()[0];
+    let report = queue_report(&mut state, room, agent);
     state.begin_submission(report, "launch", 0).unwrap();
     state
         .set_agent_error(agent, Some("existing real error".into()))
@@ -502,11 +538,11 @@ fn error_pipe_rejected_report_preserves_an_existing_real_error() {
             },
         )
         .unwrap();
-    assert!(state.request(report).unwrap().settled());
+    assert_eq!(state.request(report).unwrap().phase, RequestPhase::Queued);
     assert_eq!(
         state.agent(agent).unwrap().actionable_error.as_deref(),
         Some("existing real error"),
-        "closing a failed report must preserve another error"
+        "requeueing a refused report must preserve another error"
     );
     drop(worker);
     std::fs::remove_dir_all(root).unwrap();

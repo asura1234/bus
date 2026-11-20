@@ -769,13 +769,16 @@ fn retained_report_diagnostics_stay_logged_without_reports_about_reports() {
     state
         .record_submission(
             report,
-            SubmissionOutcome::DefinitelyRejected {
+            SubmissionOutcome::Uncertain {
                 message: "REPORT_DELIVERY_CAUSE".into(),
             },
         )
         .unwrap();
     assert!(state.request(report).unwrap().is_error_report());
-    assert!(state.request(report).unwrap().failure_reason.is_some());
+    assert_eq!(
+        state.request(report).unwrap().failure_reason.as_deref(),
+        Some("error_report_delivery_failed")
+    );
     state
         .observe_status(agent, RuntimeStatus::Idle, 2000)
         .unwrap();
