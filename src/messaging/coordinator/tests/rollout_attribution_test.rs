@@ -94,6 +94,23 @@ fn settled_without_reply(f: &Fixture, id: RequestId) {
         .is_none());
 }
 
+fn bound_turn_expires_without_a_borrowed_reply(f: &mut Fixture, id: RequestId) {
+    assert_eq!(f.request(id).phase, RequestPhase::Active);
+    assert!(f.reply(id).is_none());
+    f.now += 300_000;
+    f.status(RuntimeStatus::Idle);
+    f.consume();
+    let request = f.request(id);
+    assert_eq!(request.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        request.failure_reason.as_deref(),
+        Some("turn_end_unconfirmed")
+    );
+    assert!(request.uncertain_outcome);
+    assert!(request.turn_ended_at_ms.is_none());
+    assert!(f.reply(id).is_none());
+}
+
 fn reply_text_absent(f: &Fixture, text: &str) {
     assert!(
         f.worker
@@ -229,12 +246,13 @@ fn a_renamed_rollout_and_an_unregistered_new_file_deliver_no_foreign_answer() {
         )
         .unwrap();
         idle_then_settle(&mut f, id);
-        settled_without_reply(&f, id);
         reply_text_absent(&f, "ORIGINAL");
         reply_text_absent(&f, "FOREIGN");
         if is_bound {
+            bound_turn_expires_without_a_borrowed_reply(&mut f, id);
             assert_eq!(f.request(id).provider_turn_id.as_deref(), Some("original"));
         } else {
+            settled_without_reply(&f, id);
             assert!(f.request(id).provider_turn_id.is_none());
         }
     }
@@ -255,7 +273,7 @@ fn a_bound_completion_outside_the_tail_never_uses_a_later_turn_answer() {
         Some(CodexTurnEnd::Final("WRONG".into()))
     );
     idle_then_settle(&mut f, id);
-    settled_without_reply(&f, id);
+    bound_turn_expires_without_a_borrowed_reply(&mut f, id);
     assert_eq!(
         f.request(id).provider_turn_id.as_deref(),
         Some("bound-turn")

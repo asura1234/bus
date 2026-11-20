@@ -47,6 +47,7 @@ impl BusState {
                                 started_at_ms: occurred_at_ms,
                                 idle_since_ms: None,
                                 working_seen: false,
+                                codex_progress_at_ms: None,
                             });
                         // New accepted input is progress even if the pane
                         // repeats Idle. Keep the Working latch, renew grace.

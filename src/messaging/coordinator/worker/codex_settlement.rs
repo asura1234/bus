@@ -17,6 +17,16 @@ pub(super) fn saved_rollouts(state: &BusState) -> BTreeMap<AgentId, PathBuf> {
         .collect()
 }
 
+pub(super) fn recorded_codex_progress(
+    rollout: &Path,
+    request: &crate::messaging::model::Request,
+) -> Option<u64> {
+    let turn_id = request.provider_turn_id.as_deref()?;
+    crate::agents::providers::codex::usage::read_codex_turn_activity(rollout, turn_id)
+        .ok()
+        .flatten()
+}
+
 /// How Codex recorded the end of `request`'s turn in its rollout: the bound
 /// turn, or else the one turn that ran the typed prompt after it was sent.
 /// Why nothing could be read or attributed is logged, since the request then

@@ -79,6 +79,36 @@ fn task_complete(turn: &str, error: Value) -> String {
 }
 
 #[test]
+fn rollout_activity_requires_an_open_owned_turn_and_ignores_foreign_progress() {
+    let dir = rollout_dir("turn-activity");
+    let path = dir.join("rollout-turn-activity.jsonl");
+    let started_at = "2026-10-12T13:02:01Z";
+    let tool_at = "2026-10-12T13:02:02Z";
+    let foreign_at = "2026-10-12T13:02:03Z";
+    let started = json!({"timestamp":started_at,"type":"event_msg",
+        "payload":{"type":"task_started","turn_id":"turn-1"}});
+    let tool = json!({"timestamp":tool_at,"type":"response_item","payload":{
+        "type":"function_call","name":"exec_command","call_id":"tool-1","arguments":"{}"}});
+    let foreign = json!({"timestamp":foreign_at,"type":"event_msg","payload":{
+        "type":"item_completed","turn_id":"turn-2","item":{"type":"CommandExecution"}}});
+    let aborted = json!({"timestamp":foreign_at,"type":"event_msg",
+        "payload":{"type":"turn_aborted","turn_id":"turn-1","reason":"interrupted"}});
+    std::fs::write(&path, format!("{tool}\n")).unwrap();
+    assert_eq!(read_codex_turn_activity(&path, "turn-1").unwrap(), None);
+    std::fs::write(&path, format!("{started}\n{tool}\n{foreign}\n")).unwrap();
+    assert_eq!(
+        read_codex_turn_activity(&path, "turn-1").unwrap(),
+        rfc3339_ms(tool_at)
+    );
+    assert_eq!(read_codex_turn_activity(&path, "turn-2").unwrap(), None);
+    for end in [aborted.to_string(), task_complete("turn-1", Value::Null)] {
+        std::fs::write(&path, format!("{started}\n{tool}\n{end}\n")).unwrap();
+        assert_eq!(read_codex_turn_activity(&path, "turn-1").unwrap(), None);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn rollout_reports_the_error_that_ended_a_given_codex_turn() {
     let dir = crate::utils::test_temp::unique_temp_path("bus-turn-error");
     std::fs::create_dir_all(&dir).unwrap();

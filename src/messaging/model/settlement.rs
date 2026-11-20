@@ -387,11 +387,12 @@ impl BusState {
     /// as completed with no reply, so the queue can advance. An unavailable
     /// agent gets the window again from when it went unavailable, so one that
     /// only reattaches (a Bus restart) and is Idle again settles as usual.
-    pub(crate) fn settle_ended_request(
+    pub(crate) fn settle_ended_request_with_codex_progress(
         &mut self,
         agent: AgentId,
         now_ms: u64,
         recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
+        codex_progress_at: impl FnOnce(&Request) -> Option<u64>,
     ) -> Option<RequestId> {
         if let Some(request) = self.missing_directory_turn(agent) {
             return self.settle_missing_directory_turn(agent, request.id, now_ms, recorded_end);
@@ -400,9 +401,23 @@ impl BusState {
             return self.settle_kimi_ended_request(agent, now_ms, recorded_end);
         }
         if let Some(id) = self.idle_bound_turn_candidate(agent, now_ms) {
-            let recorded = recorded_end(self.requests.get(&id)?);
-            return self.settle_idle_bound_turn(agent, id, now_ms, recorded);
+            return self.reconcile_idle_bound_turn(
+                agent,
+                id,
+                now_ms,
+                recorded_end,
+                codex_progress_at,
+            );
         }
+        self.settle_recorded_boundary(agent, now_ms, recorded_end)
+    }
+
+    fn settle_recorded_boundary(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+        recorded_end: impl FnOnce(&Request) -> Option<RecordedTurnEnd>,
+    ) -> Option<RequestId> {
         let request = self.settle_candidate(agent)?;
         let id = request.id;
         let agent_state = self.agents.get(&agent)?;

@@ -1,5 +1,14 @@
 use super::*;
 
+fn unconfirmed_idle_deadline(provider: Provider, idle_since: u64) -> u64 {
+    idle_since
+        + if provider == Provider::Codex {
+            300_000
+        } else {
+            30_000
+        }
+}
+
 #[test]
 fn a_bound_turn_that_never_worked_has_a_bounded_uncertain_idle_backstop() {
     for provider in providers() {
@@ -17,21 +26,22 @@ fn a_bound_turn_that_never_worked_has_a_bounded_uncertain_idle_backstop() {
         assert!(state
             .settle_ended_request(agent, 30_100, |_| None)
             .is_none());
-        // The first post-Started Idle observation starts a non-renewable 30s
+        // The first post-Started Idle observation starts a non-renewable
         // window. Reload and repeated Idle polls must not reset its deadline.
         let mut state: BusState =
             serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let deadline = unconfirmed_idle_deadline(provider, 283);
         state
-            .observe_status(agent, RuntimeStatus::Idle, 30_282)
+            .observe_status(agent, RuntimeStatus::Idle, deadline - 1)
             .unwrap();
         assert!(state
-            .settle_ended_request(agent, 30_282, |_| None)
+            .settle_ended_request(agent, deadline - 1, |_| None)
             .is_none());
         state
-            .observe_status(agent, RuntimeStatus::Idle, 30_283)
+            .observe_status(agent, RuntimeStatus::Idle, deadline)
             .unwrap();
         assert_eq!(
-            state.settle_ended_request(agent, 30_283, |_| None),
+            state.settle_ended_request(agent, deadline, |_| None),
             Some(lead),
             "{provider:?}"
         );
@@ -122,14 +132,15 @@ fn idle_backstop_preserves_an_explicit_reply_and_marks_only_unanswered_group_mem
             )
             .unwrap();
         let reply = state.request(lead).unwrap().completed_reply.clone();
+        let deadline = unconfirmed_idle_deadline(provider, 283);
         state
             .observe_status(agent, RuntimeStatus::Idle, 283)
             .unwrap();
         state
-            .observe_status(agent, RuntimeStatus::Idle, 30_283)
+            .observe_status(agent, RuntimeStatus::Idle, deadline)
             .unwrap();
         assert_eq!(
-            state.settle_ended_request(agent, 30_283, |_| None),
+            state.settle_ended_request(agent, deadline, |_| None),
             Some(lead)
         );
         assert_eq!(state.request(lead).unwrap().completed_reply, reply);
@@ -226,13 +237,16 @@ fn idle_backstop_requires_continuous_idle_and_a_fresh_poll_including_after_legac
                     .settle_ended_request(agent, 180_000, |_| None)
                     .is_none());
             }
+            let deadline = if dialog || provider == Provider::Codex {
+                unconfirmed_idle_deadline(provider, 150_001)
+            } else {
+                180_001
+            };
             state
-                .observe_status(agent, RuntimeStatus::Idle, 180_001)
+                .observe_status(agent, RuntimeStatus::Idle, deadline)
                 .unwrap();
-            // A fresh Idle transition also has normal trusted end evidence
-            // for non-Kimi providers; both paths must release by this bound.
             assert_eq!(
-                state.settle_ended_request(agent, 180_001, |_| None),
+                state.settle_ended_request(agent, deadline, |_| None),
                 Some(lead)
             );
         }
@@ -462,11 +476,18 @@ fn fresh_native_started_renews_grace_but_idle_polls_and_rejected_replay_do_not()
                 state.accept_callback(replay),
                 CallbackDisposition::Rejected(CallbackRejection::DuplicateCallback)
             );
+            let deadline = unconfirmed_idle_deadline(provider, 30_283);
             state
-                .observe_status(agent, RuntimeStatus::Idle, 60_283)
+                .observe_status(agent, RuntimeStatus::Idle, deadline - 1)
+                .unwrap();
+            assert!(state
+                .settle_ended_request(agent, deadline - 1, |_| None)
+                .is_none());
+            state
+                .observe_status(agent, RuntimeStatus::Idle, deadline)
                 .unwrap();
             assert_eq!(
-                state.settle_ended_request(agent, 60_283, |_| None),
+                state.settle_ended_request(agent, deadline, |_| None),
                 Some(lead),
                 "{provider:?}; restart={restart}"
             );
