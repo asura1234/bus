@@ -749,6 +749,7 @@ mod tests {
             ),
             "Esc            Cancel\n\n• Working (3s • esc to interrupt) · 1 background terminal running"
                 .to_owned(),
+            "• Working (3s • esc to interrupt)\n\n    Esc            Cancel".to_owned(),
         ] {
             assert!(
                 !crate::terminal::driver::has_input_controls(&screen),
@@ -780,6 +781,14 @@ mod tests {
         assert_eq!(result.state, AgentState::Blocked);
         assert!(result.visible_blocker);
         assert!(crate::terminal::driver::blocker_from_text(&screen, true).is_some());
+    }
+
+    #[test]
+    fn cancel_only_shortcut_with_focused_menu_stays_blocked() {
+        let screen = "Choose capture mode\n› Plain screen\n  ANSI screen\nEsc to cancel";
+        let result = published(AgentKind::Codex, screen, "⠋ project");
+        assert_eq!(result.state, AgentState::Blocked);
+        assert!(result.visible_blocker);
     }
 
     #[test]

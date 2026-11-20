@@ -7,6 +7,7 @@ use std::ops::Range;
 enum ControlKind {
     Foreground,
     Pending,
+    Cancel,
 }
 
 struct Controls {
@@ -421,12 +422,17 @@ fn controls(rows: &[String]) -> Option<Controls> {
                 }
                 continue;
             }
+            // A cancel-only label can be the last visible transcript row.
+            // Require a current menu before treating it as an input shortcut.
+            if kind == ControlKind::Cancel && !menu.as_ref().is_some_and(|menu| menu.end <= start) {
+                continue;
+            }
             if tail_clear(rows, finish + 1, end, menu.as_ref(), &hint) {
                 let menu = menu
                     .clone()
                     .filter(|menu| tail_clear(rows, menu.end, end, None, &hint));
                 return Some(Controls {
-                    kind,
+                    kind: ControlKind::Foreground,
                     end: finish,
                     menu,
                     hint,
@@ -610,8 +616,11 @@ fn keyboard_hint_with_form(row: &str, checkbox_form: bool) -> Option<ControlKind
     let alternate = ["esc", "skip", "cancel", "navigate", "↑", "↓"]
         .iter()
         .any(|key| row.contains(key));
-    (enter && action(&row) && (alternate || row.starts_with("press "))
+    if enter && action(&row) && (alternate || row.starts_with("press "))
         || (row.contains('↑') || row.contains('↓')) && action(&row)
-        || row.starts_with("esc") && row.contains("cancel"))
-    .then_some(ControlKind::Foreground)
+    {
+        Some(ControlKind::Foreground)
+    } else {
+        (row.starts_with("esc") && row.contains("cancel")).then_some(ControlKind::Cancel)
+    }
 }
