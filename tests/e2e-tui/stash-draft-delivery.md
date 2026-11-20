@@ -16,9 +16,11 @@ cases do not edit the Bus room composer. CLI state, message status, history,
 and agent reads are read-only corroboration. Retain every send receipt and
 inspect its one request, rather than treating CLI exit zero as delivery.
 
-The quiet window is three seconds since the last TUI key, text, or paste to
-that pane. `composer_busy` is a queued wait, with no failure notice. Allow that
-window when waiting for the incoming message to settle. Never resend it.
+Use the integrated copy/send/restore delivery lane in
+[APP-25](app.md#app-25--new-interrupt-delivers-immediately-and-preserves-native-input).
+Capture automatic delivery following the last edit. Do not require a fixed
+quiet period or resend to clear a queue. The readable-draft checks use exact
+bytes. Opaque chips cannot be reconstructed from a visible label alone.
 
 The fake CLIs preserve real draft data behind a large-paste chip. A bracketed
 paste containing at least ten newline characters collapses; `type` creates
@@ -41,8 +43,8 @@ reply is the native final and appears under its original developer message.
 Record PASS/FAIL for every step; no skips or failed-step retries. Capture the
 native composer before sending, while a message waits, and after restoration.
 For typing during the transfer itself, retain the deterministic runtime test
-evidence as well: the UI steps below prove the quiet-window behavior and the
-end cursor after restoration without depending on a scheduler race.
+evidence as well. Timestamp keys relative to native delivery and restoration
+so the check distinguishes the edit burst from the copy/send/restore operation.
 
 ### STASH-01 — Claude native stash preserves an image and a collapsed paste
 
@@ -92,61 +94,50 @@ Preconditions: open idle `stash-cursor`. Define D as the decoded JSON string
    assert it equals D followed by `END` byte for byte. Assert the incoming Bus
    message is absent from this draft payload.
 
-### STASH-04 — Opaque Codex and Cursor drafts wait without a failure notice
+### STASH-04 — Opaque Codex and Cursor input does not hold delivery
 
-Preconditions: run each step once for `stash-codex` and once for
-`stash-cursor`, with the corresponding pane open and idle. Use unique incoming
-message text for each provider.
+Preconditions: repeat for idle Codex and Cursor with distinct message markers.
+This case exercises the copy fallback when only an opaque paste chip is visible.
 
-1. With driver `paste`, enter `fake:draft-bytes OPAQUE PROVIDER` followed by
-   twelve newline-separated lines `opaque line 01` through `opaque line 12`.
-   Assert Codex shows `[Pasted Content N chars]` and Cursor shows a
-   `[Pasted text #N +K lines]` chip. Record the raw draft and chip label.
-2. Fixture: send `STASH opaque delivery PROVIDER`. After the quiet window,
-   inspect the request twice across another three seconds: it stays queued
-   with `composer_busy`, the chip is unchanged, and neither history nor the
-   native pane contains a submission failure notice. Bus has not cleared or
-   submitted the developer's opaque draft.
-3. Press Enter to submit the developer's opaque draft. Decode its native
-   `fake draft bytes:` reply and compare it with the complete raw fixture.
-   Then wait for the original queued incoming request to meet the native-completion
-   checkpoint automatically, with its exact output visible in the native pane.
-   Assert it occurs exactly once, has no occupied-input failure notice, and
-   leaves an empty composer. No resend is permitted.
+1. Paste `fake:draft-bytes OPAQUE PROVIDER` followed by twelve newline-separated
+   fixture lines. Record bytes and the real provider chip in the native pane.
+2. Send `STASH opaque delivery PROVIDER` through the scratch CLI → the incoming
+   request reaches the pane and completes once. No persistent `composer_busy`
+   hold or room failure notice. Check the provider input log for accidental
+   inclusion or submission of the fixture text and retain any
+   `bus.draft.copy_loss` diagnostic.
+3. Inspect the restored composer → if the chip survives through a supported
+   native preservation path, submit it manually and compare the exact bytes.
+   If the fallback cannot recover the opaque bytes, record the loss with its
+   diagnostic. Delivery of the incoming message and exact restoration of
+   opaque data are separate observations.
 
-### STASH-05 — Every provider waits through active typing and restores the full draft
+### STASH-05 — Text typed around delivery survives the transfer
 
-Preconditions: repeat all steps for Claude, Codex, and Cursor with their pane
-open and idle. Use `PROVIDER` in both fixtures to keep receipts distinct.
+Preconditions: repeat for idle Claude, Codex and Cursor. For deterministic
+typing while sending, use a scratch fixture that can pause native delivery at
+the transfer boundary and record when it releases. Keep provider-specific
+end markers for all payloads.
 
-1. Type `fake:draft-bytes ACTIVE PROVIDER`. Fixture: send `STASH typing
-   delivery PROVIDER`, then continue native typing: append `-1`, append `-2`
-   one second later, and append `-3` one second after that. After each append,
-   inspect request status and screen: the request remains queued and the draft
-   contains every typed suffix. No stash, clear, submit, or failure notice has
-   interrupted the typing burst.
-2. Stop typing. Wait for the same incoming request to meet the native-completion
-   checkpoint automatically.
-   Assert the original draft plus `-1-2-3` is restored, without Bus message text
-   or an end marker. Type `-END` and press Enter; decode the native JSON reply
-   and assert the exact payload is `fake:draft-bytes ACTIVE PROVIDER-1-2-3-END`.
-   There is one incoming message and one native completion, its native text stored as the reply, and no resend.
+1. Type `fake:draft-bytes ACTIVE PROVIDER`, then append `-1` as the incoming
+   send is issued. With a controlled pause, append `-2` while the transfer
+   owns the composer → the fixture records where both inputs landed.
+2. Release delivery; wait for the exact same incoming request to complete.
+   Append `-END` to the restored draft, press Enter and decode the native
+   JSON reply → it contains the original draft plus `-1-2-END` exactly,
+   without delivery text or an end marker. The incoming request was accepted
+   once and reaches the native-completion checkpoint.
 
-### STASH-06 — Claude keeps an existing native stash while another draft is visible
+### STASH-06 — Claude keeps an occupied native stash during copy/send/restore
 
 Preconditions: open idle `stash-claude`.
 
-1. Type `fake:draft-bytes HIDDEN`, press Ctrl+S, and type
-   `fake:draft-bytes VISIBLE`. Assert the visible draft is present alongside
-   the native `› stashed` footer marker.
-2. Fixture: send `STASH full native slot`. Across two quiet windows, assert the
-   incoming message stays queued with `composer_busy`, the visible draft and
-   stash marker remain, and no failure notice appears. Bus must not overwrite
-   the already occupied native stash slot.
-3. Press Ctrl+U to clear only the visible single-line fixture, then Ctrl+S to
-   restore the hidden fixture. Assert it is `fake:draft-bytes HIDDEN`, press
-   Enter, and decode its native reply to prove the hidden draft survived.
-   Wait for the original incoming request to meet the native-completion checkpoint
-   once automatically; assert
-   the composer is empty and no end marker or failure notice remains. Stop
-   the scratch session after recording status and cleanup evidence.
+1. Type `fake:draft-bytes HIDDEN`, press Ctrl+S, then type
+   `fake:draft-bytes VISIBLE` → capture the visible draft and `› stashed`.
+2. Send `STASH full native slot` → incoming delivery completes once without a
+   permanent hold. The visible draft is restored and the existing native
+   stash marker is still present. Manually submit the visible draft and
+   decode its bytes to verify exact restoration and separation.
+3. Retrieve the hidden draft with Ctrl+S, submit it and decode exact bytes
+   → the already occupied stash was retained and the pane remains usable.
+   Check the incoming request and its native output count, then stop scratch Bus.

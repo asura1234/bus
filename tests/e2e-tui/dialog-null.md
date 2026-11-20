@@ -35,5 +35,5 @@ agent reads and observe/press are the allowed corroborating CLI surfaces.
    Wait for the synchronized redraw to finish and observe the ordinary composer.
    The worker becomes idle; its native pane contains `fake reply: fake:dialog-null`.
    Its request is complete with `stage:replied`, `fake reply: fake:dialog-null`
-   and no failure reason; history retains the original prompt without a reply row.
+   and no failure reason; the room retains the original developer prompt with exactly one matching answer.
    Stop the session. The selection receipt alone does not prove this result.

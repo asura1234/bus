@@ -4,7 +4,7 @@ Apply app.md's [run contract and setup recipes](app.md#run-contract-and-setup-re
 (R, A, P and the fixture rule). Source: `src/messaging/coordinator/reports.rs`.
 
 An orchestrator turn started by a message settles that request as `replied`
-with the native final stored on it; the final is not posted as a new message.
+with the native final stored on it; a developer request also displays its final under the original exchange.
 Its authored message remains in the original conversation: MASTER for a developer's MASTER message,
 the work room for a worker's message or Bus's Blocked notice. A turn no message started
 (a background command exiting, or text typed into the orchestrator's own
@@ -15,7 +15,7 @@ only when the orchestrator posts them with `bus send --room master --as ORCH
 
 ## Cases (run order)
 
-### ORCH-01 — Native completion stays out of replies; autonomous status and explicit posts use their rooms
+### ORCH-01 — Developer answers, autonomous status and explicit posts use their rooms
 
 **Preconditions/setup:** R(`qa-work`); A(`qa-work`, `qa-worker`, Claude Code);
 then the orchestrator `qa-orch` with APP-04's UI recipe (Claude Code, scratch PWD,
@@ -55,8 +55,8 @@ allows: it is what `send --to human` does when an orchestrator follows its promp
 6. Click `# MASTER`, P(`qa-orch`), type `ORCH01 status please` and press Enter →
    once the delivery settles, its request is complete with `stage:replied`,
    its native reply text and no failure reason. MASTER history contains the developer's
-   `ORCH01 status please` exactly once with no reply card; the exact fake output
-   is visible only in `qa-orch`'s native pane.
+   `ORCH01 status please` exactly once, with the matching native final shown
+   once as its answer.
 7. Click `# qa-work` → its history does not contain `ORCH01 status please`, and
    step 5's message is still its only `qa-orch → You` message.
 8. Fixture: `bus send --room master --as qa-orch --to human --text "ORCH01 progress: PR merged"`
@@ -69,6 +69,7 @@ a cells screenshot of each room's history, `bus state` agent status, and
 `bus history --room master` and message status for step 6, and the step-8 send receipt.
 
 **Pass criteria:** message-owned native finals settle as replied with their
-native text and no synthesized posts; original messages remain in their conversations. The
+native text. MASTER shows one answer under the developer prompt, and
+Bus-authored notices do not acquire reply cards. The
 unprompted status shows only in the work room, and the explicit `send --to human`
 progress report shows only in MASTER.

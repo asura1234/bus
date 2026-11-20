@@ -48,7 +48,7 @@ the scratch project's .grok/bus-fake/SESSION directory. No ~/.grok writes.
 Scenarios:
 - ordinary prompt: native output `fake reply: PROMPT`; `fake:raw-reply TEXT`
   prints TEXT in the native pane. Its request completes as `replied` with that
-  text, with no failure reason. Native finals are never implicit Bus messages.
+  text, with no failure reason. Developer-request finals appear under their original exchanges. They do not create independent chat posts.
 - fake:work N: timed working state with a live editable composer and steering.
 - fake:question / fake:card / fake:free-text: inert cards; no displayed command
   executes. Arrow keys choose, Left/Right changes permission scope, Tab parks
@@ -84,7 +84,7 @@ root, acceptance_existing_instance, or the real installed Grok alias.
 | Busy follow-up (steering case) | Grok keeps the new message queued while working; it runs in a distinct turn afterward. Both requests end replied with exact separate native outputs. Explicit reply fixtures must answer each message ID | Record in the hash-bound run report |
 | Dialog selection / free text | Observe the full card, then use press with its visible label, documented key or text+submit; bind terminal identity and inspect pending/uncertain results before continuing | Record in the hash-bound run report |
 | Gate / error / cancel / partial JSONL | Provisional/partial records do not settle early; errors/cancellation are not successful completions; native text becomes the stored reply | Record in the hash-bound run report |
-| Long final | Preserve the exact 40,000-character native transcript evidence; the attributed request ends as replied with the exact native text, and history must not invent or clip a reply row | Record in the hash-bound run report |
+| Long final | Preserve the exact 40,000-character native transcript evidence; the attributed request ends as replied with the exact native text, and the original developer exchange shows one matching answer, with its full text retained in status and scratch history | Record in the hash-bound run report |
 | MASTER follow-up while worker runs | Explicit MASTER replies supplied before turn end remain immutable after a separately authored worker result; ordinary native finals leave replied requests with their native text | Record in the hash-bound run report |
 | Work-room wake | One separately authored worker result reaches the orchestrator; an unprompted orchestrator status appears only in its work room, never as a correlated reply | Record in the hash-bound run report |
 | Restart before wake | Pending authored work survives; one wake/result, no duplication after repeated reads | Record in the hash-bound run report |

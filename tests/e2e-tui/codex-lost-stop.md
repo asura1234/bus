@@ -37,11 +37,11 @@ read-only `state`, `history --room stop-lab`, `message status` and `agent read w
    `T bus history --room stop-lab` lists the original prompt and its captured reply exactly once. Pass that history entry's `prompt.id` to `T bus message status MESSAGE_ID`: the
    status is `complete:true`; the worker's `requests[]` entry has `stage: "replied"`,
    `reply.text` equal to the recorded answer and `reason: null`. In `T bus state` the
-   worker has no `actionable_error` and is `idle`. Take and open a screenshot of the room.
+   worker has no `actionable_error` and is `idle`. Return to the room and verify the answer renders once under the developer prompt. Take and open a screenshot of the room.
 2. Click `composer`, paste `fake:work 3 copy the evidence`, press `enter`. This turn runs no
    hooks at all, so Bus never sees it start; `fake:work 3` keeps it working for 3 seconds, as a
    real turn takes, so Bus sees the agent Working and then Idle. Within 30s its native pane shows
    `fake reply: fake:work 3 copy the evidence`.
    `T bus history --room stop-lab` lists both original prompts, each with one captured reply. Check both `prompt.id` values with `T bus message status MESSAGE_ID`:
    the second request is complete with `stage: "replied"` and its recorded answer, and neither request has
-   `reason: "reply_not_captured"`. Take and open a screenshot of the room. Stop the session.
+   `reason: "reply_not_captured"`. Return to the room and verify the answer renders once under the developer prompt. Take and open a screenshot of the room. Verify both exchanges still show one answer each. Stop the session.

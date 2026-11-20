@@ -6,8 +6,8 @@ are agent-authored message fixtures and read-only evidence; room and agent setup
 also uses the scratch CLI. Record receipts, message status, history, terminal
 reads and screen text. No steps may be skipped. Ordinary fake native finals
 settle requests with `complete:true`, `stage:replied`, a non-empty reply and no
-failure reason; their exact output is native evidence, never an invented chat
-message.
+failure reason; capture the exact native output. Developer answers appear under their
+original exchanges while peer finals settle requests without new posts.
 
 ## Cases (run order)
 
@@ -37,7 +37,8 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    status while busy, then wait for both to settle → the worker message stays
    queued until the MASTER turn ends and then gets its own attributed turn;
    both requests settle replied with their native text. The two original prompts stay in their own
-   conversations and each has matching native output, with no cross-attributed reply.
+   conversations and each has matching native output. MASTER shows one answer
+   under the developer prompt; the worker exchange has no cross-attributed answer.
 4. Fixture: send from `qa-worker` to `other-orch` by name and ID in `qa-work` →
    both reach that unrelated MASTER orchestrator, settle as distinct replied
    requests in `qa-work`, and carry the worker's attribution. Send without `--as` to
@@ -53,8 +54,8 @@ Wait for all three fake agents to become idle. Record room/agent IDs. Confirm
    the worker clears. Select `recipient:libtv-app master`,
    close the picker with Esc, click the composer, type `WOC picker verify` and
    press Enter. Wait for native completion → the developer-authored message
-   appears in `qa-work` history once, with an ended/null request and matching
-   native output, proving selection persists and submits to the orchestrator.
+   appears in `qa-work` history once, with a replied request and one matching
+   answer beneath it, proving selection persists and submits to the orchestrator.
 
 6. Fixture: send `qa-worker here —` followed by a newline and `WOC already
    identified` to `orchestrator` as `qa-worker` → the delivered payload and its native echo carry one canonical `qa-worker (room ROOM_ID):` header followed

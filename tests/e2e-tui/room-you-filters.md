@@ -5,10 +5,10 @@
 - Run FILTER-01 and FILTER-02 in order, each in a fresh scratch session at **80×24** with isolated data/settings. Never connect to the running Bus or read/write `~/.local/share/bus`. Use fake providers only. Record the commit and open every screenshot used as evidence.
 - The room header must show `# ROOM` on one row and, directly beneath it, right-aligned `[ ] * → You` followed by `[ ] You → *`. Checked controls read `[x]`. These filters hide nonmatching history directly; Ctrl+F contains only text search and narrows the already-filtered history.
 - Every numbered step is action → expected result. Capture snapshots/hits and a cell screenshot judged by the runner for each named visual state. State/history read through the scratch CLI may corroborate fixtures, not replace visible filter evidence. A captured mismatch is FAIL; unavailable required evidence is SKIP with reason.
-- **R(name), create a work room:** press Ctrl+Shift+R, type the name, press Enter, and verify `# name` opens.
-- **A(room, name), add a fake Claude worker:** click the room, press Ctrl+N, type the name, Tab to Agent, select Claude Code, replace PWD with the absolute scratch workspace and a trailing slash, leave additional args empty, and press Enter. Accept hook setup only for the isolated scratch project if asked. Wait for the fake terminal, then press F6.
+- **R(name), create a work room:** press Ctrl+Shift+R with distinct Shift input or click ROOMS `+`, type the name, press Enter, and verify `# name` opens.
+- **A(room, name), add a fake Claude worker:** click the room, press Ctrl+N, type the name, Tab to Agent, select Claude Code, replace PWD with the absolute scratch workspace and a trailing slash, leave additional args empty, and press Enter. Accept hook setup only for the isolated scratch project if asked. Wait for readiness, click the agent to check its fake pane, then press F6.
 - **P(names), select recipients:** press Ctrl+P, make exactly the named workers checked, then Esc.
-- Fixed incoming messages may be arranged through the scratch CLI as `bus send --room ROOM --as AUTHOR --to RECIPIENT --text TEXT`. They are test inputs, not model output. Let fake native turns settle with `complete:true`, `stage:replied`, a non-empty reply and no failure reason before judging history; no reply row is synthesized.
+- Fixed incoming messages may be arranged through the scratch CLI as `bus send --room ROOM --as AUTHOR --to RECIPIENT --text TEXT`. They are test inputs, not model output. Let fake native turns settle with `complete:true`, `stage:replied`, a non-empty reply and no failure reason before judging history. A developer exchange includes its single projected answer.
 
 ## Cases
 
@@ -30,8 +30,8 @@
 
 **Preconditions/setup:** R(`master-target`). Click MASTER and use A to add `master-agent` (Claude Code), orchestrating `master-target`; return to MASTER with F6. P(`master-agent`); send `Master Needle outgoing` as the developer and verify its replied completion and matching native output. Post `Master Needle direct` as master-agent to you. Stay on MASTER.
 
-1. Inspect MASTER at 80×24 → both filters are present, unchecked, correctly ordered and right-aligned directly below `# MASTER`; the outgoing prompt and direct post are visible, with no synthesized reply. Capture the **master-off** screenshot.
-2. Press Alt+O → only `You → *` is checked and only developer-authored history remains; the direct message disappears. Capture the **master-outgoing-on** screenshot.
+1. Inspect MASTER at 80×24 → both filters are present, unchecked, correctly ordered and right-aligned directly below `# MASTER`; the outgoing prompt and direct post are visible, with one native answer under the developer prompt. Capture the **master-off** screenshot.
+2. Press Alt+O → only `You → *` is checked and only developer-authored exchanges remain, including their answers; the direct message disappears. Capture the **master-outgoing-on** screenshot.
 3. Press Alt+I so both filters are checked, open Ctrl+F and type `Master Needle` → Find searches the union of incoming and outgoing history and contains no direction toggles of its own. Press Alt+O to leave only incoming filtering → only the direct-post match remains and the developer prompt is excluded. Capture the **master-combined-search** screenshot. Press Esc and Alt+I to return to both filters off → the unfiltered MASTER history returns.
 
 **Evidence:** snapshots, hits and opened cell screenshots for master-off, master-outgoing-on and master-combined-search; final unfiltered snapshot.

@@ -3,7 +3,7 @@
 ## Run contract
 
 Run each case in a fresh scratch Bus with fake providers, isolated HOME and
-BUS_DATA_DIR, a dedicated target/workflow-docs build, and a 160x45 terminal with
+BUS_DATA_DIR, this worktree's single Cargo target, and a 160x45 terminal with
 graphics disabled. Never use the running Bus, target/debug, or desktop automation.
 Use the e2e-test skill and its scratch TUI driver. UI input creates the
 orchestrator; read-only state, launch files and filesystem reads corroborate the
@@ -29,7 +29,7 @@ checkout's absolute path and the driver's scratch workspace path.
    Orchestrates room, and leave the default work room selected. Leave the
    system prompt unedited and click Add. Accept hook consent only for that scratch
    workspace if shown. → An orchestrator exists in MASTER, targets the default
-   work room, and its fake Claude terminal opens.
+   work room, and the form closes to MASTER chat. Once ready, click the agent to open its fake Claude terminal.
 2. Read the orchestrator's Bus-owned launch system-prompt.md. → Near the top it
    names Never act on assumptions; ask the developer and links to the first
    binding rule; its Workflows reference is the absolute checkout/workflows/
@@ -53,7 +53,7 @@ working directory, and scratch data path.
    Orchestrates room, and leave the default work room selected. Leave the
    system prompt unedited and click Add. Accept hook consent only for that scratch
    workspace if shown. → An orchestrator exists in MASTER, targets the default
-   work room, and its fake Claude terminal opens.
+   work room, and the form closes to MASTER chat. Once ready, click the agent to open its fake Claude terminal.
 2. Read the orchestrator's Bus-owned launch system-prompt.md. → Near the top it
    names Never act on assumptions; ask the developer and links to the first
    binding rule; its Workflows reference is the absolute scratch

@@ -2,121 +2,93 @@
 
 ## Run contract
 
-Use a fresh scratch Bus through this worktree's dev-tools `bus --dev tui` driver,
-120x40, graphics none. Build through the room's slot wrapper and use only the
-worktree's target directory. Never attach to the live Bus, use desktop automation,
-or launch real providers. CLI fixtures may create rooms and fake agents and send
-messages as the developer or agents; search, navigation and help use real TUI keys.
-No skips or failed-step retries. Capture snapshots for each step and cells for
-highlights; open a cell screenshot to judge the bar's layout. Every ordinary
-fake recipient request must complete as `replied` with its fake reply text and
-no failure reason. Native output stays in the agent pane; counts below include authored
-prompts/posts only, never implicit reply rows.
+Use a fresh scratch Bus per case at 120×40 with the worktree's dev-tools binary,
+fake providers, graphics none, isolated HOME/data and the worktree's Cargo target.
+Never use the live Bus or desktop automation. CLI setup and deterministic sends
+are allowed. Use TUI input for Find, filters and navigation. Capture every step's
+snapshot, use cells for highlights and open the cited screenshots. No skips or
+failed-step retries.
+
+Use distinct nonmatching native answers for developer prompts: append
+`fake:raw-reply ACK` to each developer fixture. Verify their requests settle
+as replied with no failure reason and their rendered answers are present with
+filters off. Find counts occurrences in rendered history, including answer text.
+The query words below occur only in the intended prompts/posts. The selected
+text match uses background `#f0be46`.
 
 ### FIND-01 — Find an incoming message buried in peer traffic
 
-Setup: CLI fixtures create `find-busy` and two fake Claude agents `find-sender`
-and `find-peer`, both using the driver's scratch work directory. Wait for idle.
-Send 12 messages `Needle peer before NN` from find-sender to find-peer, one
-`Needle lost developer ask` from find-sender to you, then 12 messages
-`Needle peer after NN` from find-sender to find-peer. Wait for every peer
-request to settle before judging the screen. Select `find-busy` through the UI.
+Setup: two idle fake Claude agents in `find-busy`. Send 12 `Needle peer before NN`
+messages between them, one `Needle lost developer ask` post to You, then 12
+`Needle peer after NN` messages. Wait for settlement. Open the room at the tail.
 
-1. Assert the latest peer traffic is visible and `Needle lost developer ask` is
-   outside the viewport. Press Ctrl+F. Assert `Find:`, `[ ] * → You` and `[ ] You → *`
-   are visible, the text box is highlighted and an empty query has no counter.
-2. Press Tab. Assert only `* → You` is highlighted and both toggles remain off.
-   Press Enter. Assert `[x] * → You`, `[ ] You → *`, counter `1/1`, the
-   `find-sender → You` header and `Needle lost developer ask` are visible.
-   Assert the header has selected-match background `#f0be46` using cells.
-   Capture and open a cell screenshot: both toggles, query field and hint are
-   readable and do not overlap.
-3. Press Shift+Tab to focus text. Type `lost`. Assert `1/1` and selected-match
-   background on `lost`. Press Up and Down; both wrap to the same message.
-   Append `x` and assert `no matches`; Backspace restores `1/1`.
-4. Press Esc then Ctrl+F. Assert both toggles off, empty query and no counter.
-   Type `Needle`; assert multiple matches across peer and developer messages.
-   Press Tab then Space; assert `1/1` on the developer ask. Read-only history
-   still contains all 24 peer prompts and the one developer post.
-5. Press Esc. Open help by typing `/help` and pressing Enter. Assert Ctrl+F is
-   chat find, Tab/Shift+Tab moves focus, Enter/Space or click toggles, `You → *` finds sent
-   messages, both filters include either direction, and empty text steps messages.
-   Close help and stop the scratch session.
+1. Verify the latest peer traffic is visible and the ask is out of view. Open
+   Ctrl+F → empty Find field and both room-header filters unchecked. Verify
+   neither direction appears in the Find panel itself. Capture and open a screenshot.
+2. Type `Needle` → multiple matches once history has loaded. Press Alt+I →
+   the incoming filter is checked, the peer traffic disappears, and the ask is
+   the only text match (`1/1`). Capture its selected text cells.
+3. Clear the query with Backspace, then type `lost`. Press Up and Down → each
+   wraps to `1/1`. Append `x` → `no matches`; Backspace restores `1/1`.
+4. Close and reopen Find → query is empty, no counter, incoming filter still
+   checked. Turn it off → peer history returns. Verify all 24 peer prompts
+   and the one developer post remain in scratch history.
+5. Open `/help` → Ctrl+F documents text Find/navigation and Alt+I/Alt+O
+   document the separate direction controls. Close help and stop scratch Bus.
 
 ### FIND-02 — Find sent messages and combine directions in a work room
 
-Setup: CLI fixtures create `find-outgoing` and fake Claude agents `out-agent`
-and `out-peer` in the scratch work directory. Wait for idle. Send `Needle peer
-noise` from out-agent to out-peer, `Needle outgoing older` and `Needle outgoing
-newer` as the developer to out-agent, and `Needle outgoing newer incoming` from out-agent to you.
-Wait for every request to settle. Select `find-outgoing` through the UI.
+Setup: use two idle fake Claude workers in `find-outgoing`. Create one peer
+message `Needle peer noise`, two developer prompts `Needle outgoing older`
+and `Needle outgoing newer`, and one direct post `Needle outgoing newer incoming`
+in that order. Wait for settlement and open the room.
 
-1. Press Ctrl+F then Shift+Tab. Assert only `You → *` is highlighted, no query
-   cursor, and both toggles off. Press Space. Assert `[x] You → *`, `[ ] * → You`,
-   `2/2` and the newer developer message header selected with `#f0be46`.
-2. With `You → *` focused, press Up, Up, Down. Assert counters `1/2`, `2/2`,
-   `1/2` respectively, scrolling to each developer header. Press Tab to focus
-   text and type `outgoing ` including the space. Assert two matches and the
-   query contains a space. Append `newer`; assert `1/1` and a selected text match.
-3. Press Tab then Space. Assert both toggles on and `2/2`: the developer prompt
-   and the matching agent-authored direct post both match. Press Up and Down with `* → You` focused;
-   assert `1/2` then `2/2`. Press Tab; assert only `You → *` highlighted. Press Up
-   and Down; assert `1/2` then `2/2`. Capture and open a screenshot proving the
-   focus highlight and layout.
-4. Press Tab to text. Backspace five times to restore `outgoing `; assert three
-   matches. Press Tab then Space to disable `* → You`; assert two matches.
-   Press Tab then Space to disable `You → *`; assert three unfiltered matches.
-   Press Esc then Ctrl+F; assert empty text, both toggles off, text focus and no
-   match counter. Stop the scratch session.
+1. Press Alt+O, then Ctrl+F and type `Needle` → only outgoing is checked;
+   two matches, newest selected. Up, Up, Down → `1/2`, `2/2`, `1/2`.
+2. Clear the query and type `outgoing ` including the space → two matches.
+   Append `newer` → `1/1` on the developer prompt.
+3. Press Alt+I while Find is open → both filters are checked; the developer
+   prompt and direct post both match, with no peer traffic. Use Up and Down
+   to visit both distinct rows. Capture and open a union screenshot.
+4. Backspace five times → three matches for `outgoing `. Press Alt+I → two
+   outgoing matches. Press Alt+O → three unfiltered `outgoing ` matches.
+   Escape and reopen Find → both filters are off and the query is empty.
 
 ### FIND-03 — Developer authorship in MASTER
 
-Setup: CLI fixtures create work room `find-work` and fake Claude orchestrator
-`find-orch` in MASTER, bound to find-work, using the scratch work directory.
-Wait for idle. Send `Needle master outgoing` as the developer to find-orch and
-`Needle master incoming` from find-orch to you in MASTER. Wait for settlement.
-Select MASTER through the UI.
+Setup: a fake Claude orchestrator in MASTER, bound to `find-work`. Send a
+developer prompt `Needle master outgoing`, then post `Needle master incoming`
+from that orchestrator to You in MASTER. Wait for settlement and open MASTER.
 
-1. Press Ctrl+F, Tab, Tab, Space. Assert only `You → *` enabled, counter `1/1`
-   and the developer-authored header selected with `#f0be46`. Press Up
-   and Down; each wraps to that developer message.
-2. Press Tab to focus text and type `Needle`. Assert `1/1` and only the outgoing
-   prompt is a text match. Press Tab then Space. Assert both toggles on and
-   `2/2`: outgoing prompt and incoming post. Press Up and Down;
-   assert `1/2` then `2/2`. Press Esc and stop the scratch session.
+1. Press Alt+O and open Find with query `Needle` → only `You → *` checked,
+   `1/1` on the developer prompt. Its answer remains in the outgoing exchange.
+   Up and Down each wrap to the same match.
+2. Press Alt+I → both controls checked, with two matches. Navigate Up/Down
+   across both and capture a screenshot showing the filters in the MASTER
+   header and the selected text in history. Escape and stop scratch Bus.
 
-### FIND-04 — Enter, Space and clicks activate stacked direction filters
+### FIND-04 — Mouse and keyboard filters with a narrow Find panel
 
-Setup: CLI fixtures create `find-toggles` and fake Claude agents `toggle-agent`
-and `toggle-peer` in the scratch work directory. Send `Needle peer noise`
-from toggle-agent to toggle-peer, `Needle outgoing older` and `Needle outgoing
-newer` as the developer to toggle-agent, and `Needle outgoing incoming` from toggle-agent
-to you. Wait for every request to settle. Select find-toggles through the UI.
-This case starts at 100x40 and resizes to 60x40; graphics none.
+Setup: in `find-toggles` use two idle fake Claude workers to stage `Needle peer
+noise`, developer prompts `Needle outgoing older` and `Needle outgoing newer`,
+and an agent's direct post `Needle outgoing incoming`. Wait for settlement.
+Start at 100×40 and resize to 60×40 in step 5.
 
-1. Press Ctrl+F and type `Needle`. Assert four matches, text focus, and exact
-   labels `[ ] * → You` and `[ ] You → *` on separate lines below the bordered
-   Find field. Capture and open a before screenshot.
-2. Press Tab then Enter. Assert incoming checked, outgoing unchecked, `1/1`
-   and the incoming message selected with background `#f0be46`. Press Space;
-   assert both unchecked and `4/4`. Click the incoming label; assert incoming
-   checked, focused, `1/1` and selected-match highlight. Capture and open an
-   after screenshot. Press Enter to disable incoming; assert `4/4`.
-3. Press Tab then Enter. Assert outgoing checked, incoming unchecked, `2/2`
-   and the newer developer message selected. Press Space; assert both unchecked
-   and `4/4`. Click the outgoing box; assert outgoing checked, focused and
-   `2/2`. Capture and open an after screenshot.
-4. Click the incoming box. Assert both checked and `3/3`, proving either
-   direction. Press Up then Down; assert `2/3` then `3/3` and the highlighted
-   match moves. Capture and open a union screenshot.
-5. Click inside the query box. Assert query focus and cursor; append ` outgoing`.
-   Assert `3/3`. Press Enter, Shift+Enter, Down; assert `2/3`, `3/3`, `1/3`.
-   Click incoming to disable it; assert outgoing only and `2/2`. Click outgoing
-   to disable it; assert no filters and `3/3`. Capture and open a screenshot.
-6. Resize to 60x40. Assert both exact labels still appear on separate rows
-   below Find, without overlap. Click incoming label; assert incoming only
-   and `1/1`. Click outgoing label; assert both and `3/3`. Click query field,
-   then Tab and Tab; assert focus order text, incoming, outgoing. Capture and
-   open a narrow screenshot. Press Esc, open `/help`, and assert help describes
-   Enter/Space/click activation and both wildcard direction labels. Close help
-   and stop the scratch session.
+1. Open Find and type `Needle` → four matches and separate, unchecked
+   direction controls in a single header row above the Find panel. Capture
+   and open a screenshot.
+2. Click `* → You` → incoming only, `1/1` on the direct post. Press Alt+I →
+   both off and four matches. Click `You → *` → outgoing only and two
+   matches. Capture each direction's header cells and selected text.
+3. Click `* → You` → both checked with three matches. Use Up and Down
+   → the highlight moves across the union. Capture and open a screenshot.
+4. Focus the query and append ` outgoing` → three matches. Navigate with
+   Enter, Shift+Enter and Down. Click incoming to disable it → two matches;
+   click outgoing to disable it → three unfiltered matches for the query.
+5. Resize to 60×40 → both header checkboxes and the Find query remain
+   readable and separately clickable. Click incoming → one match. Click
+   outgoing → three. Capture and open a narrow screenshot, then close Find.
+
+**Pass criteria:** text Find navigates matches in the current filtered
+conversation, room filters work by shortcut and click, and reopening Find
+resets its query while preserving each room's filter choices.

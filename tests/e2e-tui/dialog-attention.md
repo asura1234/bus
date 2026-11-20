@@ -45,12 +45,14 @@ Enter, then draws a 350ms synchronized redraw. It executes nothing.
    --terminal-id TERMINAL_ID`. Require outcome `selected`; wait for a completed
    redraw, idle state, matching native fake output and `complete:true`,
    `stage:replied`, the native reply text, no failure reason for that request. Observation shows the ordinary composer.
-   The episode retires quietly: exactly one Blocked and zero Resolved notices.
+   The room shows one answer under the developer prompt, exactly one Blocked
+   notice and zero Resolved notices.
    Recheck after stable chat rows for 1500ms.
 3. Submit `fake:dialog-null` again. Wait for a second Blocked notice, observe
    and select the same label through `agent press`, bound to the fresh terminal
    observation. Prove idle, the second matching native output and a second replied request. History has exactly two
-   Blocked and zero Resolved notices. Capture/open a screenshot; stop the session.
+   Blocked and zero Resolved notices, with one answer per developer exchange.
+   Capture/open a screenshot; stop the session.
 
 ### DA-03 — Numbered Codex composer edits do not request help
 

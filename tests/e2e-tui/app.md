@@ -1,18 +1,22 @@
-# Bus TUI whole-app QA — draft
+# Bus TUI whole-app QA
 
-Basis: main worktree `6bdfe7c83c51c2611f7c717a3bc663c114ca29c8`, source rechecked 2026-10-12.
-Read: [README](../../README.md), user-visible strings/actions in
-[TUI help](../../src/client/rooms/help.rs), room forms, sidebar, history and settings
-under `src/client/`, and `target/debug/bus --help`. No driver implementation or
-driver documentation was used. Results are tracked separately for each run.
+Source review: `origin/master` at `2ca07f718`, 2026-11-20. The cases also
+specify the intended acceptance for the delivery, composer mode, Add agent and
+deleted-agent lanes listed under [Integration checkpoints](#integration-checkpoints).
+Record the actual tested head and binary identities in the run report. This
+document carries no run verdict.
 
 ## Run contract and setup recipes
 
 - Run cases in the order below, each in a fresh scratch session with its own data
-  and isolated settings/config. Never connect to the running Bus or read/write
-  `~/.local/share/bus`. Record build/commit, scratch root, platform, terminal,
-  terminal size and graphics capability. Fake Claude Code, Codex and Cursor
-  launches must be available; no real account, model response or thinking required.
+  and private HOME/settings/config. Scrub inherited `BUS_*` and `HERDR_*` before
+  starting the driver. Point each CLI call at that same scratch session. Never
+  connect to the running Bus or read/write `~/.local/share/bus`. Use only this
+  worktree's `CARGO_TARGET_DIR=<worktree>/target` for any builds. Record the
+  commit, TUI and server build SHAs, binary hash, scratch root, platform,
+  terminal size, input protocol, graphics capability and fixture versions.
+  Use fake providers and recorded effects. Stop only the identified scratch
+  processes after each case and retain the named evidence.
 - Start at 120 columns × 40 rows unless a case specifies otherwise. Wait for UI
   transitions to settle; record elapsed time on a timeout. Locate controls by
   their current labels, not fixed coordinates; avoid accidental double-clicks.
@@ -31,34 +35,44 @@ driver documentation was used. Results are tracked separately for each run.
 - Fixed incoming-message fixtures may be arranged through the supported scratch
   developer CLI described by `bus --help`, with a named agent author. They are
   test inputs, not model output; do not rewrite live storage to manufacture a pass.
-- A fake provider native final is terminal output and is stored as the
-  request's reply. For ordinary fake turns require `complete:true`,
-  `stage:replied`, a non-empty `reply.text` matching the native final and no
-  failure reason; verify any expected output marker in the native pane. History
-  retains the authored prompt without adding a reply row. A case testing an explicit
-  reply must run `bus send --reply-to MESSAGE_ID --as RECIPIENT --text TEXT` while
-  the request is active and require `ok:true`, `stage:replied`; it cannot infer this
-  from a native final. Agent-authored posts to You are separate message fixtures.
+- Capture each send receipt or find its message ID in scratch history. For
+  each recipient distinguish acceptance, native submission, provider start
+  evidence and terminal settlement. Record IDs, timestamps and native markers.
+  Ordinary successful fake turns end with `complete:true`, `stage:replied`,
+  matching `reply.text` and no failure reason. A nonempty captured answer to a
+  developer prompt appears once under the original exchange. An explicit
+  `bus send --reply-to MESSAGE_ID --as RECIPIENT --text TEXT` must return
+  `ok:true`, `stage:replied` while the turn is open. Check the room independently
+  of that receipt. Use distinct request and answer markers where row counts
+  matter. Agent-to-agent finals can settle requests without creating room posts.
+- Fault and provider-replay fixtures must run through the scratch product
+  entry point and hold the required state until the observer captures it.
+  Never substitute a pasted copy of a screen, edited Bus state, or a provider
+  log for what the UI actually displays. If the harness cannot provide a
+  named fixture, record SKIP for its dependent assertions and run the rest.
+  Any skipped step keeps the whole-app verdict INCOMPLETE absent a failure.
 
-**R(name), create a work room:** press Ctrl+Shift+R → `Room name` form; type the
-name and press Enter → room appears and opens with `# name`. Verify its ID/name
-in scratch state. For later cases, R is setup and does not depend on APP-02.
+**R(name), create a work room:** press Ctrl+Shift+R on input that reports
+Shift separately, or click ROOMS `+` on legacy terminals → `Room name` form.
+Type the name and press Enter → room appears and opens with `# name`. Verify its
+ID/name in scratch state. On legacy input Ctrl+Shift+R can arrive as Ctrl+R
+and request a restart.
 
-**A(room, name, provider), create a worker:** click the room; press Ctrl+N → fields
-`Name`, `Agent`, `PWD`, `Additional launch args (optional)`; type the name; press
-Tab → provider choices; use Up/Down to highlight the named provider and Enter →
-provider selected, PWD focused. Press Ctrl+A then Ctrl+K, type the absolute scratch
-workspace directory with a trailing slash. Up/Down move a directory suggestion
-highlight and leave the typed PWD untouched; Tab and Shift+Tab move focus and do
-not move that highlight. Enter from PWD or Additional launch args submits Add with
-the typed directory. Leave args empty, press Tab if focus is still on PWD, then
-press Enter
+**A(room, name, provider), create a worker:** click the room; press Ctrl+N →
+`Name`, `Agent`, `PWD` and `Additional launch args (optional)`. Type the name,
+Tab to the provider menu, highlight the provider and press Enter → PWD is
+focused. Press Ctrl+A then Ctrl+K, type the absolute scratch PWD with a trailing
+slash. Up/Down move a directory suggestion highlight and leave the typed PWD
+untouched; Tab and Shift+Tab move focus and do not move that highlight. Enter
+from PWD or Additional launch args submits Add with the typed directory.
 → the room reopens immediately with an agent row that shows launch progress. If a
 hook-write consent form appears, capture it and click Add only for the isolated
-scratch project → creation continues. Once the agent is ready, click its row and
-verify the fake terminal's ready screen. Press F6 → original room.
-Verify agent name/provider/PWD/membership in scratch state. Consent is not approval
-of provider permissions; a real-provider prompt means setup is unsuitable.
+scratch project → creation continues. If the room offers `Review hooks`, open it
+there. Once the agent is ready, click its row and verify the fake terminal's
+ready screen. Press F6 → original room. Verify name/provider/PWD/membership in
+scratch state. Hook consent authorizes Bus setup only. Use inert fixtures for
+provider permission and trust prompts; a real-provider prompt means setup is
+unsuitable.
 
 **P(names), select recipients:** press Ctrl+P → picker; inspect current checkmarks;
 click agent rows to make exactly the named set checked; press Esc → picker closes,
@@ -70,12 +84,319 @@ with unmistakably different shapes/colours, and an absent `missing.txt`. Keep th
 images small. Save reference images for visual comparison. Clipboard-image cases
 need the actual PNG on the clipboard, not its path text. Graphics cases require a
 terminal that really displays images and reports cell dimensions; retain screenshots.
-Desktop banners are out of scope. Terminal-visible notices and recorded effects
-are in scope; no unread badge is expected in today's room sidebar.
+Judge the terminal and recorded effects. Use [DOT-01](room-unread-dot.md#dot-01--developer-unread-dots-persist-clear-on-opening-and-fit-narrow-names)
+for developer-addressed unread dots.
 
 ## Cases (run order)
 
-Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is independent.
+Run the delivery and readiness cases first, in the order shown. Then run
+APP-01 through APP-11 with HEADER-01 in its existing position, LINK-01 through
+LINK-10, and APP-12 through APP-24. Each case is independent.
+
+- **NEW:** APP-25 through APP-32.
+- **Updated:** APP-01 through APP-04, APP-07, APP-11, APP-16, APP-19 and the shared
+  LINK setup. All cases use the refreshed scratch, Add agent and reply-evidence
+  recipes.
+- **Retained:** APP-05, APP-06, APP-08 through APP-10, APP-12 through APP-15,
+  APP-17, APP-18, APP-20 through APP-24, HEADER-01 and every numbered LINK case.
+
+### APP-25 — NEW: Interrupt delivers immediately and preserves native input
+
+**Preconditions/setup:** R(`qa-interrupt`); fake Claude and Codex workers using A,
+and a scratch fake agy adapter if available. Run each supported variant per
+provider in a fresh session or against a newly initialized worker. Select one
+worker. For each busy variant, send a long turn through the room (for stock
+fakes, `fake:work 60 FIRST`) and record its observed start and scheduled
+natural end. Use a separate queue-drain run with independently queued
+followers. Leave genuine dialogs out of this case. Use different payload
+markers for the running turn, Interrupt, follower and native draft.
+
+1. While the first turn is Working, open the provider pane and type a short
+   half-finished plaintext draft with distinctive spacing. Leave it unsent.
+   Return to the room and send the Interrupt → the new payload reaches the
+   provider before the first turn's scheduled natural end. The original
+   turn may settle as interrupted. The follow-up runs exactly once. Reopen
+   the pane → the draft is restored as editable input, with no Interrupt
+   payload in it. After the Interrupt completes, append a suffix and submit
+   the draft manually. On stock fakes, use `fake:draft-bytes` and compare the
+   decoded submission with the original draft plus suffix.
+2. Repeat during a fresh long turn with no developer draft. Use a fake
+   provider screen with no visible composer at the time of the Interrupt
+   if the fixture supports it → the new message reaches the next usable
+   input before the old turn's scheduled end. The pane survives and no
+   invented draft appears. Capture the pre-send frame so a hidden composer
+   and an empty visible composer cannot be mistaken for each other.
+3. Send another Interrupt to the idle worker with an empty native composer →
+   one ordinary provider turn starts and settles, with no interrupted request
+   or spurious stop outcome. Repeat with an idle worker's short plaintext
+   draft → delivery succeeds and the draft remains editable and intact.
+4. In a fresh busy turn queue a short follower before sending the Interrupt,
+   and queue another after it → the old turn stops and the accepted work
+   drains without bypassing the earlier queued work. Use short, distinct
+   fake replies so both followers and the Interrupt can settle before the
+   original fake's scheduled natural end. Check native acceptance counts
+   and terminal status for every new request. In all variants scan room
+   history and the new requests' diagnostics → no
+   `[stop …]` badges, interrupt-retirement or fence notices, stuck hold, or
+   false `uncertain_outcome` for input the provider demonstrably accepted.
+   A normal stop key and cancellation of the old turn are allowed.
+
+**Evidence:** per step, native frames, request IDs and timeline, transcript or
+fixture input log with accepted payload counts, before/after draft and terminal
+identity. Keep status, history and relevant client/native log excerpts through
+drain. For step 1 establish copy/send/restore by showing the original draft,
+the separate accepted payload and the exact restored bytes. A receipt or an
+idle frame alone cannot establish this.
+
+**Pass criteria:** Interrupt lands within the busy window, preserves a
+recoverable plaintext draft and leaves later work runnable. Keep the rich
+draft cases in [stash-draft-delivery.md](stash-draft-delivery.md).
+
+### APP-26 — NEW: Composer delivery modes and history badges
+
+**Preconditions/setup:** R(`qa-modes`), A with fake Claude, P(Claude worker),
+and a fake MASTER orchestrator bound to that room. Use a long fake turn with
+a trusted start. Scratch CLI sends for steer and queue use that orchestrator.
+
+1. Inspect the composer and `/help` → there is no `Mode:` control and F4 does
+   not open a delivery menu. Help says Enter and Option+Enter both interrupt.
+   Send `fake:work 40 MODE_LEAD` with Enter → one long turn and a history
+   header with no delivery badge.
+2. While the lead is Working, send `MODE_ALT` with Option+Enter → the lead
+   stops and the new payload is accepted before the lead's scheduled natural
+   end. Its history header also has no delivery badge. A developer attempt
+   to send `--mode steer`, `--mode queue`, or `--queue` is refused.
+3. Start a fresh long turn. From the scratch CLI, as the bound orchestrator,
+   send `MODE_STEER` with `--mode steer` → the recipient accepts it in the
+   lead's turn group before the lead ends. Its history header shows
+   `[pending]`, including after it settles. While that group is still active,
+   send `MODE_QUEUE` with `--mode queue` → the header shows `[queued]`, the
+   request stays queued with no provider input until the lead ends, then runs
+   once in a separate turn.
+4. Reopen history, then save and reopen only the scratch session → the Enter
+   and Option+Enter rows still have no badge, Steer still shows `[pending]`,
+   and Queue still shows `[queued]`. Scan the exchange for any stop-outcome
+   badge.
+
+**Evidence:** composer and help text showing no mode picker, each
+prompt/request ID, native start and end evidence, the developer mode refusal,
+group/status before and after settlement, and restored history. If step 3
+misses the active interval, report the missing observation.
+
+**Pass criteria:** the composer always interrupts and draws no mode badge.
+Orchestrator steer joins and queue waits, and history keeps only those badges.
+
+### APP-27 — NEW: Explicit and captured developer answers render once
+
+**Preconditions/setup:** R(`qa-replies`), A with a fake Claude or Codex worker,
+P(worker). Use `fake:raw-reply` for distinct native finals. Use a held fake turn
+for an explicit-only answer with an empty native final, if supported. Separate
+step 1's mid-turn visibility from the empty-final assertion so the stock fake
+can cover the former even when it cannot produce an empty final.
+
+1. Send an explicit-only test prompt and wait for a trusted open turn. From the
+   scratch CLI reply as the recipient with answer `EXPLICIT_ONLY_27` →
+   the receipt is `stage:replied`, and one answer from that worker appears
+   below the developer prompt while the provider is still Working. End the
+   fixture turn without a native answer → the visible answer count stays one.
+2. Send a prompt with native final `CAPTURED_ONLY_27` and no explicit reply →
+   its request settles with the matching text and the room renders one
+   answer below that prompt.
+3. During a third turn reply explicitly with `EXPLICIT_FIRST_27`. Let the
+   provider finish with a different final `NATIVE_LATER_27` → native evidence
+   shows that final, but the answer displayed and stored for the request is
+   still `EXPLICIT_FIRST_27`, with one visible answer and no separate
+   `NATIVE_LATER_27` answer or wake post.
+4. Reopen the room and then restart the scratch session. Scan the exchanges
+   → the same single answer per prompt remains, with no stop-outcome badges.
+   Check the other room used for navigation for stray copies.
+
+**Evidence:** room rows with author/body/count, capture of the still-open turn,
+explicit reply receipts, native finals and per-request status before/after
+completion and after reopening. Count answer rows separately from prompt text.
+
+**Pass criteria:** each developer answer renders once in its own conversation,
+explicit answers appear before turn end and retain precedence.
+
+### APP-28 — NEW: Add agent closes immediately and reports failures
+
+**Preconditions/setup:** R(`qa-add`) and R(`qa-add-other`); a ready worker named
+`taken` in the other room. Use a fake launcher or startup gate with a marked
+wait before provider readiness. For Unix shell fixtures see
+`tests/tui/add_agent_test.rs` on the Add agent lane. Use 140×40 if needed.
+
+1. Open Add and submit with an empty name, then with `taken` → each leaves
+   the form and typed fields editable with a visible inline error. State
+   and launcher records show no new worker. Esc closes the form.
+2. Submit `slow-worker` with valid PWD → the first room frame after Enter
+   has no Add form, and a provisional `Launching` or unavailable worker
+   row appears before provider readiness. While the startup gate is held,
+   type a room draft, navigate away and back, and open/close the recipient
+   picker → these actions respond and preserve the draft. Before a
+   provisional row has a server identity it is not selectable as a recipient.
+3. Release the gate and finish any scratch hook consent → one real roster
+   entry replaces the provisional entry. Click the worker to prove its
+   ready pane. F6 returns to the preserved room draft.
+4. Submit a distinct name with a nonexistent scratch PWD, or remove only the
+   scratch fake executable after setup and submit valid fields → Enter closes
+   immediately and the originating room displays `Could not add NAME: …`
+   with the actual cause. The rejected creation has no live agent ID. In a
+   separate run, let the launcher fail after creation → the roster shows
+   Unavailable and the originating room renders the startup failure. Check
+   the other room, client log and effects for location, context and duplicates.
+
+**Evidence:** form and first post-submit frames, gate and launch timestamps,
+room draft and interaction frames while startup is held, roster and terminal
+IDs, server failure and client log. A post-launch screenshot cannot establish
+the immediate close.
+
+**Pass criteria:** validated Add does not wait for startup to return to the room,
+and local and asynchronous errors appear in the expected surfaces.
+
+### APP-29 — NEW: Ctrl+R restart confirmation and pending handoff
+
+**Preconditions/setup:** private restart-capable dev scratch session and a
+second session launched without `--dev`. Record both process and binary
+identities. For the dev run arrange an exact-head source build through a
+scratch, instrumented build/helper path that can pause before handoff and
+while the live helper owns the restart lock. Use the worktree target and meet
+restart disk preflight. Preserve a draft and one settled exchange.
+
+1. In the non-dev session inspect help and press Ctrl+R → restart is refused
+   with the dev-required cause recorded in diagnostics, the original
+   processes and draft stay usable and no build starts. The runtime
+   `--dev` flag is the admission gate regardless of Cargo profile.
+2. In the dev session open `/help` → Ctrl+R is shown as restart and the
+   keypress itself confirms it. Close help and press Ctrl+R once → one build
+   starts off the UI thread, with no second confirmation prompt. Capture the
+   draft and a responsive room interaction while the build fixture is paused.
+3. Press Ctrl+R again during the build and again after the original restart
+   CLI exits while the live helper still holds the handoff lock → neither
+   press starts a second build or helper. Release the helper → one
+   save-and-quit and relaunch occurs with the original session and launch flags.
+4. Verify `restarts/log.jsonl` records `restarted` and both the replacement
+   server and TUI identify the expected SHA and new processes. Inspect the
+   restored draft and exchange. If testing a controlled build failure too,
+   verify the old process stays usable and another Ctrl+R is admitted after
+   the failed attempt ends.
+
+**Evidence:** help/frames and timestamped build, CLI exit, helper lock/liveness,
+process and restart-log records. A handoff receipt alone is insufficient.
+Where no fixture can hold the helper window, mark that substep SKIP and retain
+any independent non-dev or pre-handoff results.
+
+**Pass criteria:** Ctrl+R is gated by runtime dev mode, starts one handoff per
+attempt, and keeps its admission guard through the pending helper phase.
+
+### APP-30 — NEW: Provider panes distinguish work, input and child hooks
+
+**Preconditions/setup:** fake Codex and an inert scratch agy replay adapter
+attached as real Bus-managed panes. The stock TUI stand-ins do not include agy
+or a Codex tool-output replay directive. If unavailable, mark the dependent
+steps SKIP. Use the checked-in [agy frames](../fixtures/agy-activity/) and
+[Codex shortcut-output frame](../fixtures/codex-activity/working-with-shortcut-output.txt)
+as screen oracles. The adapter must drive actual native pane input and the
+provider hook entry path when a step requires it.
+
+1. Hold the agy Working frame with timestamped background-task tray and the
+   footer `esc to cancel`. Show the corresponding Codex Working frame with
+   tool output quoting Esc/Ctrl hints in a separate pane → each is Working
+   in the sidebar and state, and neither emits a Blocked notice. Capture
+   the frames and state through the notice delay.
+2. In separate episodes show genuine agy command permission and folder
+   trust screens, and Codex `fake:dialog-null` → each is Blocked, with one
+   notice per stable episode and readable controls. Dismiss using the inert
+   fixture's actual control and verify ordinary input returns.
+3. Begin an agy parent turn from a unique developer prompt. Send a child
+   `PreInvocation` through the scratch hook path with `lastUserInput`
+   omitted, and repeat with it empty → neither claims or drops the parent's
+   request. Verify the same parent request and session remain active, then
+   complete the real parent fixture and check its single matching answer.
+4. While agy is Working with the task tray and empty live composer, send an
+   eligible same-room Steer → the pane accepts one payload in the active
+   group and the request settles with the appropriate parent final. Repeat
+   with the composer unavailable or occupied → delivery waits safely
+   without abandonment or draft overwrite, then runs once when eligible.
+   Releasing a real permission dialog is a separate action. Use source
+   fixtures under `src/server/api/agents/tests/fixtures/` for both tray variants.
+
+**Evidence:** native and sidebar cells, timed status/notice observations,
+scratch hook event payloads and parent session/request IDs, native inputs
+and message/turn timelines through settlement. A detached parser or hook
+unit test is supporting evidence.
+
+**Pass criteria:** legitimate controls still block, status shortcuts and child
+hooks do not stop parent work, and busy agy delivers or safely retains the send.
+
+### APP-31 — NEW: Deletion cancels stale notices and deliveries
+
+**Preconditions/setup:** R(`qa-delete-delivery`), fake worker and survivor,
+plus a fake MASTER orchestrator bound to the room. Use a busy orchestrator
+or held native input so a Blocked notice can be observed pending before
+delivery. Use distinct markers for all requests.
+
+1. Trigger an inert real dialog on the worker and hold its Blocked delivery.
+   Record the waiting notice and its source ID. Confirm deletion through the
+   worker's sidebar ×, then let the orchestrator take input → no new Blocked
+   notice about the deleted ID is posted, injected into the orchestrator,
+   or delivered to You as fallback. If a notice was already visible before
+   deletion, retain it as historical and check that the count does not grow.
+   Observe through the fixture's fallback decision, including any configured
+   fallback delay.
+2. Independently hold a normal message authored by a worker for a busy
+   survivor using an eligible queue path. Record the queued request ID,
+   then delete the author before native submission and release the receiver →
+   the old message does not appear in the receiver's native input. The old
+   request settles as abandoned with `agent_deleted`. An earlier visible historical
+   prompt can remain. Add a new worker with the same name and prove its
+   different ID does not inherit old queues or notices.
+3. Reopen the scratch session with the settled fixture and send a positive
+   control from a live author → new work drains normally, and old input
+   and Blocked notice counts do not increase.
+
+**Evidence:** stable IDs, deletion confirmation, before/after queue state and
+room rows, full observation window with provider input/effects and restored
+history. Capture that each request was pending before deletion.
+
+**Pass criteria:** deleted-agent work is never newly delivered or awakened,
+and live-agent delivery continues.
+
+### APP-32 — NEW: Coordinator stalls do not starve followers or queued sends
+
+**Preconditions/setup:** R(`qa-stall`) and a second room for an unsent draft,
+two fake workers in qa-stall. Arrange a gated coordinator operation, such as
+slow agy native startup,
+and record when the coordinator actually enters and leaves it. A held UI
+acknowledgement by itself does not prove coordinator occupancy. Start an
+eligible developer `bus send --async` to one worker and observe its request
+Active or Submitting, with no dialog or delivery error. Keep it active through
+the hold. Prepare an independent queued send to the other worker.
+
+1. While the operation holds the coordinator, switch rooms, type/edit an
+   unsent draft and open/close a picker → visible local interactions stay
+   responsive. Record a separate opted-in follower poll during the hold →
+   the poll returns a provisional pending hint without a final result.
+   The `send --async` process stays alive and continues following. If only
+   TUI evidence is available, score the poll assertion separately as SKIP.
+2. Use the composer to queue the other message during the hold → record the
+   text and submission, using Queue mode and allowing serialized acceptance
+   to wait. Release the held operation, and if necessary let the target
+   become idle → the send is
+   accepted and the target runs the marker once. Do not send again to make
+   it drain.
+3. Release the followed worker's turn → the async command returns the actual
+   durable settlement with the matching answer. Check that its room shows
+   one answer, the independent send completed, and the other room's draft
+   survived. Ordinary status and terminal outcomes may wait for serialization.
+
+**Evidence:** logs defining the held interval, timestamped UI frames,
+eligible follower's poll trace, final stdout, independent send receipt,
+message status and native input counts. If the CLI suppresses provisional
+polls, capture `snapshot_pending:true` through the read-only scratch
+`message.status` control path with `_async_send_follower:true`.
+
+**Pass criteria:** local UI remains usable during the hold, eligible polls
+make progress within it and accepted work drains afterwards.
 
 ### APP-01 — First start and empty conversation
 
@@ -83,7 +404,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 1. Launch scratch Bus and wait for startup → permanent `MASTER` and the default work room `bus` appear; `bus` opens. Its history and agents list (headed `# bus`, with `+` at the right) have no messages or workers; composer says `Message selected agents…`, with `@  Choose agents`.
 2. Inspect the work-room header → directly below the room name, right-aligned `[ ] * → You` and `[ ] You → *` checkboxes appear in that order, matching MASTER; the conversation starts below their divider and no status editor is present.
-3. Press Enter on the empty composer → no message, error or agent is created.
+3. Verify the composer has no `Mode:` control. Press Enter on the empty composer → no message, error or agent is created.
 4. Type `/help`, press Enter, scroll with PageDown, then Esc → local `Keyboard shortcuts` guide opens and closes; `/help` is not sent or retained as a message.
 
 **Evidence:** startup/help text, screenshot, scratch rooms/agents/history before/after.
@@ -92,7 +413,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 ### APP-02 — Create a room and cancel a room form
 
-**Preconditions/setup:** fresh session; note initial room IDs.
+**Preconditions/setup:** fresh session; note initial room IDs. For steps 1–2 use a terminal or driver that sends distinct Ctrl+Shift+R; on legacy input run the mouse route in step 3 independently.
 
 1. Press Ctrl+Shift+R, type `discard-room`, press Esc → form closes; no such room.
 2. Press Ctrl+Shift+R, type `qa-room`, press Enter → one new work room opens; sidebar and main header show its name, with empty history and no workers.
@@ -102,23 +423,33 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 **Pass criteria:** both creation routes work; cancellation does not create a room.
 
-### APP-03 — Agent form validation and all three providers
+### APP-03 — Agent form validation and provider choices
 
-**Preconditions/setup:** R(`qa-agents`); scratch provider launchers ready.
+**Preconditions/setup:** R(`qa-agents`); scratch fake Claude, Codex, Cursor and
+Grok launchers ready. APP-28 covers the pending and failed Add paths.
 
-1. Press Ctrl+N, click Add without completing fields → the form remains editable, no agent is created, inline validation explains the missing fields, and the client log records one validation failure covering the missing Name/Model fields. Press Esc → closes.
-2. Use A to create `qa-codex` (Codex), `qa-claude` (Claude Code), `qa-cursor` (Cursor), returning with F6 after each → every fake terminal is identifiable; sidebar lists the matching name/provider, state records the supplied PWD.
-3. Open Ctrl+N, type `cancel-agent`, press Esc → no extra agent or terminal.
+1. Press Ctrl+N, click Add without completing fields → the form remains editable,
+   inline validation explains the missing Name, Model and PWD fields, no agent
+   is created, and the client log records one validation failure covering those
+   fields. Press Esc → closes.
+2. Open the work-room provider menu → it offers Codex, Claude Code, Claude DS,
+   Cursor, Grok, Kimi and AGY. Cancel, then use A to create
+   `qa-codex`, `qa-claude`, `qa-cursor` and `qa-grok` with their corresponding
+   fakes → each has one selectable ready pane and a matching state entry.
+3. Open Ctrl+N, type `cancel-agent`, press Esc → no extra state entry or pane.
 
-**Evidence:** inline validation text, client-log entries with field context, provider-choice text, ready terminal captures, state.
+**Evidence:** inline form error and its client-log validation context,
+provider menu, each fake ready pane, and state IDs/provider/PWD before and
+after cancellation.
 
-**Pass criteria:** required fields enforced; three provider choices create only their agents.
+**Pass criteria:** local validation is visible, the full worker provider menu
+is discoverable, and the fake providers each create exactly one worker.
 
 ### APP-04 — MASTER agent form and room navigation
 
 **Preconditions/setup:** R(`qa-master-target`), no orchestrator; fake Claude ready.
 
-1. Click `# MASTER`, press Ctrl+N → form includes `Orchestrates room` and a populated system prompt. Tab to Agent field → menu offers Claude Code and Cursor.
+1. Click `# MASTER`, press Ctrl+N → form includes `Orchestrates room` and a populated system prompt. Tab to Agent field → menu offers Claude Code, Claude DS, Codex, Cursor, Grok and Kimi.
 2. Fill name `qa-master`, select Claude Code, set scratch PWD to the absolute scratch workspace with a trailing slash, at 120×40. With directory suggestions visible, Up/Down move the highlight and leave the typed PWD unchanged; Tab focuses Additional launch args and Shift+Tab returns to PWD, without moving the highlight or rewriting PWD. Tab again focuses `Orchestrates room`; use Left/Right until `qa-master-target` is shown, then press Enter. Add submits the typed directory and returns to MASTER with the new agent row. A Tab that only moves the highlight, or an Enter that rewrites PWD to the highlighted directory instead of adding, is a FAIL.
 3. Click `# qa-master-target` beneath that agent → target room opens. Click MASTER, then agent name → its terminal opens, not target chat.
 4. Press F6, press F2 on MASTER → no rename field or error text opens; the client log records the fixed-room refusal, the name stays MASTER, and no delete × is offered for it.
@@ -170,8 +501,8 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 **Preconditions/setup:** R(`qa-send`), A with alpha/beta, P(alpha); empty draft.
 
 1. Type `line one`, press Ctrl+J, type `line two @ +` → two draft lines; literal @ and + are text. If the host supports Shift+Enter, press it at the end of line two → third empty line; press Backspace once → exactly the original two lines restored, caret at the end of `line two @ +`, ready for step 2.
-2. Press Ctrl+A then Ctrl+K on the last line; type `line two revised` → only that line is replaced; first line remains. Press Enter once → one history message shows both lines, `You → alpha`; composer clears after acceptance.
-3. Inspect scratch history → exact text `line one\nline two revised`, alpha as sole recipient. Press Enter again → no duplicate message or empty-send error.
+2. Press Ctrl+A and Ctrl+K on the last line; type `line two revised` → only that line is replaced; first line remains. Press Enter once → one history message shows both lines, `You → alpha`; composer clears after acceptance.
+3. Inspect scratch history → exact text `line one\nline two revised`, alpha as sole recipient, with no delivery badge on the header. Press Enter again → no duplicate prompt or empty-send error.
 4. Type `throwaway`, press Ctrl+C → draft clears; Bus remains open.
 
 **Evidence:** before/after draft/history text, author/recipient cells, state message count/text.
@@ -217,7 +548,7 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 
 ### APP-11 — History scrolling, find and plain-text copy
 
-**Preconditions/setup:** R(`qa-history`), A with alpha, P(alpha); send enough fixed developer messages to overflow history, including two `find-marker` messages separated by other text; distinct oldest/newest markers. No model response needed.
+**Preconditions/setup:** R(`qa-history`), A with alpha, P(alpha); send enough fixed developer messages to overflow history, including two `find-marker` prompts separated by other text and distinct oldest/newest markers. Use `fake:raw-reply FIND_ACK` in each fixture so the visible answers do not repeat the search markers.
 
 1. Wheel up over history → earlier messages appear without editing draft; wheel down to newest → latest marker appears and chronology is preserved.
 2. Press Ctrl+F, type `find-marker` → Find panel/count and newest match highlight; Enter or Up moves to older match, Down returns newer. Press Backspace 11 times until the visible Find query is empty; type `zz-absent-qq` (absent from all history) → query is exactly `zz-absent-qq`, panel says `no matches`; Esc closes and restores chat composition. Ctrl+A/Ctrl+K are no-ops in Find; Backspace removes the final character.
@@ -232,7 +563,10 @@ Run APP-01..11, LINK-01..10, then APP-12..22 in that order. Each case is indepen
 Basis: [PR #22](https://github.com/asura1234/bus/pull/22), product head `aad7e4e3` (base `6ee03203`), source rechecked 2026-10-12.
 Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases PASS. The reviewed assertions below await a new run.
 
-**Shared setup/evidence for LINK-01..10:** apply the run contract and R/A/P recipes above to each case's own room/selected worker(s). Fixed agent-authored fixtures use fake alpha and beta: `bus send --room ROOM --as alpha --to beta --text TEXT` in that scratch session. Developer messages use the composer; no generated reply is required.
+**Shared setup/evidence for LINK-01..10:** apply the run contract and R/A/P recipes above to each case's own room/selected worker(s). Fixed agent-authored fixtures use fake alpha and beta: `bus send --room ROOM --as alpha --to beta --text TEXT` in that scratch session. Developer
+messages use the composer. For developer text fixtures append a newline and
+`fake:raw-reply LINK_ACK` so the reply does not repeat a clickable token.
+Inspect the authored prompt rows and scroll them into view if needed.
 
 - Prepare short existing absolute non-executable text documents F/G, with a space in G's filename (e.g. report with space.txt), author-agent PWD W with relative.txt, an existing scratch-owned `~/P` fixture beneath Bus's effective home H, and absent W/missing.txt. Record H and actual targets; keep link tokens on one displayed row at 120×40; use only scratch-owned files.
 - Text-link blue is RGB(90,150,255), underlined. Allow 5 seconds after a path first becomes visible for existence-check styling; initial unlinked styling is allowed. This is a QA wait budget, not a product deadline; record elapsed time.
@@ -392,13 +726,13 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 ### APP-16 — New-message sound notifications
 
-**Preconditions/setup:** R(`qa-ring`), A with **alpha and beta, two distinct fake workers in qa-ring**; R(`qa-view`). Arrange each fixed incoming post through the supported scratch CLI as `bus send --room qa-ring --as alpha --to beta --text TEXT`, with TEXT respectively `ring-one`, `silent-two`, and `ring-three`, triggered individually at the numbered steps. Alpha is the author and beta is the non-author recipient; no reply is required to satisfy the post assertion. Start observation after startup has settled for >2 seconds; leave >2 seconds between triggers so sounds are not grouped. Let prior deliveries settle before each observation window, and do not count a native worker final as another authored post or developer send. For the final developer send, select **only alpha** with P(alpha). Steps 1–3 sound assertions: SKIP with reason if the runner cannot capture recorded sound effects; view/message checks remain independent.
+**Preconditions/setup:** R(`qa-ring`), A with **alpha and beta, two distinct fake workers in qa-ring**; R(`qa-view`). Arrange each fixed incoming post through the supported scratch CLI as `bus send --room qa-ring --as alpha --to beta --text TEXT`, with TEXT respectively `ring-one`, `silent-two`, and `ring-three`, triggered individually at the numbered steps. Alpha is the author and beta is the non-author recipient; no reply is required to satisfy the post assertion. Start observation after startup has settled for >2 seconds; leave >2 seconds between triggers so sounds are not grouped. Let prior deliveries settle before each observation window, and do not count a native worker final as another authored post or developer send. For the final developer send, select **only alpha** with P(alpha) and use a held or long fake turn so the native final cannot arrive within the send-silence observation window. Steps 1–3 sound assertions: SKIP with reason if the runner cannot capture recorded sound effects; view/message checks remain independent.
 
 1. In Settings enable qa-ring sound, close and view qa-view; allow ring-one to arrive → one notification sound; current view is not stolen. Click qa-ring → fixed message is visible, attributed to alpha.
 2. Disable qa-ring sound, return to qa-view; allow silent-two → message reaches qa-ring history; no notification sound from trigger through two seconds after confirmed arrival.
-3. Enable sound, allow ring-three → sound returns. In qa-ring use P(alpha), type `developer-no-ding`, press Enter → one's own message produces no new-message ding.
+3. Enable sound, allow ring-three → sound returns. In qa-ring use P(alpha), send `fake:work 20 developer-no-ding` → the send itself is silent through the two seconds after confirmed prompt arrival, while alpha is still Working. Record any later final sound separately.
 
-**Evidence:** steps 1/3: recorded effect, sound with target qa-ring's selected sound name, correlated to room/message/author; steps 2/3 silence: a complete recorded-effects window showing no new-message sound after the specified post. Capture settings/history/view text and scratch state separately. SKIP with reason if the runner cannot capture sound evidence; checkmarks alone cannot prove it.
+**Evidence:** steps 1/3: recorded effect, sound with target qa-ring's selected sound name, correlated to room/message/author; steps 2/3 silence: the complete recorded-effects window after each specified post, including evidence that the developer send window precedes the native final. Capture settings/history/view text and scratch state separately. SKIP with reason if the runner cannot capture sound evidence; checkmarks alone cannot prove it.
 
 **Pass criteria:** enabled incoming posts ring, disabled and developer posts do not; view stays usable.
 
@@ -432,7 +766,7 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 1. Click × beside alpha → warning names alpha and describes closing/deleting its session data. Press Esc → dialog closes; both agents and recipients remain.
 2. Click alpha's × again, press Enter → after completion alpha disappears from sidebar/picker/chips and state; beta and room remain. No deleted terminal stays open.
-3. Click beta, press F6 → surviving worker and room still usable.
+3. Click beta, press F6, select beta alone and send `delete-survivor-check` → the surviving worker receives and answers it. APP-31 checks queue and notice cleanup when deletion races with delivery.
 
 **Evidence:** warning text/screenshot, state agent/recipient IDs before/cancel/confirm.
 
@@ -500,13 +834,30 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 
 **Pass criteria:** the badge shows only in a `--yolo` run, as black on bright red at the Settings row's right edge, and clicking Settings still opens Settings.
 
+## Integration checkpoints
+
+The following expectations apply to the integrated QA build. Record the
+detected build and any missing fixture in the run report. A mismatch on a
+build missing a required product lane still fails the target assertion.
+
+| Area | Source at review | Check on the run head |
+| --- | --- | --- |
+| APP-25, agy portion of APP-30 | Master `f00cc3b3d` removes interrupt retirement. Interrupt delivery runs while the agent is Working (`delivery.rs` `interrupt_ready`, `allow_working: true`). Pane-time copy-send-restore is `terminal/runtime/submission/copy.rs`: readable plaintext is snapshotted, sent, then restored; unrestorable content logs `bus.draft.copy_loss` and still delivers. The same commit reconciles confirmed AGY turns. | On this head, APP-25 requires exact restoration of readable plaintext and no retirement or fence notice. Opaque or clipped content may log `bus.draft.copy_loss` and must still deliver. Keep rich-draft and genuine-blocker checks separate. |
+| APP-26 | Master `f00cc3b3d` has no composer mode picker. Enter and Option+Enter both interrupt (`drafts.rs` `request_queued_send`, `delivery_mode_test.rs`). Badges from `af8e243c6` remain in `history/exchange.rs`: interrupt has no marker, steer is `[pending]`, queue is `[queued]`. Developer steer/queue is refused; an orchestrator may pass `--mode` (`messages.rs` `send_delivery`). | Do not look for `Mode:` or F4. Composer sends are interrupt with no badge. Produce steer and queue with an orchestrator `--mode` send and check that those badges persist. |
+| APP-27 | Master `af8e243c6` renders developer replies using the same projection as room history. | Check the still-open explicit acknowledgement and restored history independently. |
+| APP-28 | #472 `067ea8672` returns to the room on submit (`agent_creation.rs` `submit_agent_creation` calls `open_room`) and shows a `Launching` row (`render/sidebar.rs`). Inline missing-field text stays on the form (`input/forms.rs`). The room renders `Could not add {name}: {reason}` (`render/room.rs`). Hook consent opens later, only while that room is idle (`receive_agent_setup`). | Expect the immediate close, the provisional row, inline Name/Model/PWD errors, and the room-local failure line. Consent must not hold the Add form open across startup. |
+| APP-29 | Master `1ab9d1c5b` and `f83ba7013` use immediate keypress confirmation. | A separate confirmation prompt is not in the inspected restart contract. If a prompt is required, the restart lane must change before adding that expectation. |
+| APP-30 | Master `80bef5469`, `ae6734d87`, `89c49bad8` and `2ca07f718` cover hook/parser/delivery cases. `fix/codex-false-blocked-hints` at `3cd45f0b1` has further dialog-layout work. | Keep the positive permission/trust controls and check the exact native fixture support on the run head. |
+| APP-31 | #470 `0d3f76636` is on master. Deletion sets `deletion_pending` and `notify_dialogs` skips that agent (`dialogs.rs`). Unsettled requests on the deleted agent become Abandoned with `agent_deleted` (`model/agents.rs` `delete_agent`). Queued work whose author is deleting is retired before dispatch (`retire_deleted_queued_requests`). History remains, and a reused name gets a new id. | Confirm no new blocked notice or native delivery after deletion, `agent_deleted` on the abandoned request, and that the replacement agent does not inherit the old queue. |
+| APP-32 | Master `a662dfc1b` provides a provisional hint for eligible `send --async` followers. | Provide a deterministic stall fixture. The add/startup lane may change which operation reliably holds the coordinator. |
+
 ## Decisions
 
 - **Shortcuts / product finding:** test Ctrl+O files, Ctrl+P recipients, Ctrl+F find, literal @/+ typing and Ctrl+C draft-clear (terminal Ctrl+C interrupts); CLI help's conflicting shortcuts are a product documentation finding, not a reason to change these expectations (`rooms/help.rs`, `rooms/input/{composer,mod}.rs`, `cli/help.rs`).
 - **Quit / product finding:** Ctrl+Q saves, restores the terminal, then stops server and agents; CLI help's claim that quit leaves them running is stale product documentation. A failed save or a save taking over 5 seconds writes a contextual warning to the client log without drawing error text. Ctrl+Q again within 5 seconds of that logged warning force quits and may lose edits; after that window, Ctrl+Q retries saving. Repeating Ctrl+Q before the force window opens keeps waiting. Never count force quit as clean-save acceptance. Stopping has a 15-second wait (`client/{effects,run}.rs`, `rooms/ui.rs`, `cli/stop.rs`).
 - **Size:** source enforces no terminal minimum or small-window warning; layout shrinks/clips to available cells. APP-21's 80×24 is this suite's lower usability test size, not a claimed product minimum; below it, hidden/clipped controls alone are not failures (`rooms/render/{layout,view,paint}.rs`).
 - **Clipboard / screenshots:** require actual clipboard/saved pixels where tested and screenshots judged by the runner for visual claims; affected assertions are SKIP with reason if the runner cannot capture evidence, not product failures.
-- **Notifications / sound / unread:** non-error terminal-visible notices and recorded effects are in scope; record sound with its chosen sound target and message/room context. Room errors are client-log-only. Desktop banners are excluded; today's room sidebar renders no unread badge (`client/notifications.rs`, `rooms/{notices,ring}.rs`, `rooms/render/sidebar.rs`). Unavailable evidence is SKIP with reason.
+- **Notifications / sound / unread:** record sound with the chosen sound target and message/room context. Developer-addressed unseen messages can draw a room dot. Add agent errors follow APP-28. Clipboard, control and restart failure diagnostics use the client log. See `client/notifications.rs` and `rooms/{notices,ring,render/sidebar}.rs`.
 - **Wording:** use developer for the person operating Bus; retain actual UI strings such as `You` unchanged.
 - **Thumbnail style:** #22 renders the picture without filename/caption or link decoration; only its picture cells open the saved image; blank cells beside it do not. Only filename fallback gets blue RGB(90,150,255) + underline (`history/exchange.rs`, `links.rs`); no 📎 in either presentation.
 - **Relative paths:** agent-authored paths join author PWD without canonicalizing; relative paths authored by a developer or Bus remain unlinked. Absolute and ~/ paths work for either author; ~/ uses the scratch Bus process's effective home (`history/exchange.rs::link_scope`, `links.rs::candidate`).
@@ -515,4 +866,5 @@ Historical run `runner-20261011-192530` at `a61d26bc`: the prior nine LINK cases
 - **Link boundaries:** hidden-label Markdown links and paths split across rows are outside clickable-link acceptance; LINK-09 checks that hidden labels do not open.
 - **Click boundaries / launchers:** filename hover/click areas cover the name, thumbnail clicks cover picture cells, and opening requires a press/release on the same cell without movement or selection; even a drag entirely inside a picture cancels opening. Quoted paths retain spaces and URLs retain balanced parentheses (`render/history_links.rs`, `selection.rs`, `links.rs`). Executable regular files on Unix and launcher extensions such as .app/.command/.terminal/.webloc/.fileloc reveal in the file manager. Symlinks are also judged by their resolved target; a symlink to an app reveals the clicked link path instead of opening/running its target (`effects.rs`, `platform/fs.rs`).
 - **Runner-neutral edits / quit:** Find uses Backspace to remove query characters; while PWD suggestions are shown, Up/Down move the highlight, Tab/Shift+Tab move focus, and Enter submits Add with the typed directory (`chat_search.rs`, `input/forms.rs`). Observe live drafts on screen; saved files may lag. Judge quit from exit status and finalized terminal-restore output; a shell prompt is optional (`client/run.rs`, `client/host_terminal/setup.rs`).
-- **Recall acceptance:** APP-12 requires the first Up to restore the archived draft. This includes the separately landing recall-order product fix; an older train build still fails that assertion until rebased onto the fix from master. Keep the precise expectation when judging that build.
+- **Recall acceptance:** APP-12 requires the first Up to restore the archived
+  draft. That ordering is covered by `e582d5da1` on master.

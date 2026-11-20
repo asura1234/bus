@@ -46,7 +46,7 @@ CLI state/history/agent reads and the observe/press driver may corroborate it.
    enqueueing. Within 30s, a fresh observation must show the ordinary composer,
    the worker must return idle, and its native pane must contain
    `fake reply: fake:question`. The request is complete with `stage:replied`,
-   that reply text and no failure reason; history has no synthesized reply row. The closed episode adds no Resolved notice.
+   that reply text and no failure reason; the room shows exactly one answer under the developer prompt. The closed episode adds no Resolved notice.
    Stop the scratch session.
 
 A pending or uncertain input is evidence to inspect, never permission to replay
