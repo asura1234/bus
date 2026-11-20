@@ -122,6 +122,13 @@ pub(crate) fn resume_after_quit() -> io::Result<()> {
         );
         return Err(io::Error::other(reason));
     }
+    // The shell-facing supervisor relaunches. Waiting here kept this pid alive
+    // on the tty after quit.saved, and ctrlc swallowed SIGTERM.
+    #[cfg(unix)]
+    if crate::cli::tui_supervisor::is_supervised_worker() {
+        crate::cli::tui_supervisor::tell_supervisor(root)?;
+        std::process::exit(crate::cli::tui_supervisor::RELAUNCH_EXIT);
+    }
     let mut effects = LiveHandoff::new(root);
     if let Err(reason) = prep::assign_restart_lock(root, std::process::id()) {
         tracing::error!(%reason, "restart terminal lock assignment failed");
@@ -153,6 +160,39 @@ pub(crate) fn resume_after_quit() -> io::Result<()> {
         return Err(io::Error::other(outcome.reason));
     }
     Ok(())
+}
+
+/// Relaunch the TUI claimed in `restarts/active.json` and return the new process.
+#[cfg(unix)]
+pub(crate) fn relaunch_claimed_handoff(root: &Path) -> io::Result<Option<Child>> {
+    let active = root.join("restarts/active.json");
+    let Some(plan) = restart_record::read_handoff(&active).map_err(io::Error::other)? else {
+        return Err(io::Error::other("restart handoff was not claimed"));
+    };
+    if let Err(reason) = prep::assign_restart_lock(root, std::process::id()) {
+        return Err(io::Error::other(reason));
+    }
+    let mut effects = LiveHandoff::new(root);
+    let outcome = super::execute_handoff(&plan, &mut effects);
+    prep::release_restart_lock(root);
+    let _ = std::fs::remove_file(restart_record::handoff_pid_path(root));
+    let failed = matches!(
+        outcome.outcome.as_str(),
+        "rollback_failed" | "relaunch_failed" | "quit_failed"
+    ) || restart_record::persist_error_path(root).exists();
+    if failed {
+        if let Some(mut child) = effects.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let reason = if outcome.reason.is_empty() {
+            outcome.outcome
+        } else {
+            outcome.reason
+        };
+        return Err(io::Error::other(reason));
+    }
+    Ok(effects.child)
 }
 
 struct LiveHandoff {
@@ -260,6 +300,8 @@ fn resume_command(binary: &Path, plan: &HandoffPlan) -> Command {
         .env_remove("HERDR_CLIENT_SOCKET_PATH")
         .env_remove(crate::utils::env::STOP_WITHOUT_CLIENTS_ENV_VAR)
         .env_remove("HERDR_SESSION");
+    #[cfg(unix)]
+    crate::cli::tui_supervisor::prepare_relaunch(&mut command);
     if plan.dev {
         command.arg("--dev");
     }

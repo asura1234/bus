@@ -99,8 +99,24 @@ fn unix_stdin_reader_loop(
     let mut last_geometry = None;
 
     while !should_quit.load(Ordering::Acquire) {
+        // Poll so a quit flag is noticed without consuming the next key, and
+        // so a closed tty is not a read that blocks until SIGKILL.
+        match stdin_read_ready(&reader, 100) {
+            Some(StdinReady::Data) => {}
+            Some(StdinReady::Closed) => {
+                report_terminal_unavailable(&event_tx);
+                return;
+            }
+            Some(StdinReady::Timeout) | None => continue,
+        }
+        if should_quit.load(Ordering::Acquire) {
+            break;
+        }
         match reader.read(&mut scratch) {
-            Ok(0) => break,
+            Ok(0) => {
+                report_terminal_unavailable(&event_tx);
+                return;
+            }
             Ok(n) => {
                 let sgr_pixels = *pending_mode
                     .get_or_insert_with(|| host_sgr_pixels_active.load(Ordering::Acquire));
@@ -145,10 +161,19 @@ fn unix_stdin_reader_loop(
                 if err.kind() == io::ErrorKind::Interrupted {
                     continue;
                 }
-                break;
+                report_terminal_unavailable(&event_tx);
+                return;
             }
         }
     }
+}
+
+#[cfg(unix)]
+fn report_terminal_unavailable(event_tx: &crate::utils::perf::queue::Sender<ClientLoopEvent>) {
+    let _ = event_tx.blocking_send(ClientLoopEvent::TerminalUnavailable(io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        "terminal closed",
+    )));
 }
 
 #[cfg(unix)]
@@ -166,7 +191,7 @@ fn flush_unix_idle_input(
 ) -> bool {
     let timeout_ms =
         idle_flush_timeout_ms(framer, host_mouse_capture_active.load(Ordering::Acquire));
-    if stdin_read_ready(reader, timeout_ms) == Some(false) {
+    if stdin_read_ready(reader, timeout_ms) == Some(StdinReady::Timeout) {
         let had_pending = framer.has_pending_input();
         let chunks = framer.flush_timeout();
         let held_escape = had_pending && chunks.is_empty();
@@ -193,7 +218,7 @@ fn flush_unix_idle_input(
             && stdin_read_ready(
                 reader,
                 crate::protocol::keys::host::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS,
-            ) == Some(false)
+            ) == Some(StdinReady::Timeout)
         {
             let chunks = framer.flush_timeout();
             if !framer.has_pending_input() {
@@ -555,12 +580,20 @@ fn windows_client_input_event_from_raw(
 }
 
 #[cfg(unix)]
-fn stdin_read_ready<R: AsRawFd>(reader: &R, timeout_ms: i32) -> Option<bool> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StdinReady {
+    Data,
+    Closed,
+    Timeout,
+}
+
+#[cfg(unix)]
+fn stdin_read_ready<R: AsRawFd>(reader: &R, timeout_ms: i32) -> Option<StdinReady> {
     poll_read_ready(reader.as_raw_fd(), timeout_ms)
 }
 
 #[cfg(unix)]
-fn poll_read_ready(fd: i32, timeout_ms: i32) -> Option<bool> {
+fn poll_read_ready(fd: i32, timeout_ms: i32) -> Option<StdinReady> {
     #[repr(C)]
     struct PollFd {
         fd: i32,
@@ -573,6 +606,12 @@ fn poll_read_ready(fd: i32, timeout_ms: i32) -> Option<bool> {
     }
 
     const POLLIN: i16 = 0x0001;
+    const POLLERR: i16 = 0x0008;
+    // POLLHUP is 0x10 on macOS and Linux. A closed master must wake the reader
+    // even when no bytes are queued. Do not treat POLLHUP as EOF by itself:
+    // some ptys report it while the master is still open.
+    const POLLHUP: i16 = 0x0010;
+    const POLLNVAL: i16 = 0x0020;
 
     let mut pfd = PollFd {
         fd,
@@ -582,10 +621,21 @@ fn poll_read_ready(fd: i32, timeout_ms: i32) -> Option<bool> {
 
     let result = unsafe { poll(&mut pfd as *mut PollFd, 1, timeout_ms) };
     if result < 0 {
-        None
-    } else {
-        Some(result > 0)
+        return None;
     }
+    if result == 0 {
+        return Some(StdinReady::Timeout);
+    }
+    if pfd.revents & (POLLERR | POLLNVAL) != 0 {
+        return Some(StdinReady::Closed);
+    }
+    if pfd.revents & POLLIN != 0 {
+        return Some(StdinReady::Data);
+    }
+    if pfd.revents & POLLHUP != 0 {
+        return Some(StdinReady::Closed);
+    }
+    Some(StdinReady::Timeout)
 }
 
 // ---------------------------------------------------------------------------

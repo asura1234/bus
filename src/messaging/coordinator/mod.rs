@@ -40,7 +40,7 @@ mod retired_github_watch_tests;
 mod retired_room_digest_tests;
 mod startup;
 mod startup_diagnostics;
-pub(crate) use restart_handoff::take_restart_plan;
+pub(crate) use restart_handoff::{restart_plan_pending, take_restart_plan};
 #[cfg(test)]
 pub(crate) use restart_handoff::test_restart_plan;
 mod startup_recovery;
