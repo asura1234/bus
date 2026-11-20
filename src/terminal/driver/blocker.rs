@@ -251,7 +251,7 @@ fn hide_codex_tool_output(rows: &mut [String]) {
     let mut output = false;
     for row in rows {
         if (command_header || output) && row.starts_with("  └ ")
-            || output && row.starts_with("    ")
+            || output && (row.starts_with("    ") || row.trim().is_empty())
         {
             row.clear();
             command_header = false;
@@ -426,9 +426,10 @@ fn controls(rows: &[String]) -> Option<Controls> {
                 let menu = menu
                     .clone()
                     .filter(|menu| tail_clear(rows, menu.end, end, None, &hint));
-                // A cancel-only label can be the last visible transcript row.
-                // Require a current menu before treating it as an input shortcut.
-                if kind == ControlKind::Cancel && menu.as_ref().is_none_or(|menu| menu.end > start)
+                // A standalone cancel label needs a current input affordance.
+                if kind == ControlKind::Cancel
+                    && menu.as_ref().is_none_or(|menu| menu.end > start)
+                    && !cancel_form(&rows[..start], &rows[start])
                 {
                     continue;
                 }
@@ -543,6 +544,25 @@ fn keyboard_hint(row: &str) -> Option<ControlKind> {
     keyboard_hint_with_form(row, false)
 }
 
+fn cancel_form(rows: &[String], hint: &str) -> bool {
+    let native_cancel = plain(hint)
+        .get(.."esc to cancel".len())
+        .is_some_and(|label| label.eq_ignore_ascii_case("esc to cancel"));
+    native_cancel
+        && rows
+            .iter()
+            .rev()
+            .skip_while(|row| row.trim().is_empty())
+            .take_while(|row| meaningful(row))
+            .any(|row| {
+                let row = plain(row);
+                row == ">"
+                    || row
+                        .strip_prefix('❯')
+                        .is_some_and(|label| !label.trim().is_empty())
+            })
+}
+
 fn input_hint(rows: &[String], hint: Range<usize>) -> Option<ControlKind> {
     let text = rows[hint.clone()]
         .iter()
@@ -620,8 +640,20 @@ fn keyboard_hint_with_form(row: &str, checkbox_form: bool) -> Option<ControlKind
     if enter && action(&row) && (alternate || row.starts_with("press "))
         || (row.contains('↑') || row.contains('↓')) && action(&row)
     {
-        Some(ControlKind::Foreground)
-    } else {
-        (row.starts_with("esc") && row.contains("cancel")).then_some(ControlKind::Cancel)
+        return Some(ControlKind::Foreground);
     }
+    if !row.starts_with("esc") || !row.contains("cancel") {
+        return None;
+    }
+    let sibling_binding = row.split('·').skip(1).any(|binding| {
+        binding
+            .trim()
+            .split_once(" to ")
+            .is_some_and(|(key, description)| !description.is_empty() && key_list(key))
+    });
+    Some(if sibling_binding {
+        ControlKind::Foreground
+    } else {
+        ControlKind::Cancel
+    })
 }

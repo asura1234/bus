@@ -799,6 +799,111 @@ mod tests {
     }
 
     #[test]
+    fn claude_bash_permission_with_wrapped_or_dotted_option_stays_blocked() {
+        let soft_wrapped = "\
+────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+ /Users/dev/work/bus/temp/gate-tools/python/bin/python scripts/run.py
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for: /Users/dev/work/bus/temp/gate-tools/
+python/bin/python scripts/run.py
+   3. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+   ⏵⏵ auto mode on · 1 shell · ← for agents
+";
+        let soft_wrapped_opt3 = soft_wrapped
+            .replace(" ❯ 1. Yes", "   1. Yes")
+            .replace("   3. No", " ❯ 3. No");
+        let dotted_option = "\
+────────────────────────────────
+ Bash command
+
+ rg -n ' · ' src/
+
+ Do you want to proceed?
+❯ 1. Yes
+  2. Yes, and don't ask again for: rg -n ' · ' *
+  3. No
+
+Esc to cancel · Tab to amend · ctrl+e to explain
+  ⏵⏵ auto mode on · 1 shell · ← for agents
+";
+        let horizontal = "\
+Grant temporary access to the demo gateway?
+
+❯ Accept    Decline
+
+Esc to cancel · Tab to amend
+";
+        let two_options = "\
+────────────────────────────────
+ Bash command
+
+ Do you want to proceed?
+ ❯ 1. Yes, allow running /very/long/path/
+to/script.py
+   2. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+";
+        let free_text = "\
+────────────────────────────────
+ Bash command
+
+ Tell Claude what to do differently:
+ >
+
+ Esc to cancel
+";
+        for screen in [
+            soft_wrapped,
+            soft_wrapped_opt3.as_str(),
+            dotted_option,
+            horizontal,
+            two_options,
+            free_text,
+        ] {
+            let result = published(AgentKind::Claude, screen, "✳ project");
+            assert_eq!(result.state, AgentState::Blocked, "{screen}");
+            assert!(result.visible_blocker, "{screen}");
+            assert!(
+                crate::terminal::driver::has_input_controls(screen),
+                "{screen}"
+            );
+            assert!(
+                crate::terminal::driver::blocker_from_text(screen, false).is_some(),
+                "{screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_tool_output_with_blank_line_does_not_create_a_dialog() {
+        let screen = "\
+• Working (3s • esc to interrupt)
+
+• Ran cat docs/help.md
+  └ Shortcuts:
+
+    Ctrl+Enter     Confirm form
+    Esc            Cancel
+";
+        assert!(
+            !crate::terminal::driver::has_input_controls(screen),
+            "{screen}"
+        );
+        assert!(crate::terminal::driver::blocker_from_text(screen, true).is_none());
+        assert_eq!(
+            published(AgentKind::Codex, screen, "⠋ project").state,
+            AgentState::Working
+        );
+    }
+
+    #[test]
     fn action_required_title_does_not_block_a_live_working_screen() {
         // Captured from codex worker 12114 while Bus had posted false Blocked
         // notices and `bus state` showed working with dialog=false. The working
