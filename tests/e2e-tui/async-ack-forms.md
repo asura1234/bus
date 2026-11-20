@@ -16,10 +16,10 @@
 
 **Preconditions/setup:** fresh scratch Bus; default `bus` room open; no agents required.
 
-1. Run `bus ui hold-acks`. Press Ctrl+Shift+R, type `held-room`, press Enter, and wait until `ui hits` reports `held_acknowledgements: 1` and state contains `held-room` → the creation succeeded but its `RoomCreated` presentation acknowledgement has not been applied; the original room form is still open and `bus` remains visible.
+1. Run `bus ui hold-acks`. Open the room form with Ctrl+Shift+R (distinct Shift input) or ROOMS `+`, type `held-room`, press Enter, and wait until `ui hits` reports `held_acknowledgements: 1` and state contains `held-room` → the creation succeeded but its `RoomCreated` presentation acknowledgement has not been applied; the original room form is still open and `bus` remains visible.
 2. Press Esc, then Ctrl+O, replace the file path with `newer-input.txt` without pressing Enter → the newer Local file path form shows exactly `newer-input.txt`; `held-room` exists in state but `bus` is still the visible room and `held_acknowledgements` remains 1.
 3. Run `bus ui release-acks` → the released `RoomCreated` cannot close or edit the newer form: `newer-input.txt` remains exactly visible in the Local file path form, `bus` remains the visible room, and the held count drains to 0.
-4. Press Esc. Press Ctrl+Shift+R, type `completed-room`, press Enter → the acknowledgement for this still-current originating form closes it and opens `completed-room`; no acknowledgement remains held.
+4. Press Esc. Open the room form with Ctrl+Shift+R (distinct Shift input) or ROOMS `+`, type `completed-room`, press Enter → the acknowledgement for this still-current originating form closes it and opens `completed-room`; no acknowledgement remains held.
 5. Return to `bus`, run `bus ui hold-acks`, then run dev `bus room focus MASTER` and wait until `ui hits` reports `held_acknowledgements: 1` → focus is queued but not applied and `bus` remains visible. Press Ctrl+O, replace the path with `newer-focus-input.txt` without Enter → that exact newer input is visible and the visible room remains `bus`.
 6. Run `bus ui release-acks` → `newer-focus-input.txt` and its form survive and `bus` remains visible. Press Esc, then run dev `bus room focus MASTER` without arming the hold → the positive control opens MASTER with no form and no held acknowledgement.
 

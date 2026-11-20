@@ -13,7 +13,8 @@ All behavior under test (sending, adding the failing agent, editing and quitting
 is driven through UI keys/clicks. Restore fault fixtures before teardown. Use driver
 waits or bounded waits for a named log event; do not retry failed UI steps.
 
-The no-error rule covers Bus-generated diagnostics. Authored messages and the
+The quiet-UI rule covers Bus-generated diagnostics outside the Add form and
+its originating room error surface. Authored messages and the
 native provider terminal are their own content; keep the room conversation selected
 when judging the Bus chat, composer, sidebar and footer. Scan snapshots plus all
 captured Bus output in pty.cast for diagnostic markers. Take a cell screenshot for
@@ -29,7 +30,7 @@ Preconditions/setup: Create a scratch room `busy-errors` and fake Codex worker
 the recipient picker. Setup may use the driver bus command; sends use the composer.
 
 1. Type `fake:work 20 busy-first` in the composer and press Enter. Wait until the worker is Working. Capture a full frame and state; no Bus error text is visible.
-2. While it is Working, type `busy-followup` and press Enter. Capture full frames and the message status. The developer's follow-up interrupts the running turn and runs next; there is no refusal, recovery, toast, composer or footer error text. Require the first request to end as `abandoned` with reason `interrupted` and the follow-up to complete as `replied` with its fake reply text and no failure reason; verify their matching native output, then capture the final frame, screenshot and effects.
+2. While it is Working, type `busy-followup` and press Enter. Capture full frames and the message status. With Interrupt selected, the developer's follow-up interrupts the running turn and runs next; there is no refusal, recovery, toast, composer or footer error text. Require the first request to end as `abandoned` with reason `interrupted` and the follow-up to complete as `replied` with its fake reply text and no failure reason; verify their matching native output, then capture the final frame, screenshot and effects.
 
 ### ERR-02 — Failed launch
 
@@ -38,8 +39,16 @@ Preconditions/setup: Create/select a scratch room `launch-errors`. Wrap its fake
 launch print `LAUNCH_FAILURE_SENTINEL` and exit 1. Record the wrapper and original
 launcher paths; neither may resolve outside this driver's scratch directory.
 
-1. Through the add-agent form, add `failed-worker` with provider Claude and the scratch work folder as PWD. Return to the room view if the native terminal opens. Wait for the agent to become Unavailable. Capture state, the full frame, screenshot and effects. Unavailable is the only failure indication; no startup diagnostic, launch marker, recovery text, chat failure body or footer error is drawn.
-2. Inspect the scratch client log and state. The failure cause has agent/room context in the client log; the saved agent remains available for inspection. Restore the launcher, capture another room frame, and prove the launch marker never entered any recorded room frame.
+1. Through Add, submit `failed-worker` with Claude and the scratch work folder
+   as PWD → the form closes immediately. Wait for Unavailable and the room's
+   `Could not add failed-worker: …` error. Capture state, the full frame,
+   screenshot and effects. The error is local to the originating room, with
+   no error toast or modal.
+2. Inspect the scratch client log and state → the failure has agent/room
+   context and the failed agent remains available for inspection. Restore the
+   launcher. Check a second room and the effects ledger for leaked copies or
+   a popup. See [APP-28](app.md#app-28--new-add-agent-closes-immediately-and-reports-failures)
+   for local validation and pre-creation refusal.
 
 ### ERR-03 — Save failure
 

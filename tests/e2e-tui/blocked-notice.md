@@ -14,7 +14,7 @@ Cursor MASTER orchestrator `orch` bound to `blocked-notice-lab`, a Cursor MASTER
 orchestrator `peer` bound to `peer-room`, and a Codex worker `worker` in
 `blocked-notice-lab`. All use the private WORK directory with hook consent. Wait
 until idle. CLI sends may establish the active turn; the ordinary backlog must be
-agent-authored because every developer message interrupts. Submit the question
+agent-authored to exercise independent turns for ordinary agent requests to an orchestrator. Submit the question
 through the room UI.
 Read-only state/history and observe/press may corroborate the journey.
 
@@ -39,3 +39,7 @@ Read-only state/history and observe/press may corroborate the journey.
    ordinary composer. History retains exactly one Blocked notice and adds no Resolved
    notice. The ordinary MASTER requests remain queued in their original order.
    Stop the scratch session.
+
+For deletion before a pending notice can deliver, use
+[APP-31](app.md#app-31--new-deletion-cancels-stale-notices-and-deliveries).
+Keep BN-01 as the positive control with a live worker and a real dialog.
