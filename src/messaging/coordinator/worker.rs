@@ -9,6 +9,7 @@ use crate::agents::providers::spool;
 use crate::messaging::perf;
 use std::path::Path;
 
+mod agy_settlement;
 #[cfg(test)]
 #[path = "tests/callback_gc_startup_test.rs"]
 mod callback_gc_startup_tests;
@@ -23,6 +24,7 @@ mod command_queue;
 #[path = "tests/command_queue_test.rs"]
 mod command_queue_tests;
 mod control_reads;
+use agy_settlement::{agy_transcript_for_agent, recorded_agy_end, state_provider_is_agy};
 use command_queue::{collect_delivery_commands, next_command};
 mod history;
 mod kimi_settlement;
@@ -107,6 +109,8 @@ pub(super) struct Worker {
     /// Each Codex agent's rollout, from its hooks. A turn that a provider
     /// error ended fires no Stop hook; only the rollout records why.
     pub(super) codex_rollouts: BTreeMap<AgentId, PathBuf>,
+    /// Each AGY agent's validated `(session_id, transcript_path)` from its hooks.
+    pub(super) agy_transcripts: BTreeMap<AgentId, (String, PathBuf)>,
     /// The UI's settings file; set only for a real launch so tests never touch it.
     pub(super) settings_path: Option<PathBuf>,
     /// Folders listed for system sounds; None reads the operating system's.
@@ -224,6 +228,7 @@ impl Worker {
             control_receipt_retention: control_dispatch::CONTROL_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
             codex_rollouts,
+            agy_transcripts: BTreeMap::new(),
             settings_path: None,
             sound_dirs: None,
             batch: None,
@@ -688,6 +693,12 @@ impl Worker {
             changed |= self.settle_previous_kimi_requests(&mut state, agent, observed_at_ms);
             let current = state.agent(agent).and_then(|owner| owner.current_request);
             let rollout = self.codex_rollouts.get(&agent);
+            let agy_transcript = state
+                .agent(agent)
+                .filter(|owner| owner.provider == crate::messaging::model::Provider::Agy)
+                .and_then(|owner| {
+                    agy_transcript_for_agent(self.agy_transcripts.get(&agent), owner)
+                });
             let kimi_recorded = recorded_kimi_end(&self.data_dir, &mut state, agent)
                 .unwrap_or_else(|error| {
                     if state.record_error_episode(format!("kimi-evidence:{}:{error}", agent.0)) {
@@ -696,11 +707,15 @@ impl Worker {
                     Some(crate::messaging::model::RecordedTurnEnd::Error(error))
                 });
             let kimi_recorded = &kimi_recorded;
+            let state_snapshot = &self.state;
+            let agy_transcript = agy_transcript.as_deref();
             let recorded_end = |request: &crate::messaging::model::Request| {
-                if state_provider_is_kimi(&self.state, request.agent_id) {
+                if state_provider_is_kimi(state_snapshot, request.agent_id) {
                     (Some(request.id) == current)
                         .then(|| (*kimi_recorded).clone())
                         .flatten()
+                } else if state_provider_is_agy(state_snapshot, request.agent_id) {
+                    recorded_agy_end(state_snapshot, agy_transcript?, request)
                 } else {
                     recorded_codex_end(rollout?, request)
                 }

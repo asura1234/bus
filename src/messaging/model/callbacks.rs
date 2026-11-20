@@ -19,6 +19,33 @@ impl BusState {
         std::sync::Arc::make_mut(&mut self.consumed_callbacks).insert(key, Some(launch));
     }
 
+    pub(crate) fn is_consumed_provider_turn(
+        &self,
+        launch: &str,
+        session: Option<&str>,
+        turn: Option<&str>,
+    ) -> bool {
+        provider_turn_key(launch, session, turn)
+            .is_some_and(|key| self.consumed_provider_turns.contains(&key))
+    }
+
+    /// Bind an unbound AGY request once its transcript proves the prompt ran in `turn`.
+    pub(crate) fn bind_reconciled_agy_turn(
+        &mut self,
+        request_id: RequestId,
+        session: String,
+        turn: String,
+    ) {
+        if let Some(request) = self.requests.get_mut(&request_id) {
+            request.phase = RequestPhase::Active;
+            request.trusted_start_bound = true;
+            request.uncertain_outcome = false;
+            request.submission_error = None;
+            request.provider_session_id = Some(session);
+            request.provider_turn_id = Some(turn);
+        }
+    }
+
     fn match_owned_claude_paste(&self, callback: &mut ProviderCallback) {
         if !matches!(callback.kind, CallbackEventKind::PromptStarted) {
             return;

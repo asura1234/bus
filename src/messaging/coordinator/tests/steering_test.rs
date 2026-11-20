@@ -34,6 +34,9 @@ mod rollout_attribution_tests;
 #[path = "missing_directory_running_test.rs"]
 mod missing_directory_running_tests;
 
+#[path = "agy_unclaimed_turn_reconciliation_test.rs"]
+mod agy_unclaimed_turn_reconciliation_tests;
+
 #[path = "interrupt_delivery_test.rs"]
 mod interrupt_delivery_tests;
 
