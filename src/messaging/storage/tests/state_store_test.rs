@@ -310,6 +310,7 @@ fn captured_draft_and_latency_metadata_replay_together_without_resubmitting() {
             room,
             draft: captured,
             queued: true,
+            mode: None,
             now_ms: 1_000,
         })
         .unwrap();

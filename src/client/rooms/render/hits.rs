@@ -73,6 +73,15 @@ impl BusUi {
             Action::Search => "find-query".into(),
             Action::ToggleToYou => "filter-to-you".into(),
             Action::ToggleFromYou => "filter-from-you".into(),
+            Action::DeliveryMode => "delivery-mode".into(),
+            Action::ChooseDelivery(mode) => format!(
+                "delivery-mode:{}",
+                match mode {
+                    crate::messaging::model::SendMode::Interrupt => "interrupt",
+                    crate::messaging::model::SendMode::Steer => "steer",
+                    crate::messaging::model::SendMode::Queue => "queue",
+                }
+            ),
             Action::Recipients => "recipients".into(),
             Action::Recipient(Some(id)) => format!("recipient:{}", self.agent_name(*id)),
             Action::Recipient(None) => "recipient:none".into(),

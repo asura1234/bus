@@ -9,6 +9,17 @@ use ratatui::{
 use std::ops::Range;
 
 impl View {
+    pub(super) fn begin_picker(&mut self, menu: Rect) {
+        self.picker = menu;
+        self.picker_rows_start = self.rows.len();
+        self.cursor = None;
+        // The panel covers links, selections and graphics as well as text.
+        self.hits.retain(|hit| !hit.rect.intersects(menu));
+        self.selection.retain(|rect| !rect.intersects(menu));
+        self.thumbnails
+            .retain(|thumbnail| !thumbnail.rect().intersects(menu));
+    }
+
     pub(super) fn overlay_row(
         &mut self,
         rect: Rect,

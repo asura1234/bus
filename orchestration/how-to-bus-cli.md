@@ -59,11 +59,11 @@ turn's group (the default); `--queue` waits for an independent idle turn and nev
 Cross-room messages wait for a new turn. `--mode interrupt|steer|queue` chooses
 delivery per message: interrupt ends the running turn now with the provider's
 stop key and runs the message next; steer joins it; queue waits for the next
-turn. Every developer path (send, the room composer and Feishu replies)
-interrupts and cannot be weakened with `--queue` or `--mode steer`. Orchestrator
-messages default to steer-or-queue and may pass `--mode`; other agent messages
+turn. Developer CLI sends and Feishu replies use Interrupt. Orchestrator
+messages default to steer-or-queue and may pass `--mode`. Other agent messages
 keep that default and cannot interrupt. Interrupt stops in-flight builds, Git
-operations and device runs; use it only to change course.
+operations and device runs, so use it only to change course.
+
 See [the guide](orchestrator-guide.md#immediate-reaction-or-waiting).
 Explicit replies settle individual requests without ending the turn; a turn ending settles outstanding group requests and stores its captured final as each request's reply (never as a new message, and never over an explicit `--reply-to` answer).
 
@@ -206,10 +206,10 @@ a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2 3.7+, inline images in 
 tmux, disabled terminal.kitty_graphics, missing/unreadable images and unsupported hosts use clickable
 file rows. Clicking an image opens file detail.
 
-Enter and Option/Alt+Enter send; every developer message interrupts the
-recipient's turn and runs next (agent messages still steer or queue). Ctrl+J or
-supported Shift+Enter adds a newline. `bus --help` lists other keyboard shortcuts. Settings exposes details
-visibility and color-blind mode; `bus settings --help` explains shared defaults.
+Click **Mode** or press **F4**. Move with **Up/Down**, apply with **Enter/Space**, and close with **Esc/Tab/F4**.
+The room remembers its mode for the TUI session. Enter and Option/Alt+Enter send with that mode, initially Interrupt.
+Ctrl+J or supported Shift+Enter adds a newline. See `bus --help` for shortcuts and `bus settings --help` for shared defaults.
+Settings exposes details visibility and color-blind mode.
 Room sound rings for agent finals/posts, never developer sends. MASTER defaults
 on, work rooms off; startup/resume has a two-second grace and bursts ring once.
 YOU alerts have a separate enabled-by-default sound selector and bypass ordinary

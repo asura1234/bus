@@ -1,11 +1,90 @@
-//! A bounded recipient viewport, painted above history and draft content.
-use super::super::{BusUi, LocalRoom};
+//! Composer recipient bar and its bounded picker.
+use super::super::{recipients::Layout as RecipientLayout, BusUi, LocalRoom};
+use super::delivery_mode::{delivery_pill, delivery_pill_width};
+use super::sidebar::{message_name_color, status_name};
 use super::text::provider;
-use super::{sidebar::status_name, Action, View};
+use super::{Action, View, ACCENT};
 use crate::messaging::model::Room;
 use ratatui::layout::{Margin, Rect};
 
 impl BusUi {
+    pub(super) fn recipient_bar_view(
+        &self,
+        view: &mut View,
+        local: &LocalRoom,
+        recipients: &RecipientLayout,
+    ) {
+        let Rect {
+            x,
+            y: composer_y,
+            width,
+            height: bar_height,
+        } = view.recipient_bar;
+        let controls_y = composer_y + u16::from(bar_height > 1);
+        let pill_width = delivery_pill_width(width);
+        let pill = Rect::new(
+            x,
+            controls_y,
+            pill_width.saturating_sub(1).max(1).min(pill_width),
+            1,
+        );
+        delivery_pill(view, pill, local.delivery, self.delivery_menu.is_some());
+        let x = x + pill_width;
+        let width = width.saturating_sub(pill_width);
+        view.row(
+            Rect::new(x, controls_y, width.min(3), 1),
+            "+",
+            Some(Action::Files),
+            false,
+            false,
+        );
+        view.row(
+            Rect::new(
+                x + 3,
+                controls_y,
+                if local.recipients.is_empty() {
+                    width.saturating_sub(3)
+                } else {
+                    width.saturating_sub(3).min(3)
+                },
+                1,
+            ),
+            if local.recipients.is_empty() {
+                "@  Choose agents"
+            } else {
+                "@"
+            },
+            Some(Action::Recipients),
+            false,
+            true,
+        );
+        for chip in &recipients.chips {
+            if chip.rect.y < self.recipient_scroll
+                || chip.rect.bottom() > self.recipient_scroll + bar_height
+            {
+                continue;
+            }
+            let rect = Rect::new(
+                x + chip.rect.x,
+                composer_y + chip.rect.y - self.recipient_scroll,
+                chip.rect.width,
+                3,
+            );
+            let color = self
+                .snapshot
+                .state
+                .agent(chip.agent)
+                .map_or(ACCENT, |agent| {
+                    message_name_color(&self.snapshot.state, self.room, agent, &self.settings)
+                });
+            view.recipient_chips.push((rect, color));
+            let label_rect = Rect::new(rect.x + 2, rect.y + 1, rect.width.saturating_sub(4), 1);
+            view.row(label_rect, &chip.label, None, false, false);
+            view.color_last_row(label_rect, color);
+            view.hit(rect, Action::Recipients);
+        }
+    }
+
     pub(super) fn clamp_recipient_index(&mut self) {
         // The highlight is shared by room views; a room switch or roster
         // shrink must never leave the viewport starting beyond its entries.
@@ -65,10 +144,7 @@ impl BusUi {
                     Some(agent.id),
                 )
             }));
-        view.recipient_menu = menu;
-        view.recipient_rows_start = view.rows.len();
-        // Covered links/quote buttons cannot remain active through the panel.
-        view.hits.retain(|hit| !hit.rect.intersects(menu));
+        view.begin_picker(menu);
         for (index, (label, id)) in labels
             .enumerate()
             .skip(start)
@@ -81,10 +157,5 @@ impl BusUi {
                 index == selected,
             );
         }
-        view.cursor = None;
-        view.selection.retain(|rect| !rect.intersects(menu));
-        // Kitty graphics sit above text, so remove covered thumbnails too.
-        view.thumbnails
-            .retain(|thumbnail| !thumbnail.rect().intersects(menu));
     }
 }

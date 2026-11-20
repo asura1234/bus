@@ -1,7 +1,9 @@
 /// Client-only help. These commands never become agent prompts.
 pub(super) const TEXT: &str = "Composer
-Enter          Send; a developer message interrupts the running turn
-Option+Enter   Send with the same interrupt delivery
+Enter          Send with the room's delivery mode (Interrupt by default)
+Option+Enter   Same as Enter
+F4             Open delivery modes (also click the Mode pill)
+               Up / Down choose, Enter / Space apply, Esc / Tab / F4 close
 History        [queued] marks queue mode. [pending] marks steer mode.
                Interrupt-mode messages have no mode marker.
 Shift+Enter    New line

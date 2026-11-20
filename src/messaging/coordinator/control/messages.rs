@@ -205,7 +205,7 @@ impl Worker {
                 },
                 author.map_or(Author::Developer, Author::Agent),
                 now,
-                matches!(delivery, SendMode::Interrupt | SendMode::Queue),
+                delivery.queue_only(),
             )
             .map_err(|e| e.to_string())?;
         if delivery == SendMode::Interrupt {

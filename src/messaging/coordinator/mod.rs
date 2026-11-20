@@ -127,8 +127,13 @@ pub(crate) enum BusCommand {
     AttachFile(RoomId, String),
     RemoveFile(RoomId, PathBuf),
     Submit(RoomId, crate::messaging::model::Draft),
-    /// Like `Submit`, but each message waits for its agent's own turn.
+    /// Legacy Alt+Enter submission, with the same default interrupt delivery.
     SubmitQueued(RoomId, crate::messaging::model::Draft),
+    SubmitWithMode(
+        RoomId,
+        crate::messaging::model::Draft,
+        crate::messaging::model::SendMode,
+    ),
     SetDetails(AgentId, bool),
     AddAgent(AddAgent),
     /// Adds a MASTER agent, launched with its orchestrator system prompt.
@@ -144,6 +149,17 @@ pub(crate) enum BusCommand {
     /// A durable spool hint, never provider event data or ownership proof.
     CallbackReady(String),
     Shutdown,
+}
+
+impl BusCommand {
+    pub(crate) fn submission_room(&self) -> Option<RoomId> {
+        match self {
+            Self::Submit(room, _)
+            | Self::SubmitQueued(room, _)
+            | Self::SubmitWithMode(room, _, _) => Some(*room),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

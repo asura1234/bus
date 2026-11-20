@@ -427,7 +427,8 @@ the next turn. You can also interrupt the agent first and then send the new
 instruction. Otherwise waiting for the turn to end is fine. Interrupt stops
 in-flight work, including builds, Git operations and device runs. Use it only
 to change course, never just to close a request. A message saying "pause" or
-"stop" does not stop a turn. The developer's messages always interrupt.
+"stop" does not stop a turn. Developer messages default to Interrupt. The
+room composer's Mode picker also offers Steer and Queue.
 
 ```sh
 bus send --room ROOM --as YOU --to AGENT --mode interrupt --text "Change course: ..."

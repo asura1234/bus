@@ -325,7 +325,9 @@ clipboard writes, notifications and bells.
 The room UI's clickable regions as of its last frame, from the dev-tier
 `bus ui hits`: each with a name, its cells and the text it covers. Names are
 stable: `room:NAME`, `agent:NAME`, `new-room`, `new-agent`, `settings`,
-`color-blind`, `sound:ROOM`, `composer`, `recipients`, `recipient:NAME`,
+`color-blind`, `sound:ROOM`, `composer`, `delivery-mode`,
+`delivery-mode:interrupt`, `delivery-mode:steer`, `delivery-mode:queue`,
+`recipients`, `recipient:NAME`,
 `files`, `file:NAME`, `remove-file:NAME`, `field:N`, `provider:claude`,
 `suggestion:N`, `quote:ID`, `add`, `cancel`, `delete-room:NAME`, and more.
 A region covered by a later one is clicked where it is still visible.

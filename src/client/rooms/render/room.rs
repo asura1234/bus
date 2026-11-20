@@ -7,10 +7,11 @@ use super::super::{
     thumbnails::Placement,
     BusUi, ComposerSize, LocalRoom,
 };
+use super::delivery_mode::delivery_pill_width;
 use super::dialogs::{search_panel, SEARCH_BOX_HEIGHT};
 use super::sidebar::message_name_color;
 use super::text::{display, wrap};
-use super::{Action, Hit, View, ACCENT, GREY};
+use super::{Action, View, ACCENT, GREY};
 use crate::messaging::model::{BusState, Room, RoomHistoryFilters, RoomId};
 use ratatui::{
     layout::Rect,
@@ -127,7 +128,7 @@ impl BusUi {
                 false,
             );
         }
-        self.recipient_bar_view(view, local, &recipients, layout);
+        self.recipient_bar_view(view, local, &recipients);
         self.composer_editor_view(view, local, layout);
         let files = self.draft_files(room);
         self.file_scroll = self.file_scroll.min(files.len().saturating_sub(1));
@@ -137,6 +138,9 @@ impl BusUi {
         }
         self.file_detail_view(view, layout);
         self.recipient_menu_view(view, room, local);
+        if let Some(mode) = self.delivery_menu {
+            view.delivery_menu(mode);
+        }
     }
 
     fn recipient_layout(&self, local: &LocalRoom, width: u16) -> RecipientLayout {
@@ -147,7 +151,7 @@ impl BusUi {
                     .agent(*id)
                     .map(|agent| (agent.id, agent.name.as_str()))
             }),
-            width,
+            width.saturating_sub(delivery_pill_width(width)),
         )
     }
 
@@ -462,69 +466,6 @@ impl BusUi {
         }
     }
 
-    fn recipient_bar_view(
-        &self,
-        view: &mut View,
-        local: &LocalRoom,
-        recipients: &RecipientLayout,
-        layout: RoomLayout,
-    ) {
-        let RoomLayout {
-            x,
-            width,
-            composer_y,
-            bar_height,
-            ..
-        } = layout;
-        let controls_y = composer_y + u16::from(bar_height > 1);
-        view.row(
-            Rect::new(x, controls_y, 3, 1),
-            "+",
-            Some(Action::Files),
-            false,
-            false,
-        );
-        view.row(
-            Rect::new(x + 3, controls_y, width.saturating_sub(3), 1),
-            if local.recipients.is_empty() {
-                "@  Choose agents"
-            } else {
-                "@"
-            },
-            Some(Action::Recipients),
-            false,
-            true,
-        );
-        for chip in &recipients.chips {
-            if chip.rect.y < self.recipient_scroll
-                || chip.rect.bottom() > self.recipient_scroll + bar_height
-            {
-                continue;
-            }
-            let rect = Rect::new(
-                x + chip.rect.x,
-                composer_y + chip.rect.y - self.recipient_scroll,
-                chip.rect.width,
-                3,
-            );
-            let color = self
-                .snapshot
-                .state
-                .agent(chip.agent)
-                .map_or(ACCENT, |agent| {
-                    message_name_color(&self.snapshot.state, self.room, agent, &self.settings)
-                });
-            view.recipient_chips.push((rect, color));
-            let label_rect = Rect::new(rect.x + 2, rect.y + 1, rect.width.saturating_sub(4), 1);
-            view.row(label_rect, &chip.label, None, false, false);
-            view.color_last_row(label_rect, color);
-            view.hits.push(Hit {
-                rect,
-                action: Action::Recipients,
-            });
-        }
-    }
-
     fn composer_editor_view(&self, view: &mut View, local: &LocalRoom, layout: RoomLayout) {
         let RoomLayout {
             x,
@@ -541,7 +482,10 @@ impl BusUi {
             view.composer,
             &local.text,
             Some(Action::Composer),
-            !self.recipient_menu && self.rename.is_none() && self.chat_search.is_none(),
+            !self.recipient_menu
+                && self.delivery_menu.is_none()
+                && self.rename.is_none()
+                && self.chat_search.is_none(),
             local.composer_scroll,
             self.view.composer_scroll,
         );

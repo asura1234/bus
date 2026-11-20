@@ -3,6 +3,7 @@ use super::{
     mpsc, schema, AgentId, BusCommand as C, BusEvent, BusState, Method, Provider, ResponseResult,
     RoomId, Worker,
 };
+use crate::messaging::model::SendMode;
 use crate::messaging::storage::state_store::JournalOp;
 
 impl Worker {
@@ -74,7 +75,10 @@ impl Worker {
             }
             C::RemoveFile(room, path) => state.remove_file(room, &path),
             C::Submit(room, draft) | C::SubmitQueued(room, draft) => {
-                return self.persist_draft_submission(room, draft);
+                return self.persist_draft_submission(room, draft, SendMode::Interrupt);
+            }
+            C::SubmitWithMode(room, draft, delivery) => {
+                return self.persist_draft_submission(room, draft, delivery);
             }
             C::SetDetails(id, expanded) => state.set_agent_details_disclosed(id, expanded),
             C::CompleteHookSetup(id) => {
@@ -127,6 +131,7 @@ impl Worker {
         &mut self,
         room: RoomId,
         mut draft: crate::messaging::model::Draft,
+        delivery: SendMode,
     ) -> Result<(), String> {
         for recipient in &draft.recipient_ids {
             if let Some(error) = self.check_launch_directory(*recipient)? {
@@ -147,21 +152,34 @@ impl Worker {
             .collect::<Result<Vec<_>, _>>()?;
         let now = crate::messaging::storage::io::now_ms();
         let mut state = self.state.clone();
-        // Composer sends persist the independent next turn and its exact stop targets.
+        let queued = delivery.queue_only();
         let requests = state
-            .submit_draft_exact(room, draft.clone(), now, true)
+            .submit_draft_exact(room, draft.clone(), now, queued)
             .map_err(|e| e.to_string())?;
-        let interrupts = super::control_dispatch::stage_send_interrupts(&mut state, &requests)?;
-        self.journal(
-            state,
+        let op = if delivery == SendMode::Interrupt {
+            let interrupts = super::control_dispatch::stage_send_interrupts(&mut state, &requests)?;
             JournalOp::SubmitInterruptDraft {
                 room,
                 draft,
                 now_ms: now,
                 interrupts,
-            },
-        )?;
-        self.dispatch_committed_send_interrupts(&requests, now);
+            }
+        } else {
+            state
+                .record_send_mode(&requests, delivery)
+                .map_err(|e| e.to_string())?;
+            JournalOp::SubmitDraft {
+                room,
+                draft,
+                queued,
+                mode: Some(delivery),
+                now_ms: now,
+            }
+        };
+        self.journal(state, op)?;
+        if delivery == SendMode::Interrupt {
+            self.dispatch_committed_send_interrupts(&requests, now);
+        }
         self.note_requests_queued(&requests);
         for id in requests {
             super::super::diagnostics::request(&self.state, id, "bus.message.queued", "persisted");

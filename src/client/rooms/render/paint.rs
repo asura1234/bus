@@ -48,10 +48,10 @@ impl BusUi {
         self.paint_borders(buffer);
         let mut selection_painted = false;
         for (index, row) in self.view.rows.iter().enumerate() {
-            if index == self.view.recipient_rows_start && !self.view.recipient_menu.is_empty() {
+            if index == self.view.picker_rows_start && !self.view.picker.is_empty() {
                 paint_selection(&self.view.selection, buffer);
                 selection_painted = true;
-                paint_panel(self.view.recipient_menu, buffer);
+                paint_panel(self.view.picker, buffer);
             }
             if index == self.view.dialog_rows_start && self.view.dialog.width > 0 {
                 paint_selection(&self.view.selection, buffer);

@@ -1,4 +1,5 @@
 //! Room render model and the stable room-facing render API.
+mod delivery_mode;
 mod dialogs;
 #[path = "layout.rs"]
 mod geometry;
@@ -48,6 +49,8 @@ pub(super) enum Action {
     Search,
     ToggleToYou,
     ToggleFromYou,
+    DeliveryMode,
+    ChooseDelivery(crate::messaging::model::SendMode),
     Recipients,
     Recipient(Option<crate::messaging::model::AgentId>),
     Files,
@@ -112,8 +115,8 @@ pub(super) struct View {
     pub history: Rect,
     pub history_max_scroll: usize,
     pub recipient_bar: Rect,
-    pub recipient_menu: Rect,
-    recipient_rows_start: usize,
+    pub picker: Rect,
+    picker_rows_start: usize,
     pub recipient_max_scroll: u16,
     recipient_chips: Vec<(Rect, Color)>,
     pub files: Rect,

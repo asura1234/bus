@@ -4,12 +4,21 @@ use super::{
 use crate::messaging::model::DeliveryLatency;
 
 /// Delivery mode selected when the message was sent, independent of native progress.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SendMode {
+    #[default]
     Interrupt,
     Steer,
     Queue,
+}
+
+impl SendMode {
+    pub(crate) fn queue_only(self) -> bool {
+        matches!(self, Self::Interrupt | Self::Queue)
+    }
 }
 
 impl Request {
@@ -116,6 +125,18 @@ impl BusState {
     ) -> Result<Vec<RequestId>, ModelError> {
         let requests = self.submit_draft_from(room, Author::Developer, now_ms, true, false)?;
         self.record_send_mode(&requests, SendMode::Queue)?;
+        Ok(requests)
+    }
+
+    pub(crate) fn submit_draft_with_mode(
+        &mut self,
+        room: RoomId,
+        draft: Draft,
+        now_ms: u64,
+        mode: SendMode,
+    ) -> Result<Vec<RequestId>, ModelError> {
+        let requests = self.submit_draft_exact(room, draft, now_ms, mode.queue_only())?;
+        self.record_send_mode(&requests, mode)?;
         Ok(requests)
     }
 

@@ -40,6 +40,8 @@ pub(crate) enum JournalOp {
         room: RoomId,
         draft: Draft,
         queued: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<SendMode>,
         now_ms: u64,
     },
     SubmitInterruptDraft {
@@ -124,8 +126,14 @@ impl JournalOp {
                 room,
                 draft,
                 queued,
+                mode,
                 now_ms,
             } => {
+                if let Some(mode) = mode {
+                    return state
+                        .submit_draft_with_mode(*room, draft.clone(), *now_ms, *mode)
+                        .map(drop);
+                }
                 let requests = state.submit_draft_exact(*room, draft.clone(), *now_ms, *queued)?;
                 if *queued {
                     state.record_send_mode(&requests, SendMode::Queue)?;

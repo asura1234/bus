@@ -1,3 +1,28 @@
+fn assert_composer_toolbar(
+    ui: &BusUi,
+    buffer: &ratatui::buffer::Buffer,
+    x: u16,
+    y: u16,
+) {
+    let control = |action| {
+        ui.view
+            .hits
+            .iter()
+            .find(|hit| hit.action == action)
+            .expect("toolbar control")
+            .rect
+    };
+    let mode = control(render::Action::DeliveryMode);
+    let files = control(render::Action::Files);
+    let recipients = control(render::Action::Recipients);
+    assert_eq!((mode.x, mode.y), (x, y));
+    assert_eq!(mode.right() + 1, files.x);
+    assert_eq!((files.y, recipients.y), (y, y));
+    assert_eq!(files.x + 3, recipients.x);
+    assert_eq!(buffer[(files.x, y)].symbol(), "+");
+    assert_eq!(buffer[(recipients.x, y)].symbol(), "@");
+}
+
 #[test]
 fn composer_box_encloses_controls_and_grows_with_matching_column_divider() {
     let (mut ui, room, _) = fixture();
@@ -50,8 +75,7 @@ fn composer_box_encloses_controls_and_grows_with_matching_column_divider() {
                 assert_eq!(buffer[(x, y)].fg, color);
             }
         }
-        assert_eq!(buffer[(editor.x, top + 1)].symbol(), "+");
-        assert_eq!(buffer[(editor.x + 3, top + 1)].symbol(), "@");
+        assert_composer_toolbar(&ui, &buffer, editor.x, top + 1);
     }
 }
 
@@ -86,8 +110,7 @@ fn composer_toolbar_has_a_matching_horizontal_line_above_editable_text() {
         }
         assert_eq!(buffer[(editor.x - 1, editor.y - 1)].symbol(), "├");
         assert_eq!(buffer[(editor.right(), editor.y - 1)].symbol(), "┤");
-        assert_eq!(buffer[(editor.x, editor.y - 2)].symbol(), "+");
-        assert_eq!(buffer[(editor.x + 3, editor.y - 2)].symbol(), "@");
+        assert_composer_toolbar(&ui, &buffer, editor.x, editor.y - 2);
         assert_eq!(buffer[(editor.x, editor.y)].symbol(), "d");
     }
 }

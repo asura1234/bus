@@ -78,8 +78,7 @@ impl BusUi {
         if let Some(room) = discard_submissions_in {
             // A not-yet-dispatched room prompt must not outrun deletion.
             self.pending.retain(|pending| {
-                pending.enqueued
-                    || !matches!(pending.command, BusCommand::Submit(id, _) | BusCommand::SubmitQueued(id, _) if id == room)
+                pending.enqueued || pending.command.submission_room() != Some(room)
             });
             self.submissions.retain(|submission| {
                 submission.room != room
@@ -178,6 +177,7 @@ impl BusUi {
             self.clear_form();
             self.rename = None;
             self.recipient_menu = false;
+            self.delivery_menu = None;
             self.main_scroll = 0;
             self.history_follow_tail = true;
             self.recipient_scroll = 0;
@@ -202,7 +202,8 @@ pub(super) fn target_exists(command: &BusCommand, state: &BusState) -> bool {
         | BusCommand::AttachFile(id, _)
         | BusCommand::RemoveFile(id, _)
         | BusCommand::Submit(id, _)
-        | BusCommand::SubmitQueued(id, _) => state.room(*id).is_some(),
+        | BusCommand::SubmitQueued(id, _)
+        | BusCommand::SubmitWithMode(id, _, _) => state.room(*id).is_some(),
         BusCommand::RenameAgent(id, _)
         | BusCommand::SetDetails(id, _)
         | BusCommand::FocusTerminal(id)
