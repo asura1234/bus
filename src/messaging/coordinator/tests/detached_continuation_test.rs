@@ -308,6 +308,7 @@ fn detached_same_generation_terminal_failures_close_unanswered_group() {
                             native_terminal_id: Some("resumed-terminal".into()),
                             recovery: None,
                             failure: Some(crate::messaging::model::StartupFailure {
+                                cause: None,
                                 reason: "saved conversation could not resume".into(),
                                 recovery: "replace the agent".into(),
                             }),

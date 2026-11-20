@@ -168,6 +168,7 @@ fn failed_startup_reports_evidence_and_retains_identity() {
     worker.save(state).unwrap();
     worker.transport = Box::new(FailedLaunchNative {
         state_path: dir.join("state.json"),
+        exited: true,
         ..Default::default()
     });
     let (events, _) = mpsc::channel();
@@ -241,6 +242,172 @@ fn pending_info(worker: &Worker, agent: AgentId) -> schema::AgentInfo {
     info.agent_session = None;
     info.launch_pending = true;
     info
+}
+
+fn exited_startup_transport(dir: &std::path::Path) -> Box<dyn Transport> {
+    Box::new(FailedLaunchNative {
+        state_path: dir.join("state.json"),
+        exited: true,
+        ..Default::default()
+    })
+}
+
+#[test]
+fn slow_sessionless_codex_delivers_once_after_owned_interactive_confirmation() {
+    let mut ready = native_info("pane", "codex", "session");
+    ready.native_ready = true;
+    ready.interactive_ready = true;
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::Codex,
+        vec![Ok(ResponseResult::AgentPrompted {
+            agent: ready.clone(),
+            timestamps: Default::default(),
+        })],
+    );
+    let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    worker
+        .state
+        .set_agent_runtime_identity(agent, identity)
+        .unwrap();
+    worker
+        .watch_agent_startup(agent, vec!["codex".into()])
+        .unwrap();
+    ready.name = pending_info(&worker, agent).name;
+    let request = queue(&mut worker, room, agent, "queued during startup");
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    let events = mpsc::channel().0;
+
+    let mut waiting = pending_info(&worker, agent);
+    waiting.interactive_ready = false;
+    worker
+        .cleanup_failed_startups(&[waiting], &events, start + 31_000)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+
+    let mut foreign = ready.clone();
+    foreign.terminal_id = "replacement-terminal".into();
+    worker
+        .cleanup_failed_startups(&[foreign], &events, start + 60_000)
+        .unwrap();
+    assert!(worker.state.agent(agent).unwrap().startup.is_some());
+    worker.submit_ready().unwrap();
+    assert!(!calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|method| method.starts_with("agent.prompt")));
+
+    worker
+        .cleanup_failed_startups(&[ready], &events, start + 80_000)
+        .unwrap();
+    assert!(worker.state.agent(agent).unwrap().startup.is_none());
+    worker.submit_ready().unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| method.starts_with("agent.prompt"))
+            .count(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sessionless_startup_without_confirmation_closes_at_the_grace_cap() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let request = queue(&mut worker, room, agent, "never submit after deadline");
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    let mut waiting = pending_info(&worker, agent);
+    waiting.interactive_ready = false;
+    let events = mpsc::channel().0;
+    worker
+        .cleanup_failed_startups(std::slice::from_ref(&waiting), &events, start + 89_999)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    worker
+        .cleanup_failed_startups(&[waiting], &events, start + 90_000)
+        .unwrap();
+    let closed = worker.state.request(request).unwrap();
+    assert_eq!(closed.phase, RequestPhase::Abandoned);
+    assert!(closed
+        .submission_notice()
+        .unwrap()
+        .contains("[startup_timeout]"));
+    assert_eq!(closed.failure_reason.as_deref(), Some("startup_timeout"));
+    assert_eq!(
+        crate::messaging::model::classify_request_failure("startup_timeout"),
+        crate::messaging::model::RequestFailureClass::Bus
+    );
+    assert!(closed.latency.native_requested_at_ms.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn sessionless_startup_definite_launch_input_failure_closes_immediately() {
+    let (mut worker, agent, room, dir) = pending(Provider::Codex);
+    let request = queue(
+        &mut worker,
+        room,
+        agent,
+        "never submit after launch refusal",
+    );
+    let start = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .startup
+        .as_ref()
+        .unwrap()
+        .started_at_ms;
+    let mut waiting = pending_info(&worker, agent);
+    waiting.interactive_ready = false;
+    waiting.launch_input_error = Some("native launch input refused".into());
+    worker
+        .cleanup_failed_startups(&[waiting], &mpsc::channel().0, start + 1)
+        .unwrap();
+    let closed = worker.state.request(request).unwrap();
+    assert_eq!(closed.phase, RequestPhase::Abandoned);
+    assert!(closed
+        .submission_notice()
+        .unwrap()
+        .contains("[launch_input_failed]"));
+    assert_eq!(
+        closed.failure_reason.as_deref(),
+        Some("launch_input_failed")
+    );
+    assert!(closed.latency.native_requested_at_ms.is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -320,6 +487,14 @@ fn startup_observed_process_exit_fails_before_deadline() {
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, start + 60)
         .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    worker.transport = exited_startup_transport(&dir);
+    worker
+        .cleanup_failed_startups(&[], &mpsc::channel().0, start + 70)
+        .unwrap();
     let failed = worker.state.agent(agent).unwrap();
     assert!(failed.startup.as_ref().unwrap().reported);
     assert!(failed
@@ -334,7 +509,7 @@ fn startup_observed_process_exit_fails_before_deadline() {
             .unwrap()
             .failure_reason
             .as_deref(),
-        Some("agent_startup_failed")
+        Some("provider_exited_during_startup")
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -353,7 +528,7 @@ fn startup_missing_unobserved_process_expires_at_the_deadline() {
         .unwrap()
         .started_at_ms;
     worker
-        .cleanup_failed_startups(&[], &mpsc::channel().0, start + 30_000)
+        .cleanup_failed_startups(&[], &mpsc::channel().0, start + 90_000)
         .unwrap();
     assert!(worker
         .state
@@ -362,7 +537,7 @@ fn startup_missing_unobserved_process_expires_at_the_deadline() {
         .actionable_error
         .as_deref()
         .unwrap()
-        .contains("within 30 seconds"));
+        .contains("within 90 seconds"));
     assert_eq!(
         worker
             .state
@@ -370,7 +545,7 @@ fn startup_missing_unobserved_process_expires_at_the_deadline() {
             .unwrap()
             .failure_reason
             .as_deref(),
-        Some("agent_startup_failed")
+        Some("startup_timeout")
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -436,11 +611,11 @@ fn startup_timeout_is_bounded_for_every_provider_even_with_a_live_pending_termin
             .started_at_ms;
         let (events, _) = mpsc::channel();
         worker
-            .cleanup_failed_startups(std::slice::from_ref(&info), &events, start + 29_999)
+            .cleanup_failed_startups(std::slice::from_ref(&info), &events, start + 89_999)
             .unwrap();
         assert!(worker.state.agent(agent).is_some());
         worker
-            .cleanup_failed_startups(&[info], &events, start + 30_000)
+            .cleanup_failed_startups(&[info], &events, start + 90_000)
             .unwrap();
         assert!(worker.state.agent(agent).is_some());
         assert_eq!(worker.state.notices(room).count(), 0);
@@ -450,7 +625,7 @@ fn startup_timeout_is_bounded_for_every_provider_even_with_a_live_pending_termin
             .actionable_error
             .as_deref()
             .unwrap()
-            .contains("within 30 seconds"));
+            .contains("within 90 seconds"));
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -540,7 +715,7 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
         status["requests"][0]["stage"], "abandoned",
         "a definite launch failure must close never-submitted work"
     );
-    assert_eq!(status["requests"][0]["reason"], "agent_startup_failed");
+    assert_eq!(status["requests"][0]["reason"], "startup_timeout");
     assert_eq!(status["requests"][0]["detail"], detail);
     assert!(error.contains("Command:") && error.contains("Last screen lines:"));
     let diagnostics: serde_json::Value = serde_json::from_str(
@@ -565,7 +740,7 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
         RequestPhase::Abandoned
     );
     assert!(
-        detail.contains("30 seconds") && detail.contains("Resend"),
+        detail.contains("90 seconds") && detail.contains("Resend"),
         "{detail}"
     );
     assert_eq!(
@@ -575,7 +750,7 @@ fn startup_failure_abandonment_and_diagnostics_survive_restart() {
             .unwrap()
             .failure_reason
             .as_deref(),
-        Some("agent_startup_failed")
+        Some("startup_timeout")
     );
     drop(worker);
     let mut worker = Worker::open(
@@ -749,7 +924,7 @@ fn blocked_shell_without_the_expected_provider_still_expires() {
         .unwrap()
         .started_at_ms;
     worker
-        .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 30_000)
+        .cleanup_failed_startups(&[info], &mpsc::channel().0, start + 90_000)
         .unwrap();
     assert!(worker.state.agent(agent).is_some());
     assert_eq!(worker.state.notices(room).count(), 0);
@@ -883,6 +1058,7 @@ fn startup_failure_closes_queued_work_and_notifies_its_sender() {
             io::now_ms(),
         )
         .unwrap();
+    worker.transport = exited_startup_transport(&dir);
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
         .unwrap();
@@ -897,7 +1073,7 @@ fn startup_failure_closes_queued_work_and_notifies_its_sender() {
             .unwrap()
             .failure_reason
             .as_deref(),
-        Some("agent_startup_failed")
+        Some("provider_exited_during_startup")
     );
     assert!(worker.state.queued_requests(agent).is_empty());
     assert_eq!(
@@ -925,7 +1101,7 @@ fn startup_failure_closes_queued_work_and_notifies_its_sender() {
         .worker_events_for(worker.state.request(request).unwrap());
     assert_eq!(events.len(), 1, "{events:?}");
     assert!(
-        events[0].1.contains("agent_startup_failed") && events[0].1.contains("Resend"),
+        events[0].1.contains("provider_exited_during_startup") && events[0].1.contains("Resend"),
         "{events:?}"
     );
     worker.state.retain_worker_outcomes(io::now_ms());
@@ -947,7 +1123,10 @@ fn startup_failure_closes_queued_work_and_notifies_its_sender() {
         .collect();
     assert_eq!(notices.len(), 1);
     assert!(
-        notices[0].prompt.text.contains("agent_startup_failed")
+        notices[0]
+            .prompt
+            .text
+            .contains("provider_exited_during_startup")
             && notices[0].prompt.text.contains("Resend"),
         "{}",
         notices[0].prompt.text
@@ -966,6 +1145,7 @@ fn startup_failure_abandons_new_sends_with_persistent_recovery_detail() {
             io::now_ms(),
         )
         .unwrap();
+    worker.transport = exited_startup_transport(&dir);
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
         .unwrap();
@@ -989,7 +1169,7 @@ fn startup_failure_abandons_new_sends_with_persistent_recovery_detail() {
     );
     assert_eq!(
         state.request(request).unwrap().failure_reason.as_deref(),
-        Some("agent_startup_failed")
+        Some("provider_exited_during_startup")
     );
     let detail = state
         .request(request)
@@ -1005,7 +1185,7 @@ fn startup_failure_abandons_new_sends_with_persistent_recovery_detail() {
     state.delete_agent(agent, io::now_ms()).unwrap();
     assert_eq!(
         state.request(request).unwrap().failure_reason.as_deref(),
-        Some("agent_startup_failed")
+        Some("provider_exited_during_startup")
     );
     assert_eq!(
         state.request(request).unwrap().submission_error.as_deref(),
@@ -1075,6 +1255,7 @@ fn startup_failure_does_not_abandon_submitted_or_uncertain_work() {
                 io::now_ms(),
             )
             .unwrap();
+        worker.transport = exited_startup_transport(&dir);
         worker
             .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
             .unwrap();
@@ -1687,6 +1868,7 @@ fn startup_failure_notification_is_deduplicated_after_restart() {
             io::now_ms(),
         )
         .unwrap();
+    worker.transport = exited_startup_transport(&dir);
     worker
         .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
         .unwrap();
@@ -1804,6 +1986,7 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
                 io::now_ms(),
             )
             .unwrap();
+        worker.transport = exited_startup_transport(&dir);
         worker
             .cleanup_failed_startups(&[], &mpsc::channel().0, io::now_ms())
             .unwrap();
@@ -1835,7 +2018,10 @@ fn startup_failure_preserves_generated_system_prompt_across_restart() {
         }
         for send in sends {
             assert_eq!(send.phase, RequestPhase::Abandoned);
-            assert_eq!(send.failure_reason.as_deref(), Some("agent_startup_failed"));
+            assert_eq!(
+                send.failure_reason.as_deref(),
+                Some("provider_exited_during_startup")
+            );
         }
     }
 }
@@ -1888,7 +2074,7 @@ fn startup_launch_rejection_unsupported_shell_closes_new_sender_work() {
     );
     assert_eq!(
         request_state.failure_reason.as_deref(),
-        Some("agent_startup_failed")
+        Some("launch_input_failed")
     );
 }
 
@@ -2002,7 +2188,7 @@ fn definite_launch_rejection_vanished_pane_abandons_new_sender_work() {
     assert_eq!(request_state.phase, RequestPhase::Abandoned);
     assert_eq!(
         request_state.failure_reason.as_deref(),
-        Some("agent_startup_failed")
+        Some("launch_input_failed")
     );
 }
 

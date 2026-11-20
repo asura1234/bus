@@ -1872,6 +1872,7 @@ fn reply_routing_keeps_worker_reply_through_orchestrator_startup_failure() {
                 native_terminal_id: None,
                 recovery: None,
                 failure: Some(crate::messaging::model::StartupFailure {
+                    cause: None,
                     reason: "the native provider launch ended before startup was confirmed".into(),
                     recovery: "Inspect the agent's terminal.".into(),
                 }),

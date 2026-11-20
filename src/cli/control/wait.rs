@@ -333,11 +333,14 @@ fn abandonment(status: &Value, follower: bool) -> Option<(&'static str, String)>
                 }),
         ));
     }
-    if abandoned["reason"] == crate::messaging::model::AGENT_STARTUP_FAILED {
+    if let Some(reason) = abandoned["reason"]
+        .as_str()
+        .filter(|reason| crate::messaging::model::Request::is_startup_failure_reason(reason))
+    {
         return Some((
             "message_abandoned",
             format!(
-                "Bus abandoned message {} for agent {agent} (agent_startup_failed): {}",
+                "Bus abandoned message {} for agent {agent} ({reason}): {}",
                 status["message_id"],
                 abandoned["detail"]
                     .as_str()

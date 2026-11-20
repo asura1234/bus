@@ -254,13 +254,21 @@ pub(crate) const CODEX_BOOTSTRAP_FAILED: &str =
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct StartupFailure {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cause: Option<String>,
     pub(crate) reason: String,
     pub(crate) recovery: String,
 }
 
 impl StartupFailure {
     pub(crate) fn notice(&self) -> String {
-        format!("Startup failed: {}. {}", self.reason, self.recovery)
+        match &self.cause {
+            Some(cause) => format!(
+                "Startup failed: [{cause}] {}. {}",
+                self.reason, self.recovery
+            ),
+            None => format!("Startup failed: {}. {}", self.reason, self.recovery),
+        }
     }
 }
 

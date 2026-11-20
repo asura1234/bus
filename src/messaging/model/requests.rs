@@ -744,12 +744,30 @@ pub(crate) fn rejection_reason(message: &str) -> &'static str {
 }
 
 impl Request {
+    pub(crate) fn is_startup_failure_reason(reason: &str) -> bool {
+        use super::StartupFailure;
+
+        matches!(
+            reason,
+            super::AGENT_STARTUP_FAILED
+                | super::CODEX_BOOTSTRAP_FAILED
+                | StartupFailure::TIMEOUT
+                | StartupFailure::PROVIDER_EXIT
+                | StartupFailure::TERMINAL_CREATION
+                | StartupFailure::LAUNCH_INPUT
+                | StartupFailure::NATIVE_RESUME
+        )
+    }
+
+    pub(crate) fn failed_during_startup(&self) -> bool {
+        self.failure_reason
+            .as_deref()
+            .is_some_and(Self::is_startup_failure_reason)
+    }
+
     /// Durable send outcome, never the agent's mutable latest error or a reply.
     pub(crate) fn submission_notice(&self) -> Option<String> {
-        if matches!(
-            self.failure_reason.as_deref(),
-            Some(super::AGENT_STARTUP_FAILED | super::CODEX_BOOTSTRAP_FAILED)
-        ) {
+        if self.failed_during_startup() {
             return self.submission_error.clone();
         }
         let unconfirmed = self.failure_reason.as_deref() == Some("submission_unconfirmed")

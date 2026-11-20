@@ -528,6 +528,7 @@ fn cold_resume_after_startup_failure_accepts_explicitly_resent_work() {
                 native_terminal_id: None,
                 recovery: None,
                 failure: Some(crate::messaging::model::StartupFailure {
+                    cause: None,
                     reason: "provider launch ended before startup was confirmed".into(),
                     recovery: "Repair startup. Resend the closed work.".into(),
                 }),

@@ -328,6 +328,7 @@ fn tui_error_text_startup_failure_and_its_routed_notice_are_log_only() {
                 native_terminal_id: None,
                 recovery: None,
                 failure: Some(StartupFailure {
+                    cause: None,
                     reason: "STARTUP_CAUSE_SENTINEL".into(),
                     recovery: "RECOVERY_SENTINEL".into(),
                 }),

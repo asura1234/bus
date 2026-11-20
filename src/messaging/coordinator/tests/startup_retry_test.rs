@@ -252,9 +252,10 @@ fn codex_bootstrap_retry_excludes_auth_config_other_providers_and_unproven_exit(
         });
         let start = worker.state.agent(agent).unwrap().startup.as_ref().unwrap().started_at_ms;
         worker.cleanup_failed_startups(&[], &mpsc::channel().0, start + 30_000).unwrap();
-        worker.cleanup_failed_startups(&[], &mpsc::channel().0, start + 60_000).unwrap();
+        worker.cleanup_failed_startups(&[], &mpsc::channel().0, start + 90_000).unwrap();
         assert_eq!(*calls.lock().unwrap(), 0, "{provider:?}: {screen}");
-        assert_eq!(worker.state.request(request).unwrap().failure_reason.as_deref(), Some("agent_startup_failed"));
+        let reason = if exited { "provider_exited_during_startup" } else { "startup_timeout" };
+        assert_eq!(worker.state.request(request).unwrap().failure_reason.as_deref(), Some(reason));
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }

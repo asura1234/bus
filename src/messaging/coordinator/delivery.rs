@@ -187,7 +187,8 @@ impl Worker {
 
     fn delivery_route(&self, agent: &RoomAgent) -> Option<DeliveryRoute> {
         let now_ms = io::now_ms();
-        if self.native_submissions.contains_key(&agent.id)
+        if agent.startup.is_some()
+            || self.native_submissions.contains_key(&agent.id)
             || self.submission_rechecks.contains(&agent.id)
             || self.withdrawn_at.contains_key(&agent.id)
             || agent.provider_retry.as_ref().is_some_and(|hold| {
