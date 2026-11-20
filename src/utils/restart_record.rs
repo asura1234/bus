@@ -110,7 +110,11 @@ pub(crate) struct TuiBuild {
     pub(crate) sha: String,
     pub(crate) binary: PathBuf,
     pub(crate) backup_binary: PathBuf,
+    /// The process the launcher spawned, which can be a tty supervisor.
     pub(crate) process: LivePid,
+    /// The process running the coordinator when it differs from `process`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) worker: Option<LivePid>,
 }
 
 pub(crate) fn tui_build_path(root: &Path) -> PathBuf {

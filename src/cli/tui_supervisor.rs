@@ -18,10 +18,12 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 use super::session_pick::{parse_invocation, Action};
+use crate::platform;
 
 pub(crate) const SUPERVISOR_ENV: &str = "BUS_TUI_SUPERVISOR";
 pub(crate) const SUPERVISED_ENV: &str = "BUS_TUI_SUPERVISED";
 pub(crate) const HANDOFF_FD_ENV: &str = "BUS_TUI_HANDOFF_FD";
+const RECEIPT_PARENT_ENV: &str = "BUS_TUI_RECEIPT_PARENT_PID";
 /// Exit status a TUI uses to ask its supervisor to relaunch from `active.json`.
 pub(crate) const RELAUNCH_EXIT: i32 = 86;
 
@@ -36,12 +38,22 @@ pub(crate) fn is_supervised_worker() -> bool {
     SUPERVISED.load(Ordering::Relaxed)
 }
 
-/// Remember the supervisor pipe, then drop both markers from the environment
-/// so a server or agent spawned later does not inherit them.
+/// Capture the private launch context before the worker spawns a server or agent.
 pub(crate) fn capture_worker_handoff_fd() {
-    if std::env::var(SUPERVISED_ENV).ok().as_deref() == Some("1") {
+    let supervised = std::env::var(SUPERVISED_ENV).ok().as_deref() == Some("1");
+    let receipt_parent = std::env::var(RECEIPT_PARENT_ENV)
+        .ok()
+        .and_then(|text| text.parse::<u32>().ok());
+    std::env::remove_var(RECEIPT_PARENT_ENV);
+    if supervised {
         SUPERVISED.store(true, Ordering::Relaxed);
         std::env::remove_var(SUPERVISED_ENV);
+        if let Some(parent) = receipt_parent
+            .filter(|&pid| pid == unsafe { libc::getppid() } as u32)
+            .and_then(platform::process_instance)
+        {
+            crate::client::restart::set_receipt_parent(parent);
+        }
     }
     let Ok(text) = std::env::var(HANDOFF_FD_ENV) else {
         return;
@@ -168,10 +180,13 @@ fn exit_now(code: i32) -> ! {
 }
 
 fn spawn_worker(args: &[String], write_fd: RawFd) -> io::Result<Child> {
+    // Legacy restart helpers check the PID they spawned. The initial worker
+    // publishes the supervisor's identity once the worker is actually ready.
     let mut command = Command::new(std::env::current_exe()?);
     command
         .args(args)
         .env(SUPERVISED_ENV, "1")
+        .env(RECEIPT_PARENT_ENV, std::process::id().to_string())
         .env(HANDOFF_FD_ENV, write_fd.to_string())
         .env_remove(SUPERVISOR_ENV);
     command.spawn()

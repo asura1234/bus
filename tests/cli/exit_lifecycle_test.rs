@@ -4,8 +4,10 @@
 #![cfg(unix)]
 
 use std::collections::HashMap;
+use std::ffi::CStr;
 use std::fs;
 use std::os::fd::{FromRawFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -16,6 +18,8 @@ use std::time::{Duration, Instant};
 
 struct Session {
     root: PathBuf,
+    data: PathBuf,
+    registered: bool,
     master: RawFd,
     child: std::process::Child,
     output: Arc<Mutex<Vec<u8>>>,
@@ -40,18 +44,24 @@ impl Drop for Session {
 }
 
 fn session() -> Session {
-    open_session(&[])
+    open_session(&[], false)
 }
 
-fn open_session(extra_env: &[(&str, &str)]) -> Session {
-    // The shared allocator stays under macOS's Unix-socket path limit because
-    // its root is /tmp, unlike `std::env::temp_dir()`.
-    let root = crate::fixture_dirs::unique_temp_path("life");
-    fs::create_dir_all(&root).unwrap();
-    let mut perms = fs::metadata(&root).unwrap().permissions();
-    perms.set_mode(0o700);
-    fs::set_permissions(&root, perms.clone()).unwrap();
-    for name in ["data", "home", "project"] {
+fn open_session(extra_env: &[(&str, &str)], resume: bool) -> Session {
+    // The registry inserts .local/share/bus/sessions/<id> before the socket
+    // suffix. Keep this private home short enough for macOS's sun_path.
+    let mut template = *b"/tmp/lXXXXXX\0";
+    let directory = unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) };
+    assert!(
+        !directory.is_null(),
+        "mkdtemp: {}",
+        std::io::Error::last_os_error()
+    );
+    let root = PathBuf::from(std::ffi::OsStr::from_bytes(
+        unsafe { CStr::from_ptr(directory) }.to_bytes(),
+    ));
+    let perms = fs::Permissions::from_mode(0o700);
+    for name in ["data", "project"] {
         let path = root.join(name);
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, perms.clone()).unwrap();
@@ -90,16 +100,15 @@ fn open_session(extra_env: &[(&str, &str)]) -> Session {
         std::io::Error::last_os_error()
     );
     let binary = env!("CARGO_BIN_EXE_bus");
-    let data = root.join("data");
-    let home = root.join("home");
+    let mut data = root.join("data");
+    let home = &root;
     let mut command = Command::new(binary);
     command
         .args(["--dev", "--yolo"])
         .current_dir(root.join("project"))
         .env_clear()
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env("BUS_DATA_DIR", &data)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .env("TERM", "xterm-256color")
         .env("TERM_PROGRAM", "ghostty")
@@ -107,6 +116,20 @@ fn open_session(extra_env: &[(&str, &str)]) -> Session {
         .env("USER", "tester")
         .env("TMPDIR", "/tmp")
         .env("LANG", "C");
+    if resume {
+        let id = "0123456789abcdef";
+        data = home.join(".local/share/bus/sessions").join(id);
+        fs::create_dir_all(&data).unwrap();
+        fs::set_permissions(&data, perms).unwrap();
+        fs::write(
+            data.join("session.json"),
+            serde_json::json!({"version": 1, "id": id, "created_at_ms": 1}).to_string(),
+        )
+        .unwrap();
+        command.args(["resume", id]);
+    } else {
+        command.env("BUS_DATA_DIR", &data);
+    }
     for (key, value) in extra_env {
         command.env(key, value);
     }
@@ -150,6 +173,8 @@ fn open_session(extra_env: &[(&str, &str)]) -> Session {
     });
     Session {
         root,
+        data,
+        registered: resume,
         master,
         child,
         output,
@@ -168,8 +193,8 @@ fn screen(session: &Session) -> String {
         .collect()
 }
 
-fn data(session: &Session) -> PathBuf {
-    session.root.join("data")
+fn data(session: &Session) -> &Path {
+    &session.data
 }
 
 fn server_pid(session: &Session) -> Option<u32> {
@@ -178,11 +203,51 @@ fn server_pid(session: &Session) -> Option<u32> {
     value["pid"].as_u64().map(|pid| pid as u32)
 }
 
-fn tui_pid(session: &Session) -> Option<u32> {
-    let path = data(session).join("restarts/tui.json");
-    let text = fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value["process"]["pid"].as_u64().map(|pid| pid as u32)
+fn tui_receipt(session: &Session) -> Option<serde_json::Value> {
+    let text = fs::read_to_string(data(session).join("restarts/tui.json")).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn assert_receipt_process(session: &Session, pid: u32) {
+    let receipt = tui_receipt(session).expect("tui.json");
+    assert_eq!(receipt["process"]["pid"].as_u64(), Some(u64::from(pid)));
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    assert_eq!(
+        receipt["process"]["birth"].as_u64(),
+        Some(process_birth(pid))
+    );
+    assert!(running(pid));
+}
+
+#[cfg(target_os = "macos")]
+fn process_birth(pid: u32) -> u64 {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as libc::c_int;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    assert_eq!(read, size, "read birth for pid {pid}");
+    info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
+}
+
+#[cfg(target_os = "linux")]
+fn process_birth(pid: u32) -> u64 {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let (_, fields) = stat.rsplit_once(") ").unwrap();
+    fields.split_whitespace().nth(19).unwrap().parse().unwrap()
+}
+
+fn tui_worker(session: &Session) -> u32 {
+    let binary = env!("CARGO_BIN_EXE_bus");
+    let pids = sorted_tty_readers(session.child.id(), binary);
+    assert_eq!(pids.len(), 1, "expected one TUI worker, got {pids:?}");
+    pids[0]
 }
 
 fn alive(pid: u32) -> bool {
@@ -256,6 +321,11 @@ fn stdin_path(pid: u32) -> String {
         .to_string()
 }
 
+fn has_tty_stdin(pid: u32) -> bool {
+    let path = stdin_path(pid);
+    path.starts_with("/dev/tty") || path.starts_with("/dev/pts/")
+}
+
 fn sorted_tty_readers(supervisor: u32, binary: &str) -> Vec<u32> {
     let output = Command::new("ps")
         .args(["-axo", "pid=,ppid=,command="])
@@ -276,7 +346,7 @@ fn sorted_tty_readers(supervisor: u32, binary: &str) -> Vec<u32> {
         if !command.contains(binary) || command.contains(" server") {
             continue;
         }
-        if stdin_path(pid).starts_with("/dev/tty") && descends_from(pid, supervisor, &parent) {
+        if descends_from(pid, supervisor, &parent) && has_tty_stdin(pid) {
             readers.push(pid);
         }
     }
@@ -300,12 +370,26 @@ fn descends_from(mut pid: u32, ancestor: u32, parent: &HashMap<u32, u32>) -> boo
     false
 }
 
+fn session_command(session: &Session) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bus"));
+    command
+        .env_clear()
+        .env("HOME", &session.root)
+        .env("USERPROFILE", &session.root)
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("USER", "tester");
+    if !session.registered {
+        command.env("BUS_DATA_DIR", data(session));
+    }
+    command
+}
+
 fn restart(session: &Session) {
     let log = data(session).join("restarts/log.jsonl");
     let before = fs::read_to_string(&log)
         .map(|text| text.lines().count())
         .unwrap_or(0);
-    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+    let output = session_command(session)
         .args([
             "--dev",
             "restart",
@@ -313,12 +397,6 @@ fn restart(session: &Session) {
             env!("CARGO_BIN_EXE_bus"),
             "--confirm",
         ])
-        .env_clear()
-        .env("HOME", session.root.join("home"))
-        .env("USERPROFILE", session.root.join("home"))
-        .env("BUS_DATA_DIR", data(session))
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-        .env("USER", "tester")
         .output()
         .expect("restart");
     assert!(
@@ -343,16 +421,45 @@ fn restart(session: &Session) {
 }
 
 #[test]
+fn legacy_resume_receipt_identifies_the_spawned_process() {
+    let session = open_session(&[], true);
+    assert!(
+        wait_until(30, || tui_receipt(&session).is_some()),
+        "registry resume did not publish tui.json; screen {}",
+        screen(&session)
+    );
+    let spawned = session.child.id();
+    assert_receipt_process(&session, spawned);
+    let worker = tui_worker(&session);
+    assert_ne!(worker, spawned);
+    assert_eq!(tui_receipt(&session).unwrap()["worker"]["pid"], worker);
+    // Registry sessions with no work are discarded when their UI exits.
+    let room = session_command(&session)
+        .args(["--dev", "room", "create", "keep-session"])
+        .output()
+        .unwrap();
+    assert!(
+        room.status.success(),
+        "{}",
+        String::from_utf8_lossy(&room.stderr)
+    );
+    restart(&session);
+    assert!(running(spawned));
+    assert_receipt_process(&session, tui_worker(&session));
+    assert!(tui_receipt(&session).unwrap().get("worker").is_none());
+}
+
+#[test]
 fn restart_handoff_reaps_the_previous_tui_and_a_second_restart_leaves_one() {
-    let binary = env!("CARGO_BIN_EXE_bus");
     let session = session();
     assert!(
-        wait_until(30, || tui_pid(&session).is_some()),
+        wait_until(30, || tui_receipt(&session).is_some()),
         "tui.json was not written; screen {}",
         screen(&session)
     );
-    let first = tui_pid(&session).unwrap();
+    let first = tui_worker(&session);
     let supervisor = session.child.id();
+    assert_receipt_process(&session, supervisor);
     assert_ne!(
         first, supervisor,
         "the shell-facing process must not be the TUI"
@@ -363,27 +470,27 @@ fn restart_handoff_reaps_the_previous_tui_and_a_second_restart_leaves_one() {
         wait_until(3, || !alive(first)),
         "previous TUI {first} still alive after handoff"
     );
-    let second = tui_pid(&session).expect("replacement tui.json");
+    let second = tui_worker(&session);
+    assert_receipt_process(&session, second);
     assert_ne!(second, first);
     assert!(alive(second));
-    assert_eq!(sorted_tty_readers(supervisor, binary), vec![second]);
     restart(&session);
     assert!(
         wait_until(3, || !alive(second)),
         "second TUI {second} still alive after the next handoff"
     );
-    let third = tui_pid(&session).expect("third tui.json");
+    let third = tui_worker(&session);
+    assert_receipt_process(&session, third);
     assert!(alive(third));
-    assert_eq!(sorted_tty_readers(supervisor, binary), vec![third]);
     assert!(alive(supervisor));
-    assert!(!stdin_path(supervisor).starts_with("/dev/tty"));
+    assert!(!has_tty_stdin(supervisor));
 }
 
 #[test]
 fn sigterm_reaps_the_tui_without_sigkill() {
     let session = session();
-    assert!(wait_until(30, || tui_pid(&session).is_some()));
-    let tui = tui_pid(&session).unwrap();
+    assert!(wait_until(30, || tui_receipt(&session).is_some()));
+    let tui = tui_worker(&session);
     assert_eq!(unsafe { libc::kill(tui as i32, libc::SIGTERM) }, 0);
     let supervisor = session.child.id();
     assert!(
@@ -397,8 +504,8 @@ fn sigterm_reaps_the_tui_without_sigkill() {
 #[test]
 fn closed_tty_reaps_the_tui() {
     let mut session = session();
-    assert!(wait_until(30, || tui_pid(&session).is_some()));
-    let tui = tui_pid(&session).unwrap();
+    assert!(wait_until(30, || tui_receipt(&session).is_some()));
+    let tui = tui_worker(&session);
     unsafe {
         libc::close(session.master);
     }
@@ -416,13 +523,17 @@ fn closed_tty_reaps_the_tui() {
 
 #[test]
 fn forced_quit_reaps_the_tui() {
-    let session = open_session(&[
-        ("BUS_QUIT_SAVE_TIMEOUT_MS", "1"),
-        // Shutdown is in-process and otherwise acks in a few milliseconds,
-        // before the 100ms stdin poll can deliver the confirming key.
-        ("BUS_QUIT_SHUTDOWN_DELAY_MS", "400"),
-    ]);
-    assert!(wait_until(30, || tui_pid(&session).is_some()));
+    let session = open_session(
+        &[
+            ("BUS_QUIT_SAVE_TIMEOUT_MS", "1"),
+            // Shutdown is in-process and otherwise acks in a few milliseconds,
+            // before the 100ms stdin poll can deliver the confirming key.
+            ("BUS_QUIT_SHUTDOWN_DELAY_MS", "400"),
+        ],
+        false,
+    );
+    assert!(wait_until(30, || tui_receipt(&session).is_some()));
+    let tui = tui_worker(&session);
     unsafe {
         assert_eq!(libc::write(session.master, b"\x11".as_ptr().cast(), 1), 1);
     }
@@ -439,7 +550,6 @@ fn forced_quit_reaps_the_tui() {
         "forced quit did not record bus.quit.forced: {}",
         client_log(&session)
     );
-    let tui = tui_pid(&session).unwrap();
     let supervisor = session.child.id();
     assert!(
         wait_until(8, || !running(tui) && !running(supervisor)),
@@ -453,7 +563,7 @@ fn forced_quit_reaps_the_tui() {
 fn client_log(session: &Session) -> String {
     let mut found = String::new();
     let root = data(session);
-    let _ = visit_logs(&root, &mut found);
+    let _ = visit_logs(root, &mut found);
     found
 }
 

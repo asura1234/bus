@@ -34,7 +34,7 @@ def until(predicate, timeout=40):
 def coordinator_pid(bus):
     # The shell waits on a supervisor. The coordinator is the TUI child.
     receipt = json.loads((bus.data / "restarts/tui.json").read_text())
-    return int(receipt["process"]["pid"])
+    return int(receipt.get("worker", receipt["process"])["pid"])
 
 
 def stop_spooled(data):

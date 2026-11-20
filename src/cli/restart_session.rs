@@ -262,11 +262,9 @@ impl HandoffIo for LiveHandoff {
                         .pid
                         .is_some_and(|pid| crate::platform::process_instance(pid).is_some())
             });
-            let tui_ready = tui.as_ref().is_some_and(|tui| {
-                tui.sha == expected_sha
-                    && tui.process.pid == pid
-                    && crate::platform::process_still_live(pid, tui.process.birth)
-            });
+            let tui_ready = tui
+                .as_ref()
+                .is_some_and(|tui| tui_is_ready(tui, pid, expected_sha));
             if server_ready && tui_ready && super::server_answered(&super::restarted_api_socket()) {
                 return Ok(());
             }
@@ -292,6 +290,18 @@ impl HandoffIo for LiveHandoff {
     fn now_ms(&self) -> u64 {
         crate::utils::time::now_ms()
     }
+}
+
+fn tui_is_ready(tui: &restart_record::TuiBuild, pid: u32, expected_sha: &str) -> bool {
+    tui.sha == expected_sha && tui.process.pid == pid && tui_processes_live(tui)
+}
+
+pub(super) fn tui_processes_live(tui: &restart_record::TuiBuild) -> bool {
+    crate::platform::process_still_live(tui.process.pid, tui.process.birth)
+        && tui
+            .worker
+            .as_ref()
+            .is_none_or(|worker| crate::platform::process_still_live(worker.pid, worker.birth))
 }
 
 fn resume_command(binary: &Path, plan: &HandoffPlan) -> Command {
@@ -328,6 +338,98 @@ fn resume_command(binary: &Path, plan: &HandoffPlan) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn tui_health_requires_the_spawned_incarnation_and_exact_sha() {
+        use crate::platform::process_instance;
+        use std::process::Stdio;
+
+        let mut child = Command::new("/bin/sleep")
+            .arg("60")
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let worker = process_instance(child.id());
+        let supervisor = process_instance(std::process::id()).unwrap();
+        let receipt = |process, worker| {
+            serde_json::from_value::<restart_record::TuiBuild>(serde_json::json!({
+                "sha": "expected",
+                "binary": "/new/bus",
+                "backup_binary": "/saved/bus",
+                "process": process,
+                "worker": worker,
+            }))
+            .unwrap()
+        };
+        let supervised_ready = worker.is_some_and(|worker| {
+            tui_is_ready(&receipt(worker, None), worker.pid, "expected")
+                && tui_is_ready(
+                    &receipt(supervisor, Some(worker)),
+                    supervisor.pid,
+                    "expected",
+                )
+                && !tui_is_ready(&receipt(supervisor, Some(worker)), worker.pid, "expected")
+        });
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(supervised_ready);
+        let worker = worker.unwrap();
+
+        let direct = receipt(supervisor, None);
+        assert!(tui_is_ready(&direct, supervisor.pid, "expected"));
+        assert!(!tui_is_ready(&direct, worker.pid, "expected"));
+        assert!(!tui_is_ready(&direct, supervisor.pid, "other"));
+
+        let reused_pid = crate::platform::ProcessInstance {
+            birth: supervisor.birth ^ 1,
+            ..supervisor
+        };
+        assert!(!tui_is_ready(
+            &receipt(reused_pid, None),
+            supervisor.pid,
+            "expected"
+        ));
+        assert!(!tui_is_ready(
+            &receipt(worker, None),
+            worker.pid,
+            "expected"
+        ));
+        assert!(!tui_is_ready(
+            &receipt(supervisor, Some(worker)),
+            supervisor.pid,
+            "expected"
+        ));
+    }
+
+    #[test]
+    fn pre_supervisor_reader_accepts_the_new_receipt() {
+        use restart_record::{LivePid, TuiBuild};
+
+        // Same fields and Serde behavior as TuiBuild at ac406e444.
+        #[derive(serde::Deserialize)]
+        struct LegacyTuiBuild {
+            sha: String,
+            binary: std::path::PathBuf,
+            backup_binary: std::path::PathBuf,
+            process: LivePid,
+        }
+
+        let receipt = TuiBuild {
+            sha: "expected".into(),
+            binary: "/new/bus".into(),
+            backup_binary: "/saved/bus".into(),
+            process: LivePid { pid: 10, birth: 20 },
+            worker: Some(LivePid { pid: 11, birth: 21 }),
+        };
+        let wire = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(wire["worker"]["pid"], 11);
+        let legacy: LegacyTuiBuild = serde_json::from_value(wire).unwrap();
+        assert_eq!(legacy.sha, receipt.sha);
+        assert_eq!(legacy.binary, receipt.binary);
+        assert_eq!(legacy.backup_binary, receipt.backup_binary);
+        assert_eq!(legacy.process, receipt.process);
+    }
 
     #[test]
     fn post_quit_missing_request_returns_error_and_records_the_original_cause() {

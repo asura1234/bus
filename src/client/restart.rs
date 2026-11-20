@@ -4,8 +4,20 @@ use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
+use std::sync::OnceLock;
 
 static RESTART_PENDING: AtomicBool = AtomicBool::new(false);
+#[cfg(unix)]
+static RECEIPT_PARENT: OnceLock<LivePid> = OnceLock::new();
+
+#[cfg(unix)]
+pub(crate) fn set_receipt_parent(parent: crate::platform::ProcessInstance) {
+    let _ = RECEIPT_PARENT.set(LivePid {
+        pid: parent.pid,
+        birth: parent.birth,
+    });
+}
 
 struct PendingRestart<'a>(&'a AtomicBool);
 
@@ -94,16 +106,26 @@ fn record_ready_inner(server: Option<&BuildStamp>) -> Result<(), String> {
     }
     let live = crate::platform::process_instance(std::process::id())
         .ok_or("could not identify this TUI process")?;
+    let worker = LivePid {
+        pid: live.pid,
+        birth: live.birth,
+    };
+    #[cfg(unix)]
+    let parent = RECEIPT_PARENT.get().cloned();
+    #[cfg(not(unix))]
+    let parent = None;
+    let (process, worker) = match parent {
+        Some(parent) => (parent, Some(worker)),
+        None => (worker, None),
+    };
     restart_record::write_json(
         &restart_record::tui_build_path(&root),
         &TuiBuild {
             sha: sha.into(),
             binary,
             backup_binary,
-            process: LivePid {
-                pid: live.pid,
-                birth: live.birth,
-            },
+            process,
+            worker,
         },
     )
 }
