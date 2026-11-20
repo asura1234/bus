@@ -697,20 +697,25 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     session.ok(&["click", "--text", "Message selected agents"]);
     session.ok(&["type", "hello from the driver"]);
     session.ok(&["press", "enter"]);
-    let reply = session.ok(&[
+    session.ok(&[
         "wait",
         "--text",
         "hello from the driver",
         "--timeout",
         "20s",
     ]);
-    assert_eq!(reply["matches"].as_array().unwrap().len(), 1);
     let rooms = bus_state(&session)["rooms"].as_array().unwrap().len();
     assert_eq!(rooms, 3);
 
-    // A visible optimistic row does not yet provide stable copy coordinates.
-    // Wait for its canonical request, then the provider's completion receipt.
-    session.ok(&["wait", "--text", "[pending]", "--gone", "--timeout", "20s"]);
+    // The rendered answer proves the original composer send is durable.
+    let reply = session.ok(&[
+        "wait",
+        "--text",
+        "fake reply: hello from the driver",
+        "--timeout",
+        "30s",
+    ]);
+    assert_eq!(reply["matches"].as_array().unwrap().len(), 1);
     let (code, history) = parse(scratch_bus(
         &session,
         &["history", "--room", "bus", "--limit", "20"],
