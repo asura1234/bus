@@ -50,7 +50,7 @@ impl BusState {
                 .and_then(|id| self.request(id))
                 .unwrap_or(request);
             match self.expired_queue_rejection(lead, now_ms) {
-                Some((_, since)) => since,
+                Some((_, since)) => since?,
                 None => self.queued_stall_baseline(lead, self.agent(lead.agent_id)?),
             }
         };

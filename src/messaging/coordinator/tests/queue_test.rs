@@ -178,6 +178,82 @@ fn queued_rejection_logs_fixed_and_agy_extended_deadlines() {
 }
 
 #[test]
+fn busy_refusal_waits_for_exit_and_logs_no_expiry_deadline() {
+    use crate::messaging::model::{ExitSnapshot, SubmissionOutcome, QUEUED_STALL_MS};
+
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "busy refusal");
+    let submitted = worker
+        .state
+        .request(request)
+        .unwrap()
+        .prompt
+        .submitted_at_ms;
+    let now = submitted + QUEUED_STALL_MS + 1;
+    let mut state = worker.state.clone();
+    state
+        .begin_submission(request, "launch", submitted)
+        .unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::DefinitelyRejected {
+                message: "Agent is not idle; prompt was not sent".into(),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+
+    let logs = crate::utils::logging::test_capture::Capture::default();
+    logs.run(|| worker.expire_queued_requests(now).unwrap());
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    assert!(!logs.text().contains("queued_stalled"));
+
+    let mut state = worker.state.clone();
+    state
+        .record_exit_snapshot(
+            agent,
+            ExitSnapshot {
+                launch_id: Some("launch".into()),
+                terminal_id: "terminal".into(),
+                path: None,
+                error: None,
+                tail: String::new(),
+                at_ms: now,
+                terminal_closed: Some(true),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    logs.run(|| worker.expire_queued_requests(now).unwrap());
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .failure_reason
+            .as_deref(),
+        Some("agent_not_idle")
+    );
+    let text = logs.text();
+    let event = text
+        .lines()
+        .find(|line| line.contains("queued_stalled"))
+        .expect(&text);
+    assert!(
+        event.contains("failure_reason=\"agent_not_idle\""),
+        "{event}"
+    );
+    assert!(!event.contains("baseline_at_ms"), "{event}");
+    assert!(!event.contains("deadline_at_ms"), "{event}");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn queued_dialog_notice_fallback_logs_the_original_submission_deadline() {
     use crate::messaging::model::{DialogNoticeTo, QUEUED_STALL_MS};
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
