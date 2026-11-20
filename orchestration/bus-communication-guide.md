@@ -181,6 +181,16 @@ message as the next turn; `steer` joins the running turn and surfaces at its
 next model step; `queue` waits for the turn to end. Interrupt discards
 in-flight work, so use it to change course, never to hurry an answer.
 
+Choose from strongest to weakest. `interrupt` when the agent must act and
+change course now — if it keeps doing what it is doing, that effort is
+wasted, so stop its turn and deliver immediately. `steer` when the running
+work stays valid but needs a correction or addition, so join the turn and
+surface at its next model step without stopping it. `queue` for a follow-up
+task that should happen after the current work finishes; it must not
+disturb the running turn. Does the current work become waste if it
+continues unchanged? Interrupt. Does it need direction while it continues?
+Steer. Is this the next task rather than a change to this one? Queue.
+
 The developer's room composer defaults to Interrupt. Click the Mode pill or
 press F4 to choose Interrupt, Steer, or Queue for that room during the TUI
 session. Developer `bus send` and Feishu replies use Interrupt. The CLI refuses
