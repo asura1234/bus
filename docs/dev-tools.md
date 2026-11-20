@@ -122,8 +122,10 @@ counts. Pending is still open, with the oldest pending age. Failed messages
 are split into Bus-caused and external, with causes. The order is the delivery
 headline, provider table, room table, then the hourly delivery graph. The
 headline shows delivery success beside the mean delay from send accepted
-until the agent turn takes the message. Provider and room rows include p50,
-p90, p99 and the sample count for that same delay, in human units. Pending
+until the agent turn takes an interrupt send. Steer and queue waits are
+not latency samples. n, p50, p90 and p99 use that interrupt set only.
+Provider and room rows include p50, p90, p99 and the sample count for
+that same delay, in human units. Pending
 and failed share one card. The hourly graph stays; the hourly table does not.
 An empty group renders an em dash, not zero. There is no separate latency page.
 Bus reliability sits below delivery as a note: of conclusive deliveries, how
