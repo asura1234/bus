@@ -10,7 +10,7 @@ mod disk_space;
 mod error_pipe;
 #[cfg(test)]
 #[path = "tests/error_pipe_test.rs"]
-mod error_pipe_tests;
+pub(crate) mod error_pipe_tests;
 mod exit_snapshot;
 mod expiry;
 mod first_message;

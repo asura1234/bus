@@ -1,5 +1,5 @@
 use super::*;
-use crate::messaging::control::Request as ControlRequest;
+use crate::messaging::control::{Request as ControlRequest, Response as ControlResponse};
 use serde_json::json;
 
 #[test]
@@ -205,6 +205,7 @@ fn assert_report_requeues_once(outcome: SubmissionOutcome) {
     let request = state.request(report).unwrap();
     assert_eq!(request.phase, RequestPhase::Queued);
     assert!(request.failure_reason.is_none());
+    assert!(!request.uncertain_outcome);
     assert_eq!(state.queued_requests(agent), &[report]);
     assert_eq!(state.next_queued_request(agent), Some(report));
     assert_eq!(state.agent(agent).unwrap().actionable_error, None);
@@ -220,7 +221,10 @@ fn assert_report_requeues_once(outcome: SubmissionOutcome) {
             },
         )
         .unwrap();
-    assert_eq!(state.request(report).unwrap().phase, RequestPhase::Active);
+    let confirmed = state.request(report).unwrap();
+    assert_eq!(confirmed.phase, RequestPhase::Active);
+    assert!(confirmed.failure_reason.is_none());
+    assert!(!confirmed.uncertain_outcome);
     assert_eq!(state.agent(agent).unwrap().current_request, Some(report));
     assert!(state.queued_requests(agent).is_empty());
     assert!(state.begin_submission(report, "launch", 2).is_err());
@@ -230,6 +234,56 @@ fn assert_report_requeues_once(outcome: SubmissionOutcome) {
 
 #[test]
 fn error_pipe_uncertain_report_stays_terminal_across_reopen_without_replay() {
+    let (mut worker, report, agent, root) = reopen_uncertain_report();
+    let request = worker.state.request(report).unwrap();
+    assert_eq!(request.phase, RequestPhase::Abandoned);
+    assert_eq!(
+        request.failure_reason.as_deref(),
+        Some("error_report_delivery_failed")
+    );
+    let message = request.prompt.id.0.to_string();
+    let status = worker.control_response_with_events(
+        &ControlRequest {
+            id: "uncertain-report-status".into(),
+            method: "message.status".into(),
+            params: json!({"message": message}),
+        },
+        None,
+    );
+    assert!(status.ok, "{status:?}");
+    assert_eq!(status.result["complete"], true);
+    let status = &status.result["requests"][0];
+    assert_eq!(status["stage"], "abandoned");
+    assert_eq!(status["reason"], "error_report_delivery_failed");
+    assert_eq!(status["uncertain_outcome"], true);
+    assert!(worker.state.queued_requests(agent).is_empty());
+    assert!(worker.state.agent(agent).unwrap().current_request.is_none());
+    assert_eq!(worker.state.agent(agent).unwrap().actionable_error, None);
+    assert!(worker.state.begin_submission(report, "launch", 1).is_err());
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+pub(crate) fn with_reopened_uncertain_report_status(
+    check: impl FnOnce(&str, &mut dyn FnMut(&ControlRequest) -> ControlResponse),
+) {
+    let (mut worker, report, _, root) = reopen_uncertain_report();
+    let message = worker
+        .state
+        .request(report)
+        .unwrap()
+        .prompt
+        .id
+        .0
+        .to_string();
+    check(&message, &mut |request| {
+        worker.control_response_with_events(request, None)
+    });
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn reopen_uncertain_report() -> (Worker, RequestId, AgentId, PathBuf) {
     let (mut worker, room, agent, root) = reporting_worker();
     let mut state = worker.state.clone();
     let report = queue_report(&mut state, room, agent);
@@ -245,19 +299,8 @@ fn error_pipe_uncertain_report_stays_terminal_across_reopen_without_replay() {
     worker.save(state).unwrap();
     drop(worker);
 
-    let mut worker = Worker::open(root.clone(), Box::new(NoTerminals)).unwrap();
-    let request = worker.state.request(report).unwrap();
-    assert_eq!(request.phase, RequestPhase::Abandoned);
-    assert_eq!(
-        request.failure_reason.as_deref(),
-        Some("error_report_delivery_failed")
-    );
-    assert!(worker.state.queued_requests(agent).is_empty());
-    assert!(worker.state.agent(agent).unwrap().current_request.is_none());
-    assert_eq!(worker.state.agent(agent).unwrap().actionable_error, None);
-    assert!(worker.state.begin_submission(report, "launch", 1).is_err());
-    drop(worker);
-    std::fs::remove_dir_all(root).unwrap();
+    let worker = Worker::open(root.clone(), Box::new(NoTerminals)).unwrap();
+    (worker, report, agent, root)
 }
 
 fn queue_report(state: &mut BusState, room: RoomId, agent: AgentId) -> RequestId {

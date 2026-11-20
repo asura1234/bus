@@ -1292,6 +1292,37 @@ fn exit_code(outcome: &io::Result<()>) -> Option<i32> {
 }
 
 #[test]
+fn error_pipe_cli_wait_warns_about_the_reopened_uncertain_report() {
+    crate::messaging::coordinator::error_pipe_tests::with_reopened_uncertain_report_status(
+        |message, status| {
+            for wait in ["--async", "--timeout=60"] {
+                let mut reads = 0;
+                let (outcome, response) =
+                    run_captured(&["wait", "--message", message, wait], |request, _| {
+                        reads += 1;
+                        assert_eq!(reads, 1, "the closed report must settle on the first read");
+                        assert_eq!(request.method, "message.status");
+                        Ok(status(request))
+                    });
+                assert_eq!(exit_code(&outcome), Some(1), "{response}");
+                assert_eq!(response["error"]["code"], "message_abandoned");
+                let guidance = response["error"]["message"].as_str().unwrap();
+                for expected in [
+                    "error_report_delivery_failed",
+                    "may have run",
+                    "will not replay",
+                ] {
+                    assert!(
+                        guidance.contains(expected),
+                        "missing {expected}: {guidance}"
+                    );
+                }
+            }
+        },
+    );
+}
+
+#[test]
 fn send_async_unconfirmed_submission_explains_safe_recovery() {
     let mut request = recipient(1, "abandoned", false);
     request["reason"] = json!("submission_unconfirmed");

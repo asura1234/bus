@@ -54,9 +54,14 @@ impl BusState {
         let SubmissionOutcome::Uncertain { message } = outcome else {
             return Ok(false);
         };
-        if !self.request(request).is_some_and(Request::is_error_report) {
+        let Some(record) = self
+            .requests
+            .get_mut(&request)
+            .filter(|record| record.is_error_report())
+        else {
             return Ok(false);
-        }
+        };
+        record.uncertain_outcome = true;
         self.request_failure_error(request, message.clone());
         self.close_turn_with_reason(
             request,
