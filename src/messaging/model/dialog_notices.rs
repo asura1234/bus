@@ -93,14 +93,15 @@ impl BusState {
         let subject = match prompt.dialog_subject {
             Some(subject) => Some(subject),
             None => {
-                let Some((label, selector)) = legacy_blocked_notice(prompt) else {
+                let Some((label, explicit_id)) = legacy_blocked_notice(prompt) else {
                     return false;
                 };
                 prompt
                     .attention_origin
                     .as_ref()
                     .map(|origin| origin.agent_id)
-                    .or_else(|| self.legacy_dialog_subject(room, prompt, label, selector))
+                    .or(explicit_id)
+                    .or_else(|| self.legacy_dialog_subject(room, prompt, label))
             }
         };
         subject
@@ -108,13 +109,7 @@ impl BusState {
             .is_none_or(|agent| agent.deletion_pending)
     }
 
-    fn legacy_dialog_subject(
-        &self,
-        room: RoomId,
-        prompt: &Prompt,
-        label: &str,
-        selector: &str,
-    ) -> Option<AgentId> {
+    fn legacy_dialog_subject(&self, room: RoomId, prompt: &Prompt, label: &str) -> Option<AgentId> {
         // A live legacy episode can attest its request even after a rename.
         if let Some(agent) = self.agents().find(|agent| {
             agent.room_id == room
@@ -123,9 +118,6 @@ impl BusState {
                         if self.request(request).is_some_and(|r| r.prompt.id == prompt.id))
         }) {
             return Some(agent.id);
-        }
-        if let Ok(id) = selector.parse() {
-            return Some(AgentId(id));
         }
         // IDs share one allocation sequence. A later agent with the same
         // name cannot own an older notice.
@@ -140,17 +132,22 @@ impl BusState {
     }
 }
 
-fn legacy_blocked_notice(prompt: &Prompt) -> Option<(&str, &str)> {
+fn legacy_blocked_notice(prompt: &Prompt) -> Option<(&str, Option<AgentId>)> {
     if prompt.author != Author::Bus || !prompt.files.is_empty() {
         return None;
     }
     let text = crate::messaging::attention::text(&prompt.text).unwrap_or(&prompt.text);
     let (headline, selector) = text.split_once("\nInspect: bus agent observe ")?;
     let label = headline.strip_suffix(BLOCKED_MESSAGE)?.strip_suffix(". ")?;
-    if selector.parse::<u64>().is_ok() || selector == format!("'{}'", label.replace('\'', "'\\''"))
-    {
-        Some((label, selector))
-    } else {
-        None
+    if let Ok(id) = selector.parse() {
+        return Some((label, Some(AgentId(id))));
     }
+    let matches_name = |name: &str| selector == format!("'{}'", name.replace('\'', "'\\''"));
+    if matches_name(label) {
+        return Some((label, None));
+    }
+    // Older sessions could add an explicit ID to a duplicate live name.
+    let (name, suffix) = label.rsplit_once(" (agent ")?;
+    let id = suffix.strip_suffix(')')?.parse().ok()?;
+    matches_name(name).then_some((name, Some(AgentId(id))))
 }
