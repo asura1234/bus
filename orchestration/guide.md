@@ -551,14 +551,15 @@ Run this audit every few events and on a timer while work remains open:
 - Merge every PR the moment its own gate is green, independently of other open
   PRs: whoever is ready first merges first. Never hold, delay or sequence a
   ready PR behind another PR to minimize conflicts or to keep merge order
-  convenient, and never batch merges. A real merge conflict is resolved when it
-  appears by converging that PR onto the current base. A gate that aborts
-  because HEAD or the worktree moved proves nothing: if another PR's merge moved
-  the base, re-run the gate on the new base instead of freezing or delaying that
-  merge; when only the base moved and the PR's own diff is unchanged, carry
-  exact-head verification forward and re-run only fast gates. Only genuine
-  dependency order (a stacked PR that cannot land before its parent) and existing
-  safety or authorization holds may keep a ready PR waiting.
+  convenient, and never batch merges. If two changes touch the same code, the
+  real conflict is resolved at merge time instead of holding one for the other,
+  by converging that PR onto the current base. A gate that aborts because HEAD
+  or the worktree moved proves nothing: if another PR's merge moved the base,
+  re-run the gate on the new base instead of freezing or delaying that merge;
+  when only the base moved and the PR's own diff is unchanged, carry exact-head
+  verification forward and re-run only fast gates. Only genuine dependency
+  order (the two PRs are explicitly designed as a train) and existing safety
+  or authorization holds may keep a ready PR waiting.
 - A patch-identical rebase carries its review forward. Once review has closed
   at Ready, a changed patch is not a new review: the gate is the only
   post-review verification, and the PR merges on the gate-green head. A
