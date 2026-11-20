@@ -17,8 +17,7 @@ impl Request {
         // Older records only prove steer when the request was actually typed
         // into a running turn. queue_only also covers interrupts and forced
         // independent turns, and group can come from ordinary coalescing.
-        self.send_mode
-            .or(self.steered.then_some(SendMode::Steer))
+        self.send_mode.or(self.steered.then_some(SendMode::Steer))
     }
 }
 
