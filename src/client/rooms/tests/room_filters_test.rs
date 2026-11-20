@@ -1219,7 +1219,7 @@ fn filtered_paged_room_keeps_optimistic_pending_and_failed_submissions() {
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     let pending = room_screen(&mut ui, 100, 32);
     assert!(pending.contains("[x] You → *"), "{pending}");
-    assert!(pending.contains("[pending]"), "{pending}");
+    assert!(!pending.contains("[pending]"), "{pending}");
     assert!(pending.contains("local filtered send"), "{pending}");
     assert!(ui
         .history

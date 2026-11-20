@@ -2,7 +2,7 @@
 use super::{
     schema, AgentId, Author, Method, RequestId, RequestPhase, ResponseResult, RoomId, Worker,
 };
-use crate::messaging::model::{BusState, SendInterrupt, SendInterruptOutcome};
+use crate::messaging::model::{BusState, SendInterrupt, SendInterruptOutcome, SendMode};
 use crate::messaging::storage::state_store::JournalOp;
 use serde_json::{json, Value};
 
@@ -10,6 +10,9 @@ pub(in crate::messaging::coordinator) fn stage_send_interrupts(
     state: &mut BusState,
     requests: &[RequestId],
 ) -> Result<Vec<(RequestId, SendInterrupt)>, String> {
+    state
+        .record_send_mode(requests, SendMode::Interrupt)
+        .map_err(|e| e.to_string())?;
     let mut interrupts = Vec::new();
     for id in requests {
         let request = state.request(*id).ok_or("Missing queued send")?;

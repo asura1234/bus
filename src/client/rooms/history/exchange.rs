@@ -6,7 +6,7 @@ use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
 };
-use crate::messaging::model::{AgentId, Author, BusState, Prompt, Room, RoomId};
+use crate::messaging::model::{AgentId, Author, BusState, Prompt, Room, RoomId, SendMode};
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -223,34 +223,23 @@ impl History {
             ),
             (" → ".into(), Tone::Muted),
         ];
-        let show_stops = exchange.requests.values().any(|row| {
-            row.send_interrupt_outcome
-                .as_ref()
-                .is_some_and(|stop| stop.outcome != "already_idle")
-        });
         for (index, id) in prompt.recipient_ids.iter().enumerate() {
             if index > 0 {
                 header.push((", ".into(), Tone::Muted));
             }
             header.push((state.agent_label(*id), Tone::Agent(*id)));
-            if show_stops {
-                if let Some(stop) = exchange
-                    .requests
-                    .get(id)
-                    .and_then(|row| row.send_interrupt_outcome.as_ref())
-                {
-                    let label = match stop.outcome.as_str() {
-                        "already_idle" => " [already idle]",
-                        "interrupting" => " [interrupting]",
-                        "stopped" => " [stopped]",
-                        "failed" => " [stop failed]",
-                        "unknown" => " [stop uncertain]",
-                        "skipped" => " [stop skipped]",
-                        _ => continue,
-                    };
-                    header.push((label.into(), Tone::Muted));
-                }
-            }
+        }
+        let mode = exchange
+            .requests
+            .values()
+            .find_map(|request| request.history_send_mode());
+        let mode_label = match mode {
+            Some(SendMode::Queue) => Some(" [queued]"),
+            Some(SendMode::Steer) => Some(" [pending]"),
+            Some(SendMode::Interrupt) | None => None,
+        };
+        if let Some(label) = mode_label {
+            header.push((label.into(), Tone::Muted));
         }
         if prompt.recipient_ids.is_empty() {
             header.push(("You".into(), Tone::You));
@@ -262,15 +251,8 @@ impl History {
         if attention.is_some() {
             header.push(("  [Needs developer]".into(), Tone::Text));
         }
-        if let Some(status) = submissions.get(&prompt.id) {
-            header.push((
-                match status {
-                    super::LocalSendStatus::Pending => "  [pending]",
-                    super::LocalSendStatus::Failed => "  [failed]",
-                }
-                .into(),
-                Tone::Muted,
-            ));
+        if submissions.get(&prompt.id) == Some(&super::LocalSendStatus::Failed) {
+            header.push(("  [failed]".into(), Tone::Muted));
         }
         header.push((
             format!("  {}", timestamp(prompt.submitted_at_ms, now)),
@@ -506,7 +488,7 @@ fn signature(
         request.prompt.id.0.hash(&mut hash);
         request.prompt.submitted_at_ms.hash(&mut hash);
         request.group.map(|lead| lead.0).hash(&mut hash);
-        request.send_interrupt_outcome.hash(&mut hash);
+        request.history_send_mode().hash(&mut hash);
         let outcome = request
             .group
             .and_then(|lead| state.request(lead))

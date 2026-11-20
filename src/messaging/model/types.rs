@@ -625,6 +625,9 @@ pub(crate) struct Request {
     /// orchestrator request. Waits for idle and never coalesces.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) queue_only: bool,
+    /// The original send mode is presentation metadata; delivery uses its own policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) send_mode: Option<super::SendMode>,
     /// Bus-created input (such as a reply notice or first-turn system prompt),
     /// retained through startup failure rather than closed as a sender's send.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

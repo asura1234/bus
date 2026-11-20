@@ -11,6 +11,7 @@ mod policy;
 mod queue_order;
 mod rejection;
 mod submit;
+pub(crate) use submit::SendMode;
 mod turn_end;
 
 impl BusState {

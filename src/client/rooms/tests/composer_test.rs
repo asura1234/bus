@@ -413,7 +413,7 @@ fn slow_accept_clears_sent_text_and_a_second_enter_sends_only_the_new_draft() {
     );
     let pending = room_screen(&mut ui, 100, 30);
     assert!(pending.contains("first message"), "{pending}");
-    assert!(pending.contains("[pending]"), "{pending}");
+    assert!(!pending.contains("[pending]"), "{pending}");
 
     ui.input(
         &RawInputEvent::Paste("second message".into()),
@@ -505,7 +505,7 @@ fn multiline_send_and_attachments_leave_the_composer_before_acknowledgement() {
     assert!(pending.contains("first line"), "{pending}");
     assert!(pending.contains("second line"), "{pending}");
     assert!(pending.contains("context.md"), "{pending}");
-    assert!(pending.contains("[pending]"), "{pending}");
+    assert!(!pending.contains("[pending]"), "{pending}");
 }
 
 #[test]
@@ -534,7 +534,7 @@ fn switching_rooms_mid_send_preserves_the_new_draft_and_pending_history() {
     assert_eq!(ui.locals[&other].text.text, "other room draft");
     let pending = room_screen(&mut ui, 100, 30);
     assert!(pending.contains("send from first room"), "{pending}");
-    assert!(pending.contains("[pending]"), "{pending}");
+    assert!(!pending.contains("[pending]"), "{pending}");
 }
 
 #[test]
@@ -729,13 +729,14 @@ fn composer_pending_attachment_is_consumed_by_one_send() {
 }
 
 #[test]
-fn composer_rendered_pending_history_changes_to_failed_after_rejection() {
+fn composer_renders_failed_history_after_rejection() {
     let (mut ui, room, agent) = fixture();
     ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
     ui.input(&RawInputEvent::Paste("recover this message".into()), false, &mut Default::default());
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     let before = room_screen(&mut ui, 100, 30);
-    assert!(before.contains("[pending]"), "{before}");
+    assert!(before.contains("recover this message"), "{before}");
+    assert!(!before.contains("[pending]"), "{before}");
     ui.input(&RawInputEvent::Paste("later typing".into()), false, &mut Default::default());
     let submit = ui.pending.iter().find(|pending| matches!(pending.command, BusCommand::Submit(..))).unwrap().id;
     let earlier = ui.pending.iter().filter(|pending| pending.id < submit).map(|pending| pending.id).collect::<Vec<_>>();
@@ -750,7 +751,7 @@ fn composer_rendered_pending_history_changes_to_failed_after_rejection() {
     ui.settle();
     assert_eq!(ui.locals[&room].text.text, "recover this message\nlater typing");
     let after = room_screen(&mut ui, 100, 30);
-    assert!(after.contains("[failed]"), "the rendered history must change from pending to failed:\n{after}");
+    assert!(after.contains("[failed]"), "the rendered history must mark the rejected submission as failed:\n{after}");
     assert!(!after.contains("[pending]"), "{after}");
 }
 
