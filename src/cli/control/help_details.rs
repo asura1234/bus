@@ -526,7 +526,9 @@ with backoff or waits for a quota reset; details and deadlines go to the client 
 Permanent-error settlement without a final closes as provider_error: MESSAGE.
 An agent that is gone settles as agent_unavailable. Unclaimed steering that the
 turn did not include can close as reply_not_captured. A turn that simply ends
-does not. Conclusive pre-delivery startup failure is agent_startup_failed.
+does not. Conclusive pre-delivery startup failures report a cause such as
+startup_timeout, provider_exited_during_startup, or launch_input_failed.
+Saved-session or older failures can still report agent_startup_failed.
 Bus can abandon unclaimed steering after an autonomous turn ends and another
 starts or stays idle 5s; it releases later queued work. Late finals keep references.
 submission_unconfirmed may have run: inspect transcript/composer before resending

@@ -233,13 +233,16 @@ fn resumed_info(provider: Provider) -> schema::AgentInfo {
 
 /// Native fault injection: the resumed CLI prints its rejection and exits,
 /// leaving the pane's shell alive. No real provider or live Bus is contacted.
-struct RejectedResume;
+struct RejectedResume {
+    input_error: Option<&'static str>,
+}
 
 impl Transport for RejectedResume {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         match method {
             Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(ResponseResult::AgentList { agents: vec![serde_json::from_value(json!({
                 "terminal_id":"terminal", "pane_id":"pane", "workspace_id":"w1", "tab_id":"t1", "focused":false, "revision":1, "agent_status":"unknown",
+                "launch_input_error": self.input_error,
                 "native_resume":{"name":"bus-r1-a2","agent":"claude","session_id":"session","command":"claude --resume session","error":"provider exited before startup confirmation"}
             })).unwrap()] }),
             Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
@@ -264,12 +267,40 @@ impl Transport for RejectedResume {
 }
 
 #[test]
-fn restart_resume_rejection_surfaces_error_and_abandons_queued_work() {
+fn native_resume_failure_reaches_durable_request_status_and_sender() {
+    assert_native_resume_failure_projection(None);
+}
+
+#[test]
+fn owned_native_resume_with_both_errors_preserves_matching_cause_and_detail() {
+    assert_native_resume_failure_projection(Some("launch input rejected before Enter"));
+}
+
+fn assert_native_resume_failure_projection(input_error: Option<&'static str>) {
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
-    let request = queue(&mut worker, room, agent, "retained task");
+    let mut state = worker.state.clone();
+    let master = state.master_room().unwrap().id;
+    let sender = state
+        .create_agent(master, "sender", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    state.bind_orchestrator(sender, room).unwrap();
+    let request = state
+        .submit_message_with(
+            room,
+            Draft {
+                text: "retained task".into(),
+                files: vec![],
+                recipient_ids: [agent].into(),
+            },
+            Author::Agent(sender),
+            io::now_ms(),
+            true,
+        )
+        .unwrap()[0];
+    worker.save(state).unwrap();
     let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
     drop(worker);
-    let mut worker = Worker::open(dir.clone(), Box::new(RejectedResume)).unwrap();
+    let mut worker = Worker::open(dir.clone(), Box::new(RejectedResume { input_error })).unwrap();
     let infos = worker.poll().unwrap().unwrap();
     worker
         .cleanup_failed_startups(&infos, &mpsc::channel().0, io::now_ms())
@@ -279,10 +310,12 @@ fn restart_resume_rejection_surfaces_error_and_abandons_queued_work() {
         .actionable_error
         .as_deref()
         .expect("restart must monitor resume startup");
-    assert!(
-        error.contains("No conversation found with session ID: session"),
-        "{error}"
-    );
+    let screen_evidence = if input_error.is_some() {
+        "Conversation screen omitted"
+    } else {
+        "No conversation found with session ID: session"
+    };
+    assert!(error.contains(screen_evidence), "{error}");
     assert!(error.contains("resume"), "{error}");
     assert_eq!(failed.status, RuntimeStatus::Unavailable);
     assert_eq!(failed.runtime_identity, identity);
@@ -293,18 +326,34 @@ fn restart_resume_rejection_surfaces_error_and_abandons_queued_work() {
     let closed = worker.state.request(request).unwrap();
     assert_eq!(
         closed.failure_reason.as_deref(),
-        Some("agent_startup_failed")
+        Some("native_resume_failed")
     );
     let detail = closed.submission_error.clone().unwrap();
+    let message = closed.prompt.id;
     assert!(
-        detail.contains("recreate") && detail.contains("Resend"),
+        detail.contains("[native_resume_failed] provider exited before startup confirmation"),
         "{detail}"
+    );
+    assert!(detail.contains("Resend"), "{detail}");
+    if let Some(input) = input_error {
+        assert!(!detail.contains(input), "{detail}");
+    } else {
+        assert!(detail.contains("recreate"), "{detail}");
+    }
+    assert_eq!(
+        worker
+            .state
+            .current_launch_attempt(agent)
+            .unwrap()
+            .cause
+            .as_deref(),
+        Some("native_resume_failed")
     );
     assert_eq!(closed.prompt.text, "retained task");
     assert!(closed.submission_boundary.is_none());
     assert!(failed.startup.as_ref().unwrap().reported);
     drop(worker);
-    let worker = Worker::open(dir.clone(), Box::new(RejectedResume)).unwrap();
+    let mut worker = Worker::open(dir.clone(), Box::new(RejectedResume { input_error })).unwrap();
     assert!(
         worker
             .state
@@ -325,9 +374,22 @@ fn restart_resume_rejection_surfaces_error_and_abandons_queued_work() {
     assert_eq!(closed.phase, RequestPhase::Abandoned);
     assert_eq!(
         closed.failure_reason.as_deref(),
-        Some("agent_startup_failed")
+        Some("native_resume_failed")
     );
     assert_eq!(closed.submission_error.as_deref(), Some(detail.as_str()));
+    let status = worker.control_message_at(message, io::now_ms()).unwrap();
+    assert_eq!(status["requests"][0]["reason"], "native_resume_failed");
+    assert_eq!(status["requests"][0]["detail"], detail);
+    worker.state.retain_worker_outcomes(io::now_ms());
+    let events = worker
+        .state
+        .worker_events_for(worker.state.request(request).unwrap());
+    assert!(
+        events
+            .iter()
+            .any(|(_, text)| text.contains("native_resume_failed") && text.contains("Resend")),
+        "{events:?}"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -528,6 +590,7 @@ fn cold_resume_after_startup_failure_accepts_explicitly_resent_work() {
                 native_terminal_id: None,
                 recovery: None,
                 failure: Some(crate::messaging::model::StartupFailure {
+                    cause: None,
                     reason: "provider launch ended before startup was confirmed".into(),
                     recovery: "Repair startup. Resend the closed work.".into(),
                 }),

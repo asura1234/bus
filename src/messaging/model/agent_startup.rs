@@ -1,5 +1,39 @@
 //! Startup recovery and closure of never-submitted queued work.
-use super::{AgentId, BusState, ModelError, RequestPhase};
+use super::{
+    AgentId, AgentStartup, BusState, ModelError, RequestPhase, RoomAgent, StartupFailure,
+    StartupRecovery,
+};
+
+const INITIAL_STARTUP_GRACE_MS: u64 = 90_000;
+const STARTUP_TIMEOUT_MS: u64 = crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
+
+impl AgentStartup {
+    pub(crate) fn initial_sessionless(&self, agent: &RoomAgent) -> bool {
+        agent.runtime_identity.session_id.is_none()
+            && self.native_terminal_id.is_none()
+            && !matches!(
+                self.recovery,
+                Some(StartupRecovery::CodexBootstrap { attempts: 1.., .. })
+            )
+    }
+
+    pub(crate) fn readiness_timeout_ms(&self, agent: &RoomAgent) -> u64 {
+        if self.initial_sessionless(agent) {
+            INITIAL_STARTUP_GRACE_MS
+        } else {
+            STARTUP_TIMEOUT_MS
+        }
+    }
+}
+
+impl StartupFailure {
+    pub(crate) const TIMEOUT: &str = "startup_timeout";
+    pub(crate) const PROVIDER_EXIT: &str = "provider_exited_during_startup";
+    pub(crate) const TERMINAL_CREATION: &str = "terminal_creation_failed";
+    pub(crate) const LAUNCH_INPUT: &str = "launch_input_failed";
+    pub(crate) const NATIVE_RESUME: &str = "native_resume_failed";
+    pub(crate) const CODEX_BOOTSTRAP: &str = "codex_bootstrap_failed";
+}
 
 impl BusState {
     pub(crate) fn set_agent_startup(
@@ -11,17 +45,10 @@ impl BusState {
             .agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?;
-        if startup.is_none()
-            && agent
-                .startup
-                .as_ref()
-                .is_some_and(|s| s.reported || s.recovery.is_some())
-        {
+        if startup.is_none() && agent.startup.is_some() {
             // Like closing a dialog, readiness gives held work a fresh idle
             // interval even if the runtime remained Idle throughout the hold.
             agent.status_since_ms = agent.status_since_ms.max(agent.observed_at_ms);
-        }
-        if startup.is_none() && agent.startup.is_some() {
             // Startup snapshots remain as files. The now-running provider must
             // get its own fresh snapshot if it exits later on this same terminal.
             agent.exit_snapshot = None;
@@ -71,10 +98,7 @@ impl BusState {
                     .expected_launch_id
                     .as_ref()
                     .is_none_or(|launch| Some(launch) == agent.runtime_identity.launch_id.as_ref())
-                && matches!(
-                    request.failure_reason.as_deref(),
-                    Some(super::AGENT_STARTUP_FAILED | super::CODEX_BOOTSTRAP_FAILED)
-                )
+                && request.failed_during_startup()
                 && request.submission_error.as_deref() == Some(previous.as_str())
             {
                 request.submission_error = Some(detail.into());
@@ -108,8 +132,12 @@ impl BusState {
             }) {
             super::CODEX_BOOTSTRAP_FAILED
         } else {
-            super::AGENT_STARTUP_FAILED
-        };
+            failure
+                .cause
+                .as_deref()
+                .unwrap_or(super::AGENT_STARTUP_FAILED)
+        }
+        .to_owned();
         let continuations: Vec<_> = self
             .queued_requests(id)
             .iter()
@@ -148,7 +176,7 @@ impl BusState {
                     return true;
                 }
                 request.phase = RequestPhase::Abandoned;
-                request.failure_reason = Some(reason.into());
+                request.failure_reason = Some(reason.clone());
                 request.submission_error = Some(detail.clone());
                 request.completed_at_ms = Some(now_ms);
                 false

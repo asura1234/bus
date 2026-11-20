@@ -12,18 +12,13 @@ impl Worker {
         let expired = state
             .expire_stalled_queued_requests(now_ms)
             .map_err(|e| e.to_string())?;
+        let previous = (!expired.is_empty()).then(|| self.state.clone());
         state.retain_worker_outcomes(now_ms);
         if state != self.state {
             self.save(state)?;
         }
-        for id in expired {
-            // Durable recoveries already reported this continuation's closure.
-            if self.state.request(id).is_some_and(|request| {
-                request.failure_reason.as_deref() == Some("reply_not_captured")
-            }) {
-                continue;
-            }
-            diagnostics::request(&self.state, id, "bus.message.failed", "queued_stalled");
+        if let Some(previous) = previous {
+            diagnostics::queued_expiries(&previous, &self.state, &expired, now_ms);
         }
         Ok(())
     }

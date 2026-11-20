@@ -1,6 +1,123 @@
 use super::*;
 use crate::messaging::model::BusState;
 
+struct StartupPollSample {
+    info: schema::AgentInfo,
+    exited: bool,
+}
+
+impl Transport for StartupPollSample {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => Ok(
+                ResponseResult::AgentList { agents: vec![self.info.clone()] }
+            ),
+            Method::PaneGet(_) => Ok(ResponseResult::PaneInfo {
+                pane: serde_json::from_value(json!({
+                    "pane_id":"pane", "terminal_id":"terminal", "workspace_id":"w1", "tab_id":"t1",
+                    "focused":false, "agent_status":"unknown", "revision":1, "agent_process_exited":self.exited
+                })).unwrap()
+            }),
+            _ => Ok(ResponseResult::Ok {}),
+        }
+    }
+}
+
+#[test]
+fn sessionless_launch_poll_and_watchdog_share_the_readiness_deadline() {
+    for (ready_at, exit_at) in [(Some(60_000), None), (None, Some(60_000)), (None, None)] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+        let mut state = worker.state.clone();
+        let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        state.set_agent_runtime_identity(agent, identity).unwrap();
+        worker.save(state).unwrap();
+        seed_launch(&mut worker, agent, u64::MAX);
+        worker
+            .watch_agent_startup(agent, vec!["claude".into()])
+            .unwrap();
+        let request = queue(&mut worker, room, agent, "wait for startup");
+        let start = worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .startup
+            .as_ref()
+            .unwrap()
+            .started_at_ms;
+        let mut pending = native_info("pane", "claude", "unused");
+        pending.agent_session = None;
+        pending.launch_pending = true;
+        let mut ready = pending.clone();
+        ready.launch_pending = false;
+        ready.native_ready = true;
+        ready.interactive_ready = true;
+        let mut exited = pending.clone();
+        exited.agent = None;
+        exited.launch_pending = false;
+        exited.agent_status = schema::AgentStatus::Unknown;
+
+        let observations = if let Some(at) = ready_at {
+            vec![(31_000, pending), (at, ready)]
+        } else if let Some(at) = exit_at {
+            vec![(31_000, pending), (at, exited)]
+        } else {
+            vec![
+                (31_000, pending.clone()),
+                (89_999, pending.clone()),
+                (90_000, pending),
+            ]
+        };
+        for (elapsed, info) in observations {
+            worker.test_now_ms = Some(start + elapsed);
+            worker.transport = Box::new(StartupPollSample {
+                info,
+                exited: exit_at == Some(elapsed),
+            });
+            let infos = worker.poll().unwrap().unwrap();
+            worker
+                .cleanup_failed_startups(&infos, &mpsc::channel().0, start + elapsed)
+                .unwrap();
+            let expected = if ready_at == Some(elapsed) {
+                "usable"
+            } else if exit_at == Some(elapsed) || elapsed == 90_000 {
+                "failed"
+            } else {
+                "pending"
+            };
+            assert_eq!(
+                ledger(&worker)["1"]["outcome"],
+                expected,
+                "elapsed={elapsed}"
+            );
+            assert_eq!(ledger(&worker)["1"]["deadline_at_ms"], start + 90_000);
+        }
+        let request = worker.state.request(request).unwrap();
+        assert_eq!(
+            request.phase,
+            if ready_at.is_some() {
+                RequestPhase::Queued
+            } else {
+                RequestPhase::Abandoned
+            }
+        );
+        let (request_cause, launch_cause) = if ready_at.is_some() {
+            (None, None)
+        } else if exit_at.is_some() {
+            (
+                Some("provider_exited_during_startup"),
+                Some("unavailable_at_launch"),
+            )
+        } else {
+            (Some("startup_timeout"), Some("startup_timeout"))
+        };
+        assert_eq!(request.failure_reason.as_deref(), request_cause);
+        assert_eq!(ledger(&worker)["1"]["cause"].as_str(), launch_cause);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 // Bus treats a launching provider shown as Blocked without a readable dialog
 // id as a startup dialog wait (startup.rs confirms startup; poll.rs posts the
 // blocked notice). The launch ledger must keep it pending too.

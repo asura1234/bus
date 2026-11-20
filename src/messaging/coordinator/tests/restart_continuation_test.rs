@@ -280,6 +280,7 @@ fn restart_epoch_failed_cold_resume_closes_preserved_original_group() {
                 native_terminal_id: Some("restored-terminal".into()),
                 recovery: None,
                 failure: Some(crate::messaging::model::StartupFailure {
+                    cause: None,
                     reason: "saved conversation is unavailable".into(),
                     recovery: "replace the agent".into(),
                 }),

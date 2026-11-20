@@ -22,6 +22,69 @@ pub(crate) fn request(state: &BusState, id: RequestId, event: &'static str, reas
     log_request(state, id, event, reason, None);
 }
 
+pub(crate) fn queued_expiries(
+    previous: &BusState,
+    next: &BusState,
+    ids: &[RequestId],
+    now_ms: u64,
+) {
+    for &id in ids {
+        let (Some(old), Some(closed)) = (previous.request(id), next.request(id)) else {
+            continue;
+        };
+        if closed.phase != RequestPhase::Abandoned {
+            continue;
+        }
+        let Some(reason) = closed.failure_reason.as_deref() else {
+            continue;
+        };
+        if reason == "reply_not_captured" {
+            continue;
+        }
+        let agent = previous.agent(old.agent_id);
+        let identity = agent.map(|agent| &agent.runtime_identity);
+        let window = previous.queued_expiry_window(old, reason, now_ms);
+        let latency = &old.latency;
+        let native = &latency.native;
+        tracing::info!(
+            event = "bus.message.failed",
+            reason = "queued_stalled",
+            failure_reason = reason,
+            request_id = id.0,
+            prompt_id = old.prompt.id.0,
+            room_id = old.room_id.0,
+            agent_id = old.agent_id.0,
+            provider = ?agent.map(|agent| agent.provider),
+            launch_id = ?identity.and_then(|identity| identity.launch_id.as_deref()),
+            terminal_id = ?identity.and_then(|identity| identity.terminal_id.as_deref()),
+            pane_id = ?identity.and_then(|identity| identity.pane_id.as_deref()),
+            phase = ?old.phase,
+            status = ?agent.map(|agent| agent.status),
+            status_revision = agent.map(|agent| agent.status_revision),
+            current_request_id = ?agent.and_then(|agent| agent.current_request).map(|owner| owner.0),
+            baseline_at_ms = window.map(|(baseline, _)| baseline),
+            deadline_at_ms = window.map(|(_, deadline)| deadline),
+            elapsed_ms = window.map(|(baseline, _)| now_ms.saturating_sub(baseline)),
+            accepted_at_ms = latency.accepted_at_ms,
+            queued_at_ms = latency.queued_at_ms,
+            eligible_at_ms = latency.eligible_at_ms,
+            picked_at_ms = latency.picked_at_ms,
+            native_requested_at_ms = latency.native_requested_at_ms,
+            native_server_accepted_at_ms = native.server_accepted_at_ms,
+            native_writer_queued_at_ms = native.writer_queued_at_ms,
+            native_paste_started_at_ms = native.paste_started_at_ms,
+            native_text_written_at_ms = native.text_written_at_ms,
+            native_paste_completed_at_ms = native.paste_completed_at_ms,
+            native_composer_owned_at_ms = native.composer_owned_at_ms,
+            native_enter_sent_at_ms = native.enter_sent_at_ms,
+            native_enter_written_at_ms = native.enter_written_at_ms,
+            native_confirmed_at_ms = native.native_confirmed_at_ms,
+            provider_started_at_ms = latency.provider_started_at_ms,
+            "Bus delivery"
+        );
+    }
+}
+
 /// Same fields as [`request`], plus the settlement lead. After transcript
 /// recovery detaches a follower, `request.group` is `None`, so the lead id
 /// cannot be recovered from the request. It must be an event field: a

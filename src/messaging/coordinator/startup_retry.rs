@@ -114,13 +114,7 @@ impl Worker {
             || self.state.requests().any(|r| {
                 r.agent_id == agent.id
                     && r.phase != RequestPhase::Queued
-                    && !matches!(
-                        r.failure_reason.as_deref(),
-                        Some(
-                            crate::messaging::model::AGENT_STARTUP_FAILED
-                                | crate::messaging::model::CODEX_BOOTSTRAP_FAILED
-                        )
-                    )
+                    && !r.failed_during_startup()
             })
         {
             return Ok(false);

@@ -43,7 +43,7 @@ impl BusState {
         &self,
         request: &'a Request,
         now_ms: u64,
-    ) -> Option<&'a str> {
+    ) -> Option<(&'a str, Option<u64>)> {
         if request.phase != RequestPhase::Queued
             || self
                 .agent(request.agent_id)
@@ -62,7 +62,7 @@ impl BusState {
             let alive = self
                 .agent(request.agent_id)
                 .is_some_and(|agent| agent.exit_snapshot.is_none() && !agent.deletion_pending);
-            return (!alive).then_some("agent_not_idle");
+            return (!alive).then_some(("agent_not_idle", None));
         }
         let mut since = rejected.at_ms;
         if let Some(agent) = self
@@ -82,6 +82,7 @@ impl BusState {
                 .max(agent.status_since_ms)
                 .max(self.last_progress_ms(agent.id));
         }
-        (now_ms.saturating_sub(since) >= QUEUED_STALL_MS).then_some(rejected.reason.as_str())
+        (now_ms.saturating_sub(since) >= QUEUED_STALL_MS)
+            .then_some((rejected.reason.as_str(), Some(since)))
     }
 }

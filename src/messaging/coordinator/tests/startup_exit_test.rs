@@ -257,11 +257,11 @@ fn startup_exit_after_timeout_preserves_diagnostics_after_deletion() {
         .cleanup_failed_startups(
             std::slice::from_ref(&pending),
             &mpsc::channel().0,
-            start + 29_999,
+            start + 89_999,
         )
         .unwrap();
     worker
-        .cleanup_failed_startups(&[pending], &mpsc::channel().0, start + 30_000)
+        .cleanup_failed_startups(&[pending], &mpsc::channel().0, start + 90_000)
         .unwrap();
     assert_eq!(
         worker.state.request(request).unwrap().phase,
@@ -275,7 +275,7 @@ fn startup_exit_after_timeout_preserves_diagnostics_after_deletion() {
     worker.transport = Box::new(StartupExitNative::exited(&dir));
     let infos = worker.poll().unwrap().unwrap();
     worker
-        .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 30_001)
+        .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 90_001)
         .unwrap();
     assert_eq!(
         worker.state.request(request).unwrap().phase,
@@ -305,7 +305,7 @@ fn startup_exit_after_timeout_preserves_diagnostics_after_deletion() {
         .submission_error
         .clone();
     worker
-        .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 30_002)
+        .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 90_002)
         .unwrap();
     assert_eq!(
         worker.state.request(request).unwrap().submission_error,
@@ -413,11 +413,11 @@ fn late_startup_evidence_preserves_other_failure_diagnostics() {
             .cleanup_failed_startups(
                 std::slice::from_ref(&pending),
                 &mpsc::channel().0,
-                start + 29_999,
+                start + 89_999,
             )
             .unwrap();
         worker
-            .cleanup_failed_startups(&[pending], &mpsc::channel().0, start + 30_000)
+            .cleanup_failed_startups(&[pending], &mpsc::channel().0, start + 90_000)
             .unwrap();
         let previous = worker
             .state
@@ -441,7 +441,7 @@ fn late_startup_evidence_preserves_other_failure_diagnostics() {
         worker.transport = Box::new(StartupExitNative::exited(&dir));
         let infos = worker.poll().unwrap().unwrap();
         worker
-            .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 30_001)
+            .cleanup_failed_startups(&infos, &mpsc::channel().0, start + 90_001)
             .unwrap();
         assert!(worker.state.agent(agent).unwrap().exit_snapshot.is_some());
         assert_eq!(
@@ -485,6 +485,14 @@ fn early_startup_exit_reports_provider_error_without_waiting_for_timeout() {
     assert!(!error.contains("within 30 seconds"), "{error}");
     let request = worker.state.request(request).unwrap();
     assert_eq!(request.phase, RequestPhase::Abandoned);
+    assert!(request
+        .submission_notice()
+        .unwrap()
+        .contains("[provider_exited_during_startup]"));
+    assert_eq!(
+        request.failure_reason.as_deref(),
+        Some("provider_exited_during_startup")
+    );
     assert!(request.latency.native_requested_at_ms.is_none());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

@@ -1,7 +1,7 @@
 //! Explicit recovery and terminal failure of unsubmitted queued requests.
 use super::{
-    Author, BusState, DialogNoticeDelivery, DialogNoticeTo, ModelError, RequestId, RequestPhase,
-    RuntimeStatus, SubmissionOutcome, QUEUED_STALL_MS,
+    AgentId, Author, BusState, DialogNoticeDelivery, DialogNoticeTo, ModelError, Request,
+    RequestId, RequestPhase, RoomAgent, RuntimeStatus, SubmissionOutcome, QUEUED_STALL_MS,
 };
 
 /// Administrative closure provenance; native submission evidence stays on the request.
@@ -12,6 +12,51 @@ pub(crate) struct ManualRecovery {
 }
 
 impl BusState {
+    /// When the agent last worked on a request it took: a turn event, or that
+    /// request settling. A turn that starts and ends between two status polls
+    /// leaves no status change, so the queue behind it counts from this too.
+    /// A refused paste returns its request to the queue and is no progress.
+    pub(super) fn last_progress_ms(&self, agent: AgentId) -> u64 {
+        self.requests
+            .values()
+            .filter(|request| request.agent_id == agent && request.phase != RequestPhase::Queued)
+            .filter_map(|request| {
+                let progress = request.progress_at_ms?;
+                Some(progress.max(request.completed_at_ms.unwrap_or(0)))
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn queued_stall_baseline(&self, lead: &Request, agent: &RoomAgent) -> u64 {
+        lead.prompt
+            .submitted_at_ms
+            .max(lead.progress_at_ms.unwrap_or(0))
+            .max(agent.status_since_ms)
+            .max(self.last_progress_ms(lead.agent_id))
+    }
+
+    pub(crate) fn queued_expiry_window(
+        &self,
+        request: &Request,
+        reason: &str,
+        now_ms: u64,
+    ) -> Option<(u64, u64)> {
+        let baseline = if reason == "dialog_notice_undelivered" {
+            request.prompt.submitted_at_ms
+        } else {
+            let lead = request
+                .group
+                .and_then(|id| self.request(id))
+                .unwrap_or(request);
+            match self.expired_queue_rejection(lead, now_ms) {
+                Some((_, since)) => since?,
+                None => self.queued_stall_baseline(lead, self.agent(lead.agent_id)?),
+            }
+        };
+        Some((baseline, baseline.saturating_add(QUEUED_STALL_MS)))
+    }
+
     /// Only request.recover uses this boundary. Automatic callers keep their
     /// own causes and never acquire an operator's manual recovery provenance.
     pub(crate) fn manually_recover_idle_request(

@@ -5,11 +5,14 @@ use crate::messaging::{
     model::{AgentStartup, StartupFailure, StartupRecovery},
 };
 
-pub(super) const STARTUP_TIMEOUT_MS: u64 =
-    crate::protocol::api::AGENT_START_TIMEOUT.as_millis() as u64;
 const SCREEN_LINES: u32 = 6;
 
-fn startup_failure(reason: &str, evidence: &str, sessionless: bool) -> StartupFailure {
+fn startup_failure(
+    cause: Option<&str>,
+    reason: &str,
+    evidence: &str,
+    sessionless: bool,
+) -> StartupFailure {
     let recovery = if evidence
         .lines()
         .any(|line| line.starts_with("> No conversation found with session ID:"))
@@ -25,9 +28,46 @@ fn startup_failure(reason: &str, evidence: &str, sessionless: bool) -> StartupFa
         "Inspect the agent's terminal and repair shell/provider setup before resuming. Resend this message after startup is confirmed."
     };
     StartupFailure {
+        cause: cause.map(str::to_owned),
         reason: reason.into(),
         recovery: recovery.into(),
     }
+}
+
+fn startup_failure_cause(
+    startup: &AgentStartup,
+    explicit_cause: Option<&'static str>,
+    process_exited: bool,
+) -> (&'static str, &'static str) {
+    if matches!(
+        startup.recovery,
+        Some(StartupRecovery::CodexBootstrap {
+            exhausted: true,
+            ..
+        })
+    ) {
+        (StartupFailure::CODEX_BOOTSTRAP, "unavailable_at_launch")
+    } else if let Some(cause) = explicit_cause {
+        (cause, cause)
+    } else if process_exited {
+        (StartupFailure::PROVIDER_EXIT, "unavailable_at_launch")
+    } else {
+        (StartupFailure::TIMEOUT, StartupFailure::TIMEOUT)
+    }
+}
+
+pub(super) fn explicit_startup_error<'a>(
+    agent: &super::RoomAgent,
+    info: &'a schema::AgentInfo,
+) -> Option<(&'static str, &'a str)> {
+    super::resume::native_attempt(agent, info)
+        .and_then(|attempt| attempt.error.as_deref())
+        .map(|detail| (StartupFailure::NATIVE_RESUME, detail))
+        .or_else(|| {
+            info.launch_input_error
+                .as_deref()
+                .map(|detail| (StartupFailure::LAUNCH_INPUT, detail))
+        })
 }
 
 fn describe_exhausted_retry(failure: &mut StartupFailure, recovery: Option<&StartupRecovery>) {
@@ -147,6 +187,11 @@ impl Worker {
             "Repair the configured shell and provider setup, then delete and recreate this sessionless agent. Rebrief it and resend this message."
         };
         let failure = StartupFailure {
+            cause: agent
+                .runtime_identity
+                .session_id
+                .is_none()
+                .then(|| StartupFailure::TERMINAL_CREATION.into()),
             reason: format!("before terminal creation: {reason}"),
             recovery: recovery.into(),
         };
@@ -219,10 +264,12 @@ impl Worker {
             startup.failure = None;
         } else {
             startup.recovery = None;
+            let sessionless = agent.runtime_identity.session_id.is_none();
             startup.failure = Some(startup_failure(
+                sessionless.then_some(StartupFailure::LAUNCH_INPUT),
                 &error.message,
                 "",
-                agent.runtime_identity.session_id.is_none(),
+                sessionless,
             ));
             super::launch_metrics::settle_current(
                 &mut state,
@@ -268,23 +315,28 @@ impl Worker {
                 continue;
             }
             let name = identity::managed_name(agent.room_id, agent.id);
+            let initial_sessionless = startup.initial_sessionless(&agent);
+            let timeout_ms = startup.readiness_timeout_ms(&agent);
             let terminal_info = infos.iter().find(|info| {
                 Some(info.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
                     && Some(info.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
+                    && startup
+                        .native_terminal_id
+                        .as_deref()
+                        .is_none_or(|terminal| terminal == info.terminal_id.as_str())
             });
+            let identity_bound =
+                agent.runtime_identity.launch_id.is_some() && !agent.session_binding_invalidated;
             let info = terminal_info.filter(|info| {
-                info.name.as_deref() == Some(&name)
-                    || super::resume::native_attempt(&agent, info).is_some()
+                identity_bound
+                    && (info.name.as_deref() == Some(&name)
+                        || super::resume::native_attempt(&agent, info).is_some())
             });
-            let input_error = info.and_then(|info| info.launch_input_error.as_deref());
-            let native_error = info
-                .and_then(|info| super::resume::native_attempt(&agent, info))
-                .and_then(|attempt| attempt.error.as_deref())
-                .or(input_error);
+            let explicit_error = info.and_then(|info| explicit_startup_error(&agent, info));
             // Codex defers SessionStart until its first prompt. Native
             // interactive confirmation, or a provider already waiting at its
             // own startup dialog, proves it started. Preserve that help wait.
-            if native_error.is_none()
+            if explicit_error.is_none()
                 && info.is_some_and(|info| {
                     info.agent
                         .as_deref()
@@ -315,24 +367,27 @@ impl Worker {
                 self.save(state)?;
                 continue;
             }
-            let expired = now_ms.saturating_sub(startup.started_at_ms) >= STARTUP_TIMEOUT_MS;
+            let expired = now_ms.saturating_sub(startup.started_at_ms) >= timeout_ms;
             let process_present = terminal_info.is_some_and(|info| {
                 info.agent
                     .as_deref()
                     .is_some_and(|label| agent.provider.observes_label(label))
             });
-            let process_exited = !process_present
-                && (startup.process_observed
+            let process_exited = identity_bound
+                && !process_present
+                && (!initial_sessionless && startup.process_observed
                     || !startup.reported
                         && terminal_info.is_none_or(|info| !info.launch_pending)
                         && self.startup_process_exited(&agent));
-            if self.handle_codex_startup_retry(&agent, &mut startup, process_exited, now_ms)? {
+            if explicit_error.is_none()
+                && self.handle_codex_startup_retry(&agent, &mut startup, process_exited, now_ms)?
+            {
                 continue;
             }
             // Startup confirmation is bounded independently of native ownership;
             // only exit/replacement releases it. A failed list request never
             // reaches here, so silence is not failure.
-            if !startup.reported && !expired && !process_exited && native_error.is_none() {
+            if !startup.reported && !expired && !process_exited && explicit_error.is_none() {
                 if !startup.process_observed && process_present && info.is_some() {
                     startup.process_observed = true;
                     let mut state = self.state.clone();
@@ -344,82 +399,106 @@ impl Worker {
                 continue;
             }
             if !startup.reported {
-                let evidence =
-                    if input_error.is_some() && agent.runtime_identity.session_id.is_some() {
-                        "> Conversation screen omitted".into()
-                    } else {
-                        self.startup_screen(agent.id)
-                    };
-                let diagnostics = self.startup_diagnostics(&agent);
-                let reason = if let Some(reason) = native_error {
-                    reason
-                } else if process_exited {
-                    "provider exited during startup"
-                } else {
-                    "no provider session or interactive confirmation within 30 seconds"
-                };
-                if process_exited {
-                    self.capture_startup_exit(&agent)?;
-                }
-                let snapshot = self
-                    .state
-                    .agent(agent.id)
-                    .and_then(super::exit_snapshot::startup_snapshot)
-                    .map(crate::messaging::model::ExitSnapshot::notice)
-                    .unwrap_or_default();
-                let mut failure = startup_failure(
-                    reason,
-                    &evidence,
-                    agent.runtime_identity.session_id.is_none(),
-                );
-                describe_exhausted_retry(&mut failure, startup.recovery.as_ref());
-                if !snapshot.is_empty() {
-                    // Requests outlive deleted agents and callback captures.
-                    failure.reason = format!("{}\n{snapshot}", failure.reason);
-                }
-                let text = format!(
-                    "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\nStartup diagnostics:\n{diagnostics}",
-                    failure.notice(), launch::provider_kind(agent.provider), startup.command
-                );
-                startup.failure = Some(failure);
-                let mut state = self.state.clone();
-                state
-                    .set_agent_error(agent.id, Some(text))
-                    .map_err(|e| e.to_string())?;
-                tracing::warn!(
-                    event = "bus.agent.startup_failed",
-                    agent_id = agent.id.0,
-                    provider = launch::provider_kind(agent.provider),
-                    reason,
-                    "Agent startup failed; identity retained and never-submitted queued requests closed"
-                );
-                startup.reported = true;
-                super::launch_metrics::settle_current(
-                    &mut state,
-                    agent.id,
-                    crate::messaging::model::LaunchOutcome::Failed,
-                    Some(if process_exited {
-                        "unavailable_at_launch"
-                    } else if input_error.is_some() {
-                        "launch_input_failed"
-                    } else if native_error.is_some() {
-                        "native_resume_failed"
-                    } else {
-                        "startup_timeout"
-                    }),
+                self.close_startup_failure(
+                    &agent,
+                    startup,
+                    info.is_some_and(|info| info.launch_input_error.is_some()),
+                    explicit_error,
+                    process_exited,
+                    timeout_ms,
                     now_ms,
-                );
-                state
-                    .set_agent_startup(agent.id, Some(startup))
-                    .map_err(|e| e.to_string())?;
-                state.abandon_failed_startup_queue(agent.id, now_ms);
-                // The persisted marker deduplicates this blocker across restarts.
-                self.save(state)?;
+                )?;
             } else {
                 self.enrich_reported_startup_exit(&agent)?;
             }
         }
         Ok(())
+    }
+
+    fn close_startup_failure(
+        &mut self,
+        agent: &super::RoomAgent,
+        mut startup: AgentStartup,
+        launch_input_failed: bool,
+        explicit_error: Option<(&'static str, &str)>,
+        process_exited: bool,
+        timeout_ms: u64,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let sessionless = agent.runtime_identity.session_id.is_none();
+        let evidence = if launch_input_failed && !sessionless {
+            "> Conversation screen omitted".into()
+        } else {
+            self.startup_screen(agent.id)
+        };
+        let diagnostics = self.startup_diagnostics(agent);
+        let reason = if let Some((_, reason)) = explicit_error {
+            reason.to_owned()
+        } else if process_exited {
+            "provider exited during startup".into()
+        } else {
+            format!(
+                "no provider session or interactive confirmation within {} seconds",
+                timeout_ms / 1000
+            )
+        };
+        if process_exited {
+            self.capture_startup_exit(agent)?;
+        }
+        let snapshot = self
+            .state
+            .agent(agent.id)
+            .and_then(super::exit_snapshot::startup_snapshot)
+            .map(crate::messaging::model::ExitSnapshot::notice)
+            .unwrap_or_default();
+        let (cause, metric_cause) = startup_failure_cause(
+            &startup,
+            explicit_error.map(|(cause, _)| cause),
+            process_exited,
+        );
+        let new_conversation = sessionless && startup.native_terminal_id.is_none();
+        let restore_failure = explicit_error.is_some()
+            && (startup.native_terminal_id.is_some() || cause == StartupFailure::NATIVE_RESUME);
+        let mut failure = startup_failure(
+            (new_conversation || restore_failure).then_some(cause),
+            &reason,
+            &evidence,
+            sessionless,
+        );
+        describe_exhausted_retry(&mut failure, startup.recovery.as_ref());
+        if !snapshot.is_empty() {
+            failure.reason = format!("{}\n{snapshot}", failure.reason);
+        }
+        let text = format!(
+            "{} Agent identity retained; never-submitted queued requests closed.\nProvider: {}\nCommand: {}\nLast screen lines:\n{evidence}\nStartup diagnostics:\n{diagnostics}",
+            failure.notice(), launch::provider_kind(agent.provider), startup.command
+        );
+        startup.failure = Some(failure);
+        let mut state = self.state.clone();
+        state
+            .set_agent_error(agent.id, Some(text))
+            .map_err(|e| e.to_string())?;
+        tracing::warn!(
+            event = "bus.agent.startup_failed",
+            agent_id = agent.id.0,
+            provider = launch::provider_kind(agent.provider),
+            cause,
+            reason = %reason,
+            "Agent startup failed; identity retained and never-submitted queued requests closed"
+        );
+        startup.reported = true;
+        super::launch_metrics::settle_current(
+            &mut state,
+            agent.id,
+            crate::messaging::model::LaunchOutcome::Failed,
+            Some(metric_cause),
+            now_ms,
+        );
+        state
+            .set_agent_startup(agent.id, Some(startup))
+            .map_err(|e| e.to_string())?;
+        state.abandon_failed_startup_queue(agent.id, now_ms);
+        self.save(state)
     }
 
     /// A startup deadline can precede the provider's eventual confirmed exit.
