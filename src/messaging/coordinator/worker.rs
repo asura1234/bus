@@ -162,8 +162,10 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
-        state
-            .expire_stalled_queued_requests(io::now_ms())
+        let before_expiry = state.clone();
+        let expiry_at_ms = io::now_ms();
+        let expired = state
+            .expire_stalled_queued_requests(expiry_at_ms)
             .map_err(|e| e.to_string())?;
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.
         let codex_rollouts = saved_rollouts(&state);
@@ -183,6 +185,7 @@ impl Worker {
                 .map_err(|e| e.to_string())?;
         }
         store.save(&state).map_err(|e| e.to_string())?;
+        diagnostics::queued_expiries(&before_expiry, &state, &expired, expiry_at_ms);
         super::callback_gc::collect(&data_dir, &state);
         Ok(Self {
             interrupt_attempts: InterruptAttempts::default(),

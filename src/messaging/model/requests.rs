@@ -228,22 +228,6 @@ impl BusState {
         Ok(())
     }
 
-    /// When the agent last worked on a request it took: a turn event, or that
-    /// request settling. A turn that starts and ends between two status polls
-    /// leaves no status change, so the queue behind it counts from this too.
-    /// A refused paste returns its request to the queue and is no progress.
-    fn last_progress_ms(&self, agent: AgentId) -> u64 {
-        self.requests
-            .values()
-            .filter(|request| request.agent_id == agent && request.phase != RequestPhase::Queued)
-            .filter_map(|request| {
-                let progress = request.progress_at_ms?;
-                Some(progress.max(request.completed_at_ms.unwrap_or(0)))
-            })
-            .max()
-            .unwrap_or(0)
-    }
-
     /// Why `request` needs recovery once it has made no progress for a grace
     /// period, or `None`. Unattempted work waits through Working/Blocked:
     /// a long turn is normal, and a blocked one waits on an answer (see
@@ -313,20 +297,12 @@ impl BusState {
             {
                 None
             }
-            RequestPhase::Queued => {
-                let agent_id = agent.id;
-                let from = lead
-                    .prompt
-                    .submitted_at_ms
-                    .max(lead.progress_at_ms.unwrap_or(0))
-                    .max(agent.status_since_ms)
-                    .max(self.last_progress_ms(agent_id));
-                if !since(QUEUED_STALL_MS, from) {
-                    None
-                } else {
-                    self.queued_stall_reason(agent_id, lead.id)
-                }
+            RequestPhase::Queued
+                if since(QUEUED_STALL_MS, self.queued_stall_baseline(lead, agent)) =>
+            {
+                self.queued_stall_reason(agent.id, lead.id)
             }
+            RequestPhase::Queued => None,
             RequestPhase::Submitting => {
                 let progress = lead
                     .progress_at_ms
