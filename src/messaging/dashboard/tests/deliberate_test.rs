@@ -510,3 +510,109 @@ fn rejected_idle_notice_retires_before_prompt_not_shown_expiry() {
         .is_empty());
     assert_eq!(report(&state), expected);
 }
+
+#[test]
+fn retiring_stale_notice_head_preserves_the_not_idle_hold_for_ordinary_work() {
+    use crate::messaging::model::{SubmissionOutcome, QUEUED_STALL_MS};
+
+    let (mut state, room, subject, lead) = idle_notice_state();
+    let notice = post_idle_notice(&mut state, lead);
+    state
+        .post_bus_notice(room, Some(lead), "ordinary Bus message".into(), NOTICE_AT)
+        .unwrap();
+    let ordinary = state.queued_requests(lead)[1];
+
+    for (boundary, message) in [
+        (5, crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE),
+        (6, "Agent is not idle; prompt was not sent"),
+    ] {
+        assert!(state.coalesce_queue(notice).is_some());
+        assert_eq!(state.request(ordinary).unwrap().group, Some(notice));
+        state
+            .begin_submission(notice, "launch-lead", boundary)
+            .unwrap();
+        state
+            .record_submission(
+                notice,
+                SubmissionOutcome::DefinitelyRejected {
+                    message: message.into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(state.queued_requests(lead), &[notice, ordinary]);
+    }
+    let first = state
+        .request(ordinary)
+        .unwrap()
+        .queued_rejection
+        .as_ref()
+        .unwrap();
+    assert_eq!(first.reason, "prompt_not_shown");
+    let deadline = first.at_ms + QUEUED_STALL_MS;
+    assert_eq!(
+        state.agent(lead).unwrap().delivery_rejection.as_deref(),
+        Some("agent_not_idle")
+    );
+
+    state.delete_agent(subject, NOTICE_AT + 1).unwrap();
+    assert_eq!(
+        state.request(notice).unwrap().failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
+    assert_eq!(state.queued_requests(lead), &[ordinary]);
+    assert!(state
+        .expire_stalled_queued_requests(deadline)
+        .unwrap()
+        .is_empty());
+    assert_eq!(state.queued_requests(lead), &[ordinary]);
+    assert_eq!(state.request(ordinary).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(
+        state.agent(lead).unwrap().delivery_rejection.as_deref(),
+        Some("agent_not_idle")
+    );
+    let dashboard = report(&state);
+    assert_eq!(dashboard["all"]["counts"]["attempts"], 1);
+    assert_eq!(dashboard["failures"], serde_json::json!([]));
+}
+
+#[test]
+fn retiring_an_idle_notice_member_preserves_its_unknown_write_audit() {
+    use crate::messaging::model::UNCONFIRMED_SUBMISSION_MS;
+
+    let (mut state, room, subject, lead) = idle_notice_state();
+    state
+        .post_bus_notice(room, Some(lead), "ordinary Bus message".into(), NOTICE_AT)
+        .unwrap();
+    let ordinary = state.queued_requests(lead)[0];
+    assert!(state
+        .notify_idle_agents(10, 1, NOTICE_AT, &mut Default::default())
+        .unwrap());
+    let notice = state.queued_requests(lead)[1];
+    assert!(state.coalesce_queue(ordinary).is_some());
+    assert_eq!(state.request(notice).unwrap().group, Some(ordinary));
+    write_uncertain_notice(&mut state, ordinary);
+    assert!(state.request(ordinary).unwrap().uncertain_outcome);
+
+    state.delete_agent(subject, NOTICE_AT + 1).unwrap();
+    state
+        .fail_unconfirmed_submissions(NOTICE_AT + UNCONFIRMED_SUBMISSION_MS)
+        .unwrap();
+    let retired = state.request(notice).unwrap();
+    assert_eq!(retired.phase, RequestPhase::Abandoned);
+    assert_eq!(retired.failure_reason.as_deref(), Some("agent_deleted"));
+    assert!(retired.uncertain_outcome);
+    let ordinary_request = state.request(ordinary).unwrap();
+    assert_eq!(
+        ordinary_request.failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    assert!(ordinary_request.uncertain_outcome);
+
+    let dashboard = report(&state);
+    assert_eq!(dashboard["all"]["counts"]["attempts"], 1);
+    assert_eq!(
+        dashboard["all"]["counts"]["bus_reasons"]["submission_unconfirmed"],
+        1
+    );
+    assert_eq!(dashboard["failures"][0]["request_id"], ordinary.0);
+}

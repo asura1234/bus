@@ -258,11 +258,12 @@ impl BusState {
                 } else {
                     AGENT_DELETED
                 };
-                Some((*id, reason))
+                let preserve_queue_hold = request.informational_subjects_match(|_| true);
+                Some((*id, reason, preserve_queue_hold))
             })
             .collect();
-        for (id, reason) in retired {
-            self.recover_idle_request(id, now_ms)?;
+        for (id, reason, preserve_queue_hold) in retired {
+            self.recover_idle_request_with_queue_hold(id, now_ms, preserve_queue_hold)?;
             if let Some(request) = self.requests.get_mut(&id) {
                 request.failure_reason = Some(reason.into());
                 request.send_interrupt = None;

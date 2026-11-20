@@ -424,6 +424,15 @@ impl BusState {
         request: RequestId,
         recovered_at_ms: u64,
     ) -> Result<(), ModelError> {
+        self.recover_idle_request_with_queue_hold(request, recovered_at_ms, false)
+    }
+
+    pub(super) fn recover_idle_request_with_queue_hold(
+        &mut self,
+        request: RequestId,
+        recovered_at_ms: u64,
+        preserve_queue_hold: bool,
+    ) -> Result<(), ModelError> {
         let request_state = self
             .requests
             .get(&request)
@@ -458,6 +467,12 @@ impl BusState {
                 .get(&agent_id)
                 .ok_or(ModelError::UnknownAgent(agent_id))?;
             let clear_error = agent.current_request.is_none() && !request_state.is_error_report();
+            // A busy recipient can have older rejections on other queued requests.
+            let preserve_queue_hold = preserve_queue_hold
+                && matches!(
+                    agent.delivery_rejection.as_deref(),
+                    Some("agent_not_idle" | "composer_busy")
+                );
             let queue = self
                 .queues
                 .get_mut(&agent_id)
@@ -467,6 +482,7 @@ impl BusState {
                 .position(|id| *id == request)
                 .ok_or(ModelError::InvalidTransition)?;
             queue.remove(position);
+            let keep_hold = preserve_queue_hold && !queue.is_empty();
             let request_state = self
                 .requests
                 .get_mut(&request)
@@ -474,7 +490,7 @@ impl BusState {
             request_state.phase = RequestPhase::Abandoned;
             request_state.pending_final = None;
             request_state.completed_at_ms = Some(recovered_at_ms);
-            if position == 0 && clear_error {
+            if position == 0 && clear_error && !keep_hold {
                 if let Some(agent) = self.agents.get_mut(&agent_id) {
                     agent.delivery_rejection = None;
                     agent.actionable_error = None;
