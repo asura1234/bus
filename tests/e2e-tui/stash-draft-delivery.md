@@ -36,7 +36,7 @@ The ordinary incoming messages show their usual `fake reply:` output only in
 the native pane. Every incoming completion below requires its exact request to
 be `complete:true`, `stage:replied` with its native reply text, `reason:null`,
 with a trusted start, and its matching native output exactly once. The stored
-reply is the native final; no separate chat row is expected.
+reply is the native final and appears under its original developer message.
 
 Record PASS/FAIL for every step; no skips or failed-step retries. Capture the
 native composer before sending, while a message waits, and after restoration.
