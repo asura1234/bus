@@ -133,8 +133,13 @@ fn a_developer_send_interrupts_the_running_turn_and_runs_as_the_next_turn() {
             [vec!["esc".to_owned()]],
             "{provider:?}: the developer's message must press the stop key once"
         );
+        assert_eq!(
+            fixture.request(lead).failure_reason.as_deref(),
+            Some("interrupted"),
+            "{provider:?}: interrupted turn closes immediately without waiting for Idle"
+        );
         assert!(
-            fixture
+            !fixture
                 .worker
                 .state
                 .agent(fixture.agent)
@@ -145,30 +150,11 @@ fn a_developer_send_interrupts_the_running_turn_and_runs_as_the_next_turn() {
         let queued = fixture.request(message);
         assert_eq!(queued.phase, RequestPhase::Queued, "{provider:?}");
         assert!(queued.queue_only, "{provider:?}");
+        assert!(queued.interrupt_delivery, "{provider:?}");
         assert!(!queued.steered, "{provider:?}");
         assert_eq!(queued.group, None, "{provider:?}");
 
-        // The stop key is asynchronous: nothing is typed into the dying turn.
-        let typed = fixture.typed().len();
-        fixture.deliver();
-        fixture.deliver();
-        assert_eq!(fixture.typed().len(), typed, "{provider:?}");
-
-        // No Stop hook follows an interrupt; the idle screen ends the turn.
-        fixture.status(RuntimeStatus::Idle);
-        assert_eq!(
-            fixture.request(lead).failure_reason.as_deref(),
-            Some("interrupted"),
-            "{provider:?}"
-        );
-        assert!(
-            !fixture
-                .worker
-                .state
-                .agent(fixture.agent)
-                .unwrap()
-                .interrupt_pending
-        );
+        // Interrupt-mode sends deliver immediately without waiting for Idle.
         fixture.deliver();
         assert_typed(&fixture, "change course now", false);
         assert_eq!(fixture.request(message).group, None, "{provider:?}");
@@ -505,13 +491,9 @@ fn room_composer_developer_send_interrupts_the_running_turn() {
         [vec!["esc".to_owned()]],
         "a developer message from the room composer must press the stop key"
     );
-    assert!(
-        fixture
-            .worker
-            .state
-            .agent(fixture.agent)
-            .unwrap()
-            .interrupt_pending
+    assert_eq!(
+        fixture.request(lead).failure_reason.as_deref(),
+        Some("interrupted")
     );
     let message = *fixture
         .worker
@@ -520,19 +502,8 @@ fn room_composer_developer_send_interrupts_the_running_turn() {
         .last()
         .unwrap();
     assert!(fixture.request(message).queue_only);
+    assert!(fixture.request(message).interrupt_delivery);
     assert_eq!(fixture.request(message).group, None);
-    let typed = fixture.typed().len();
-    fixture.deliver();
-    assert_eq!(
-        fixture.typed().len(),
-        typed,
-        "the composer message must not be typed into the dying turn"
-    );
-    fixture.status(RuntimeStatus::Idle);
-    assert_eq!(
-        fixture.request(lead).failure_reason.as_deref(),
-        Some("interrupted")
-    );
     fixture.deliver();
     assert_typed(&fixture, "change course now", false);
 }
@@ -562,13 +533,9 @@ fn the_room_composer_interrupts_the_running_turn_for_either_key() {
                 [vec!["esc".to_owned()]],
                 "{provider:?}"
             );
-            assert!(
-                fixture
-                    .worker
-                    .state
-                    .agent(fixture.agent)
-                    .unwrap()
-                    .interrupt_pending,
+            assert_eq!(
+                fixture.request(lead).failure_reason.as_deref(),
+                Some("interrupted"),
                 "{provider:?}"
             );
             let message = *fixture
@@ -578,47 +545,12 @@ fn the_room_composer_interrupts_the_running_turn_for_either_key() {
                 .last()
                 .unwrap();
             assert!(fixture.request(message).queue_only, "{provider:?}");
+            assert!(fixture.request(message).interrupt_delivery, "{provider:?}");
             assert_eq!(fixture.request(message).group, None, "{provider:?}");
-            let typed = fixture.typed().len();
-            fixture.deliver();
-            assert_eq!(fixture.typed().len(), typed, "{provider:?}");
-            fixture.status(RuntimeStatus::Idle);
-            assert_eq!(
-                fixture.request(lead).failure_reason.as_deref(),
-                Some("interrupted"),
-                "{provider:?}"
-            );
             fixture.deliver();
             assert_typed(&fixture, "change course now", false);
         }
     }
-}
-
-#[test]
-fn developer_send_keeps_interrupt_intent_and_reports_native_retirement_result() {
-    let mut fixture = Fixture::new(Provider::ClaudeDs);
-    let lead = running(&mut fixture, "old work", "1");
-    let params = send_params(&fixture, "developer correction");
-    let response = send(&mut fixture, params);
-    assert!(response.ok, "{response:?}");
-    let follower = sent_request(&response);
-    assert!(fixture.request(follower).queue_only);
-    assert_eq!(fixture.request(follower).group, None);
-    assert_eq!(
-        fixture.worker.state.queued_requests(fixture.agent),
-        &[follower]
-    );
-    assert_eq!(stop_keys(&fixture), [vec!["esc".to_owned()]]);
-    assert_eq!(
-        response.result["interrupts"][0]["agent_id"],
-        fixture.agent.0
-    );
-    assert_eq!(response.result["interrupts"][0]["outcome"], "interrupting");
-    fixture.status(RuntimeStatus::Idle);
-    assert_eq!(
-        fixture.request(lead).failure_reason.as_deref(),
-        Some("interrupted")
-    );
 }
 
 fn second_running(f: &mut Fixture) -> AgentId {
@@ -862,32 +794,6 @@ fn queued_stop_replays_after_the_original_turn_binds() {
     f.consume();
     assert_eq!(f.request(lead).provider_turn_id.as_deref(), Some("turn-1"));
     f.worker.replay_queued_send_interrupts(f.now).unwrap();
-    assert_eq!(stop_keys(&f), [vec!["esc".to_string()]]);
-}
-
-#[test]
-fn definite_claude_prewrite_refusal_releases_the_queued_stop_claim() {
-    let mut f = Fixture::new(Provider::ClaudeDs);
-    let lead = running(&mut f, "old work", "turn-1");
-    let mut state = f.worker.state.clone();
-    let bound = state.agent(f.agent).unwrap().runtime_identity.clone();
-    let mut unbound = bound.clone();
-    unbound.session_id = None;
-    state.set_agent_runtime_identity(f.agent, unbound).unwrap();
-    f.worker.save(state).unwrap();
-    let params = send_params(&f, "first follower");
-    let response = send(&mut f, params);
-    assert!(response.ok, "{response:?}");
-    assert_eq!(response.result["interrupts"][0]["outcome"], "failed");
-    assert!(stop_keys(&f).is_empty());
-    let saved = f.worker.store.load().unwrap().unwrap();
-    assert!(saved.request(lead).unwrap().send_interrupt_claim.is_none());
-
-    let mut state = f.worker.state.clone();
-    state.set_agent_runtime_identity(f.agent, bound).unwrap();
-    f.worker.save(state).unwrap();
-    let params = send_params(&f, "second follower");
-    assert!(send(&mut f, params).ok);
     assert_eq!(stop_keys(&f), [vec!["esc".to_string()]]);
 }
 

@@ -170,13 +170,11 @@ impl PaneRuntimeIo {
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, clock, .. } => {
                 let failure = clock.take_write_failure();
-                let clock = clock.clone();
                 let _ = deadline;
                 let sender = sender.clone();
                 let timestamps = scope.timestamps();
                 let (reply_tx, reply_rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    clock.wait_for_write_delivery();
                     let result = (if text.is_empty() {
                         Ok(())
                     } else {

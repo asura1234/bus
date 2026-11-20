@@ -626,13 +626,6 @@
                 "null"
               ]
             },
-            "agent_exited_session_id": {
-              "description": "Session reported by the process incarnation whose exit is confirmed.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "agent_process_exited": {
               "default": false,
               "description": "Explicit native process-exit evidence, excluding automatic self-update restarts.",
@@ -1145,6 +1138,10 @@
         "AgentPromptIfIdleParams": {
           "description": "A separate method makes older servers reject the safety guard, never ignore it.",
           "properties": {
+            "allow_working": {
+              "description": "Allow delivering a new turn immediately after an interrupt even while\nthe pane still reports Working. A blocked agent is still refused.",
+              "type": "boolean"
+            },
             "expected_agent": {
               "type": "string"
             },
@@ -1196,6 +1193,9 @@
         "AgentPromptIfUnboundParams": {
           "description": "First interactive Codex turn: its SessionStart hook is deferred until input.\nThis separate method requires the exact managed launch, never an arbitrary pane.",
           "properties": {
+            "allow_working": {
+              "type": "boolean"
+            },
             "expected_generation": {
               "format": "uint64",
               "minimum": 0,
@@ -1542,22 +1542,6 @@
           },
           "required": [
             "target"
-          ],
-          "type": "object"
-        },
-        "ClaudeRetirementTurn": {
-          "additionalProperties": false,
-          "properties": {
-            "launch_id": {
-              "type": "string"
-            },
-            "prompt_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "launch_id",
-            "prompt_id"
           ],
           "type": "object"
         },
@@ -2009,38 +1993,11 @@
         },
         "NativeInterruptIdentity": {
           "properties": {
-            "claude_turn": {
-              "anyOf": [
-                {
-                  "$ref": "#/schemas/request/$defs/ClaudeRetirementTurn"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Accepted Claude submit-hook identity for transcript-backed retirement."
-            },
-            "expected_payloads": {
-              "description": "Exact current Bus inputs eligible for Claude restored-draft retirement.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
             "expected_session_id": {
               "type": "string"
             },
             "expected_terminal_id": {
               "type": "string"
-            },
-            "retirement_request_id": {
-              "description": "Stable coordinator request identity for idempotent Claude retirement.",
-              "format": "uint64",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
             }
           },
           "required": [
@@ -3184,17 +3141,6 @@
           ],
           "type": "object"
         },
-        "TerminalTarget": {
-          "properties": {
-            "terminal_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "terminal_id"
-          ],
-          "type": "object"
-        },
         "ToastBusPosition": {
           "enum": [
             "top-left",
@@ -4135,22 +4081,6 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneTarget"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "terminal.require_absent",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/TerminalTarget"
             }
           },
           "required": [
@@ -5852,13 +5782,6 @@
                 "null"
               ]
             },
-            "agent_exited_session_id": {
-              "description": "Session reported by the process incarnation whose exit is confirmed.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "agent_process_exited": {
               "default": false,
               "description": "Explicit native process-exit evidence, excluding automatic self-update restarts.",
@@ -6720,22 +6643,6 @@
               "required": [
                 "type",
                 "press"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "terminal_id": {
-                  "type": "string"
-                },
-                "type": {
-                  "const": "terminal_absent",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "terminal_id"
               ],
               "type": "object"
             },

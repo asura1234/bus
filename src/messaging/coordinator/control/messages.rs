@@ -81,30 +81,6 @@ impl Worker {
                     actor,
                     at_ms: crate::messaging::storage::io::now_ms(),
                 };
-                if source.interrupt_retirement_resolved {
-                    let stage = if source.phase == RequestPhase::Completed {
-                        "completed"
-                    } else {
-                        "abandoned"
-                    };
-                    return Ok(json!({"request_id":request,"agent_id":agent,"stage":stage}));
-                }
-                if self.state.interrupt_retirement_owner(agent) == Some(request) {
-                    let mut state = self.state.clone();
-                    if !self.resolve_exited_claude_input(&mut state, agent, recovery.at_ms)? {
-                        return Err(ModelError::InterruptRetirementPending.to_string());
-                    }
-                    let stage = if state
-                        .request(request)
-                        .is_some_and(|row| row.phase == RequestPhase::Completed)
-                    {
-                        "completed"
-                    } else {
-                        "abandoned"
-                    };
-                    self.save(state)?;
-                    return Ok(json!({"request_id":request,"agent_id":agent,"stage":stage}));
-                }
                 let mut state = self.state.clone();
                 state
                     .manually_recover_idle_request(request, recovery)
@@ -653,14 +629,10 @@ impl Worker {
                 .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
             let submission = if r.submission_notice().is_some() { r } else { r.group.and_then(|lead| self.state.request(lead)).unwrap_or(r) };
             let failure_detail = self.state.steered_turn_failure(r);
-            let hold = agent.and_then(|a| self.state.interrupt_retirement_owner(a.id))
-                .and_then(|id| self.state.request(id))
-                .filter(|lead| r.id == lead.id || r.group == Some(lead.id) || r.phase == RequestPhase::Queued)
-                .and_then(Request::submission_notice);
-            let detail = hold.as_ref().or_else(|| failure_detail.as_ref()
+            let detail = failure_detail.as_ref()
                 .or_else(|| r.manual_recovery.as_ref().and(r.submission_error.as_ref()))
                 .or_else(|| submission.manual_recovery.as_ref().and(submission.submission_error.as_ref()))
-                .or_else(|| submission.submission_notice().and(submission.submission_error.as_ref())));
+                .or_else(|| submission.submission_notice().and(submission.submission_error.as_ref()));
             json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":self.state.agent_label(r.agent_id),"deleted":agent.is_none(),"stage":stage,"reason":reason,"manual_recovery":r.manual_recovery,"status":agent.map(|a| if a.provider_retry.is_some() { RuntimeStatus::Working } else { a.status }),"delivery_error":(!matches!(r.phase, RequestPhase::Completed | RequestPhase::Abandoned)).then(|| agent.and_then(|a| a.delivery_error())).flatten(),"uncertain_outcome":r.uncertain_outcome,"detail":detail,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"settling":self.state.settling(r),"group":r.group,"queue":r.queue_only,"interrupt":r.send_interrupt_outcome,"latency":r.latency,"event_acks":outcomes.iter().map(|(key,_)|key).collect::<Vec<_>>(),"events":worker_events.iter().map(|(key,text)|json!({"key":key,"text":text})).collect::<Vec<_>>(),"reply_ack":self.state.reply_needs_ack(r),"exit_snapshot":agent.and_then(|a|a.exit_snapshot.as_ref()),"reply":r.reply()})
         }).collect::<Vec<_>>()}),
         )

@@ -12,6 +12,9 @@ pub(in crate::messaging::coordinator) fn stage_send_interrupts(
 ) -> Result<Vec<(RequestId, SendInterrupt)>, String> {
     let mut interrupts = Vec::new();
     for id in requests {
+        state
+            .mark_interrupt_delivery(*id)
+            .map_err(|error| error.to_string())?;
         let request = state.request(*id).ok_or("Missing queued send")?;
         if let Some(intent) = state.send_interrupt_target(request.agent_id) {
             state
@@ -145,8 +148,32 @@ impl Worker {
             if claimed && !may_have_written {
                 release = staged;
             }
+            if may_have_written {
+                state.retain_interrupt_stop_claim(recipient);
+            }
             result
         };
+        // Interrupt-mode sends never wait for the previous turn to finish:
+        // settle the interrupted turn immediately for every stop outcome so the
+        // new message can deliver as soon as the pane accepts input. Keep an
+        // in-flight/uncertain provisional busy-join head intact so its native
+        // receipt can finish or requeue cleanly.
+        let provisional_submitting = state
+            .agent(recipient)
+            .and_then(|agent| agent.current_request)
+            .and_then(|request_id| state.request(request_id))
+            .is_some_and(|request| {
+                request.phase == RequestPhase::Submitting && !request.trusted_start_bound
+            });
+        if !provisional_submitting
+            && state
+                .agent(recipient)
+                .is_some_and(|agent| agent.current_request.is_some() || agent.interrupt_pending)
+        {
+            state
+                .complete_native_interrupt(recipient, now)
+                .map_err(|error| error.to_string())?;
+        }
         let outcome = SendInterruptOutcome {
             outcome: result["outcome"]
                 .as_str()

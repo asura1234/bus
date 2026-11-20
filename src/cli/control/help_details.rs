@@ -341,10 +341,7 @@ const REQUEST_RECOVER: &str = r#"Explicitly close a stuck recipient request with
 requests close individually, regardless of agent status. Already abandoned is
 idempotent. Typed current work requires confirmed idle, or unavailable with
 session_invalidated; recover a joined group's lead (the group request ID).
-For a held Claude interruption, recovery checks for the original provider exit.
-It leaves the draft and queue fenced until native evidence proves it is safe to
-continue. The old request may have run. Do not resend it.
-Result: {request_id,agent_id,stage:"abandoned"|"completed"}.
+Result: {request_id,agent_id,stage:"abandoned"}. Preserve other queued work.
 Errors: command_failed for unknown/non-lead/currently working typed request;
 inspect message status and current identity/revision facts, then recover the lead
 only when safe. Replace an invalidated agent before resending. Recovery does not

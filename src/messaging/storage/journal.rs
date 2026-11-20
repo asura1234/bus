@@ -135,6 +135,9 @@ impl JournalOp {
                 interrupts,
             } => {
                 let requests = state.submit_draft_exact(*room, draft.clone(), *now_ms, true)?;
+                for id in &requests {
+                    state.mark_interrupt_delivery(*id)?;
+                }
                 for (id, interrupt) in interrupts {
                     if requests.contains(id) {
                         state.stage_send_interrupt(*id, interrupt.clone())?;

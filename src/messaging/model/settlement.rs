@@ -52,11 +52,7 @@ impl BusState {
         let Some(lead) = owner
             .current_request
             .and_then(|id| self.requests.get(&id))
-            .filter(|r| {
-                r.phase == RequestPhase::Completed
-                    && r.pending_final.is_some()
-                    && !r.interrupt_retirement_pending
-            })
+            .filter(|r| r.phase == RequestPhase::Completed && r.pending_final.is_some())
             .cloned()
         else {
             return false;
@@ -304,9 +300,6 @@ impl BusState {
             .agents
             .get(&callback.agent_id)
             .is_some_and(|owner| owner.provider == super::Provider::Kimi);
-        if previous.interrupt_retirement_pending {
-            return Ok(false);
-        }
         if previous.pending_final.is_none() && !independent_kimi_turn {
             // A running generation can be replaced before it answers (Cursor
             // does this for follow-ups). Its messages still await one answer.
@@ -751,12 +744,6 @@ impl BusState {
         now_ms: u64,
         reason: String,
     ) -> Result<bool, ModelError> {
-        if self
-            .request(id)
-            .is_some_and(|r| self.interrupt_retirement_owner(r.agent_id).is_some())
-        {
-            return Ok(false);
-        }
         let reason = self.restart_continuation_failure_reason(id, reason);
         let detail = (reason == "submission_unconfirmed")
             .then(|| {

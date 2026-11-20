@@ -69,12 +69,14 @@ pub(super) fn check_unbound_prompt_identity_and_idle(
         ));
     }
     // A visible dialog takes typed text as its answer, as on a bound agent.
-    if !matches!(
-        agent.agent_status,
+    let accepted = match agent.agent_status {
         crate::protocol::api::schema::AgentStatus::Idle
-            | crate::protocol::api::schema::AgentStatus::Done
-    ) || agent.dialog_id.is_some()
-    {
+        | crate::protocol::api::schema::AgentStatus::Done => true,
+        crate::protocol::api::schema::AgentStatus::Working => params.allow_working,
+        crate::protocol::api::schema::AgentStatus::Blocked
+        | crate::protocol::api::schema::AgentStatus::Unknown => false,
+    };
+    if !accepted || agent.dialog_id.is_some() {
         return Err(("agent_not_idle", "Agent is not idle; prompt was not sent"));
     }
     if agent.launch_pending || !agent.interactive_ready {
@@ -110,7 +112,7 @@ pub(super) fn check_prompt_identity_and_idle(
     }
     let accepted = match agent.agent_status {
         AgentStatus::Idle | AgentStatus::Done => true,
-        AgentStatus::Working => params.steer,
+        AgentStatus::Working => params.steer || params.allow_working,
         AgentStatus::Blocked | AgentStatus::Unknown => false,
     };
     if !accepted || agent.dialog_id.is_some() {
@@ -484,13 +486,6 @@ fn queue_prompt_submission(
 > {
     let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
     let _entered = span.enter();
-    if expected_agent == crate::agents::AgentKind::Claude {
-        if let Some(session) = &agent.agent_session {
-            runtime
-                .submission_handle(true)
-                .bind_claude_session(&session.value);
-        }
-    }
 
     #[cfg(unix)]
     if let Some(completion) = super::codex_native::queue(
@@ -618,6 +613,7 @@ fn prepare_prompt_input(
                 directory,
                 keys.into_iter().map(Bytes::from).collect(),
                 steer,
+                runtime.bracketed_paste_enabled(),
             ))
         } else {
             Box::new(composer::observer(kind, text))

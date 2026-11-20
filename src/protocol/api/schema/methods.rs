@@ -134,8 +134,6 @@ pub enum Method {
     PaneCurrent(PaneCurrentParams),
     #[serde(rename = "pane.get")]
     PaneGet(PaneTarget),
-    #[serde(rename = "terminal.require_absent")]
-    TerminalRequireAbsent(super::TerminalTarget),
     #[serde(rename = "pane.locate_process")]
     PaneLocateProcess(super::ReportingProcess),
     #[serde(rename = "pane.focus")]
@@ -225,7 +223,6 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PaneList(_) => "pane.list",
         Method::PaneCurrent(_) => "pane.current",
         Method::PaneGet(_) => "pane.get",
-        Method::TerminalRequireAbsent(_) => "terminal.require_absent",
         Method::PaneLocateProcess(_) => "pane.locate_process",
         Method::PaneFocus(_) => "pane.focus",
         Method::PaneInputSet(_) => "pane.input.set",

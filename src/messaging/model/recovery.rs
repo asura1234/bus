@@ -467,13 +467,6 @@ impl BusState {
         request: RequestId,
         recovered_at_ms: u64,
     ) -> Result<(), ModelError> {
-        let agent = self
-            .request(request)
-            .ok_or(ModelError::UnknownRequest(request))?
-            .agent_id;
-        if self.interrupt_retirement_owner(agent).is_some() {
-            return Err(ModelError::InterruptRetirementPending);
-        }
         let report = self
             .request(request)
             .is_some_and(super::Request::is_error_report);

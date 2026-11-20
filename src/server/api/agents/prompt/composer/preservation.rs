@@ -11,6 +11,7 @@ pub(super) struct PreservingComposer {
     directory: PathBuf,
     keys: Vec<Bytes>,
     steer: bool,
+    bracketed_paste: bool,
     native_draft: Mutex<Option<NativeDraft>>,
 }
 
@@ -33,6 +34,7 @@ impl PreservingComposer {
             directory,
             keys,
             steer: false,
+            bracketed_paste: true,
             native_draft: Mutex::new(None),
         }
     }
@@ -40,6 +42,24 @@ impl PreservingComposer {
     pub(super) fn with_steering(mut self, steer: bool) -> Self {
         self.steer = steer;
         self
+    }
+
+    pub(super) fn with_bracketed_paste(mut self, bracketed_paste: bool) -> Self {
+        self.bracketed_paste = bracketed_paste;
+        self
+    }
+
+    fn copy_draft(&self, body: String) -> DraftPreservation {
+        let restore_bytes = (!body.is_empty() && !opaque(&body)).then(|| {
+            Bytes::from(crate::terminal::driver::input::paste(
+                &body,
+                self.bracketed_paste,
+            ))
+        });
+        DraftPreservation::Copy {
+            snapshot: body,
+            restore_bytes,
+        }
     }
 }
 
@@ -52,33 +72,32 @@ impl PreservingComposer {
         pristine: bool,
     ) -> Option<DraftPreservation> {
         let body = super::input_since_launch(self.kind, screen, cursor, pristine)?;
-        if (body.is_empty() && !allow_empty) || self.keys.len() != 3 {
+        if body.is_empty() && !allow_empty {
             return None;
         }
-        match self.kind {
-            AgentKind::Claude => {
-                // Claude's stash has one slot. Preserve any stash the developer
-                // already owns; a second stash would silently replace it.
-                if native_stash_present(screen) {
-                    return None;
+        if self.keys.len() == 3 {
+            match self.kind {
+                AgentKind::Claude if !native_stash_present(screen) => {
+                    *self.native_draft.lock().ok()? = Some(NativeDraft::Captured(body.clone()));
+                    return Some(DraftPreservation::Native {
+                        key: self.keys[0].clone(),
+                        directory: self.directory.clone(),
+                        visible_draft: body,
+                    });
                 }
-                *self.native_draft.lock().ok()? = Some(NativeDraft::Captured(body.clone()));
-                Some(DraftPreservation::Native {
-                    key: self.keys[0].clone(),
-                    directory: self.directory.clone(),
-                    visible_draft: body,
-                })
+                AgentKind::Codex | AgentKind::Cursor | AgentKind::Kimi
+                    if !body.is_empty() && !opaque(&body) =>
+                {
+                    return Some(DraftPreservation::Editor {
+                        key: self.keys[1].clone(),
+                        backspace: self.keys[2].clone(),
+                        directory: self.directory.clone(),
+                    });
+                }
+                _ => {}
             }
-            AgentKind::Codex | AgentKind::Cursor | AgentKind::Kimi if !opaque(&body) => {
-                Some(DraftPreservation::Editor {
-                    key: self.keys[1].clone(),
-                    backspace: self.keys[2].clone(),
-                    directory: self.directory.clone(),
-                })
-            }
-            AgentKind::Antigravity => Some(DraftPreservation::Hold),
-            _ => None,
         }
+        Some(self.copy_draft(body))
     }
 }
 
@@ -97,22 +116,6 @@ mod tests;
 mod claude_rich_draft_tests;
 
 impl SubmissionInspector for PreservingComposer {
-    fn retains_joined_claude_receipts(&self) -> bool {
-        self.kind == AgentKind::Claude && self.steer
-    }
-    fn interrupt_receipt(&self) -> Option<(String, String, bool)> {
-        self.owned.interrupt_receipt()
-    }
-    fn interrupted_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> Option<String> {
-        self.owned.interrupted_input(screen, cursor)
-    }
-    fn interrupted_remainder(&self, body: &str) -> bool {
-        self.owned.interrupted_remainder(body)
-    }
-    fn cleanup_expects_empty(&self) -> bool {
-        self.owned.cleanup_expects_empty()
-    }
-
     fn retry_owned_enter(&self) -> bool {
         self.owned.retry_owned_enter()
     }
@@ -120,6 +123,26 @@ impl SubmissionInspector for PreservingComposer {
         self.native_draft
             .lock()
             .map_or(true, |draft| draft.is_some())
+    }
+    fn clear_native_draft(&self) {
+        if let Ok(mut draft) = self.native_draft.lock() {
+            *draft = None;
+        }
+    }
+    fn composer_copy_fallback(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+        pristine: bool,
+    ) -> Option<(String, Option<Bytes>)> {
+        let body = super::input_since_launch(self.kind, screen, cursor, pristine)?;
+        let restore = (!body.is_empty() && !opaque(&body)).then(|| {
+            Bytes::from(crate::terminal::driver::input::paste(
+                &body,
+                self.bracketed_paste,
+            ))
+        });
+        Some((body, restore))
     }
     fn confirm_consumption(&self) -> bool {
         self.owned.confirm_consumption()
@@ -132,9 +155,6 @@ impl SubmissionInspector for PreservingComposer {
     }
     fn submission_available(&self, screen: &str) -> bool {
         super::submission_available(self.kind, screen)
-    }
-    fn claude_empty_editable_composer(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
-        self.kind == AgentKind::Claude && super::claude_empty_editable_composer(screen, cursor)
     }
     fn paste_ready(&self, screen: &str) -> bool {
         if !super::paste_ready(self.kind, screen, &self.expected) {
@@ -190,9 +210,6 @@ impl SubmissionInspector for PreservingComposer {
         pristine: bool,
     ) -> InputObservation {
         self.owned.observe_with_launch(screen, cursor, pristine)
-    }
-    fn retirement_clear_frame(&self, index: usize, screen: &str, cursor: Option<(u16, u16)>) {
-        self.owned.retirement_clear_frame(index, screen, cursor);
     }
 
     fn clearing(&self, index: usize) {
@@ -257,7 +274,12 @@ impl SubmissionInspector for PreservingComposer {
             return None;
         }
         self.choose(screen, cursor, invisible, pristine)
-            .or_else(|| invisible.then_some(DraftPreservation::Hold))
+            .or_else(|| {
+                invisible.then(|| DraftPreservation::Copy {
+                    snapshot: String::new(),
+                    restore_bytes: None,
+                })
+            })
     }
     fn native_stash_visible(&self, screen: &str) -> bool {
         native_stash_present(screen)

@@ -374,52 +374,12 @@ impl BusState {
         }
     }
 
-    pub(crate) fn stamp_native_delivery_epoch(
-        &mut self,
-        id: RequestId,
-        epoch: super::DeliveryEpoch,
-        boundary: Option<u64>,
-    ) -> Result<(), ModelError> {
-        let request = self.request(id).ok_or(ModelError::UnknownRequest(id))?;
-        let agent = self
-            .agent(request.agent_id)
-            .ok_or(ModelError::UnknownAgent(request.agent_id))?;
-        let identity = &agent.runtime_identity;
-        let origin = (agent.provider.uses_claude_harness()
-            && identity.pane_id.as_ref() == Some(&epoch.pane_id)
-            && identity.terminal_id.as_ref() == Some(&epoch.terminal_id)
-            && identity.launch_id == request.expected_launch_id)
-            .then(|| identity.clone());
-        for member in std::iter::once(id).chain(self.group_members(id)) {
-            let request = self
-                .requests
-                .get_mut(&member)
-                .ok_or(ModelError::UnknownRequest(member))?;
-            request.native_delivery_identity = origin.clone();
-            request.native_delivery_callback_boundary = boundary.or(request.submission_boundary);
-        }
-        self.stamp_delivery_epoch(id, epoch)
-    }
-
-    /// Keep later execution evidence in the spool while the original input
-    /// owns an unresolved retirement.
-    pub(crate) fn defer_during_interrupt_retirement(
-        &self,
-        callback: &super::ProviderCallback,
-    ) -> bool {
-        self.interrupt_retirement_evidence_owner(callback.agent_id)
-            .and_then(|lead| self.request(lead))
-            .is_some_and(|lead| {
-                lead.trusted_start_bound
-                    && callback.provider_turn_id.is_some()
-                    && callback.provider_turn_id != lead.provider_turn_id
-                    && matches!(
-                        callback.kind,
-                        super::CallbackEventKind::PromptStarted
-                            | super::CallbackEventKind::Final { .. }
-                            | super::CallbackEventKind::BackgroundPending
-                    )
-            })
+    pub(crate) fn mark_interrupt_delivery(&mut self, id: RequestId) -> Result<(), ModelError> {
+        self.requests
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownRequest(id))?
+            .interrupt_delivery = true;
+        Ok(())
     }
 
     /// Screen status is a presentation observation, not proof that a bound turn
@@ -427,12 +387,6 @@ impl BusState {
     /// A native final releases the current request; a background-pending Stop has
     /// already ended foreground work and needs only the ordinary request cleanup.
     pub(crate) fn needs_interrupt_stop(&self, agent: &super::RoomAgent) -> bool {
-        if self.interrupt_retirement_owner(agent.id).is_some() {
-            return matches!(
-                agent.activity_status(),
-                RuntimeStatus::Idle | RuntimeStatus::Working | RuntimeStatus::Blocked
-            );
-        }
         match agent.activity_status() {
             RuntimeStatus::Working | RuntimeStatus::Blocked => true,
             RuntimeStatus::Idle
@@ -456,127 +410,15 @@ impl BusState {
         }
     }
 
-    pub(crate) fn set_interrupt_retirement(
-        &mut self,
-        agent: AgentId,
-        pending: bool,
-    ) -> Result<(), ModelError> {
-        let owner = self
-            .agents
-            .get(&agent)
-            .ok_or(ModelError::UnknownAgent(agent))?;
-        if let Some(request) = owner
-            .current_request
-            .and_then(|id| self.requests.get_mut(&id))
-        {
-            request.interrupt_retirement_pending = pending;
-            if pending {
-                if request.interrupt_retirement_identity.is_none() {
-                    request.interrupt_retirement_identity =
-                        request.native_delivery_identity.clone();
-                }
-            } else {
-                request.interrupt_retirement_identity = None;
-            }
-            if pending {
-                request.submission_error = Some(
-                    "Claude interrupt draft retirement is unresolved; request remains tracked"
-                        .into(),
-                );
-                request.turn_ended_at_ms = None;
-            } else {
-                request.submission_error = None;
+    /// Preserve a stop claim across immediate interrupt-mode turn closure so a
+    /// back-to-back interrupt send before the next turn delivers does not press
+    /// the provider's stop key a second time.
+    pub(crate) fn retain_interrupt_stop_claim(&mut self, agent: AgentId) {
+        if let Some(owner) = self.agents.get_mut(&agent) {
+            if owner.autonomous_stop.claim.is_none() {
+                owner.autonomous_stop.claim = Some(SendInterrupt::autonomous(owner));
             }
         }
-        Ok(())
-    }
-
-    /// Resolve only after native evidence proves the original provider cannot execute its draft.
-    pub(crate) fn resolve_exited_interrupt_terminal(
-        &mut self,
-        request: RequestId,
-        identity: &super::AgentRuntimeIdentity,
-        now_ms: u64,
-    ) -> Result<(), ModelError> {
-        let lead = self
-            .request(request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        let agent = lead.agent_id;
-        let owner = self.agent(agent).ok_or(ModelError::UnknownAgent(agent))?;
-        if !lead.interrupt_retirement_pending
-            || owner.current_request != Some(request)
-            || lead.interrupt_retirement_identity.as_ref() != Some(identity)
-        {
-            return Err(ModelError::InvalidTransition);
-        }
-        let retiring_current = owner.runtime_identity.terminal_id == identity.terminal_id;
-        if retiring_current {
-            let mut detached = owner.runtime_identity.clone();
-            detached.pane_id = None;
-            self.set_agent_runtime_identity(agent, detached)?;
-        }
-        self.set_interrupt_retirement(agent, false)?;
-        self.clear_native_interrupt_wait(agent)?;
-        self.complete_pending_final(agent, now_ms)?;
-        let mut outstanding = self.group_members(request);
-        outstanding.push(request);
-        for id in outstanding {
-            if let Some(row) = self.requests.get_mut(&id).filter(|row| !row.settled()) {
-                row.uncertain_outcome = true;
-                row.failure_reason = Some("interrupt_outcome_unknown".into());
-            }
-        }
-        // Preserve a completed lead and its answer while closing unclaimed members.
-        if self.agent(agent).and_then(|owner| owner.current_request) == Some(request) {
-            let answered = self.request(request).filter(|row| row.settled()).cloned();
-            self.abandon_current_request(request, now_ms)?;
-            if let Some(answered) = answered {
-                self.requests.insert(request, answered);
-            }
-        }
-        self.requests
-            .get_mut(&request)
-            .expect("retirement owner")
-            .interrupt_retirement_resolved = true;
-        if retiring_current {
-            self.observe_status(agent, super::RuntimeStatus::Unavailable, now_ms)?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn interrupt_retirement_origin(
-        &self,
-        id: RequestId,
-    ) -> Option<&super::AgentRuntimeIdentity> {
-        let lead = self.request(id)?;
-        let identity = lead.native_delivery_identity.as_ref()?;
-        if lead.interrupt_retirement_identity.as_ref() != Some(identity)
-            || self.group_members(id).into_iter().any(|member| {
-                self.request(member).is_some_and(|request| {
-                    !request.settled()
-                        && request.native_delivery_identity.as_ref() != Some(identity)
-                })
-            })
-        {
-            return None;
-        }
-        Some(identity)
-    }
-
-    pub(crate) fn interrupt_retirement_evidence_owner(&self, agent: AgentId) -> Option<RequestId> {
-        let owner = self.agent(agent)?;
-        let id = owner.current_request?;
-        let request = self.request(id)?;
-        (request.interrupt_retirement_pending
-            || (owner.interrupt_pending
-                && owner.provider.uses_claude_harness()
-                && request.native_delivery_identity.is_some()))
-        .then_some(id)
-    }
-
-    pub(crate) fn interrupt_retirement_owner(&self, agent: AgentId) -> Option<RequestId> {
-        let id = self.agent(agent)?.current_request?;
-        self.request(id)?.interrupt_retirement_pending.then_some(id)
     }
 
     /// A native result supersedes an older visual wait without asserting that
@@ -626,14 +468,6 @@ impl BusState {
         agent: AgentId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        if self
-            .agent(agent)
-            .and_then(|a| a.current_request)
-            .and_then(|id| self.request(id))
-            .is_some_and(|r| r.interrupt_retirement_pending)
-        {
-            return Ok(Vec::new());
-        }
         let agent_state = self
             .agents
             .get_mut(&agent)
@@ -785,16 +619,5 @@ impl BusState {
             });
         self.cancel_pending_launch(agent, INTERRUPTED, now_ms);
         Ok(id)
-    }
-}
-
-impl super::Request {
-    pub(super) fn interrupt_retirement_notice(&self) -> String {
-        if self.native_delivery_identity.is_none()
-            || self.native_delivery_identity != self.interrupt_retirement_identity
-        {
-            return "Claude interrupt draft retirement is unresolved. Bus lacks the original delivery identity and cannot safely stop the original provider. The queue remains held. Please do not resend.".into();
-        }
-        "Claude interrupt draft retirement is unresolved. Retry the guarded interrupt or use request recover to check for the original provider exit. The queue will remain held until Bus can verify the original draft is safe. Please do not resend.".into()
     }
 }

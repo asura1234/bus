@@ -132,32 +132,7 @@ impl App {
 
         let terminal_cwd_reported = matches!(ev, TerminalEvent::TerminalCwdReported { .. });
         let previous_toast = self.state.toast.clone();
-        let reported_session_pane = match &ev {
-            TerminalEvent::AgentSessionReported {
-                pane_id,
-                session_ref: Some(_),
-                ..
-            } => Some(*pane_id),
-            _ => None,
-        };
         let pane_updates = self.state.handle_app_event(ev);
-        if let Some((workspace, pane)) = reported_session_pane
-            .and_then(|pane| self.find_pane(pane).map(|(workspace, _)| (workspace, pane)))
-        {
-            let session = self
-                .state
-                .terminal_id_for_pane(workspace, pane)
-                .and_then(|id| self.state.terminals.get(&id))
-                .and_then(|terminal| terminal.persisted_agent_session.as_ref())
-                .filter(|session| matches!(session.agent.as_str(), "claude" | "claude-ds"));
-            if let (Some(session), Some(runtime)) =
-                (session, self.lookup_runtime_sender(workspace, pane))
-            {
-                runtime
-                    .submission_handle(true)
-                    .bind_claude_session(&session.session_ref.value);
-            }
-        }
         if checkpointed_pane_exit {
             self.finish_checkpointed_pane_exit();
         }
@@ -636,7 +611,6 @@ impl App {
                 .is_some_and(|focused| focused == pane_id);
         Some(crate::protocol::api::schema::PaneInfo {
             agent_process_exited: terminal.attention_process_exited(),
-            agent_exited_session_id: terminal.confirmed_exited_agent_session().map(str::to_owned),
             pane_id: self.public_pane_id(ws_idx, pane_id)?,
             terminal_id: terminal.id.to_string(),
             workspace_id: self.public_workspace_id(ws_idx),

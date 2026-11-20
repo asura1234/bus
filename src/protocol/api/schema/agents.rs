@@ -70,24 +70,8 @@ pub struct AgentKeyActivity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NativeInterruptIdentity {
-    /// Exact current Bus inputs eligible for Claude restored-draft retirement.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub expected_payloads: Vec<String>,
-    /// Stable coordinator request identity for idempotent Claude retirement.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retirement_request_id: Option<u64>,
-    /// Accepted Claude submit-hook identity for transcript-backed retirement.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claude_turn: Option<ClaudeRetirementTurn>,
     pub expected_terminal_id: String,
     pub expected_session_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ClaudeRetirementTurn {
-    pub launch_id: String,
-    pub prompt_id: String,
 }
 
 /// Provider-independent observation, including terminals with no agent.
@@ -219,6 +203,10 @@ pub struct AgentPromptIfIdleParams {
     /// still refused.
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub steer: bool,
+    /// Allow delivering a new turn immediately after an interrupt even while
+    /// the pane still reports Working. A blocked agent is still refused.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub allow_working: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_generation: Option<u64>,
     /// Bind native steering to the Bus lead's turn, never a newer TUI turn.
@@ -235,6 +223,8 @@ pub struct AgentPromptIfUnboundParams {
     pub expected_terminal_id: String,
     pub expected_pane_id: String,
     pub expected_managed_name: String,
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub allow_working: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_generation: Option<u64>,
 }
