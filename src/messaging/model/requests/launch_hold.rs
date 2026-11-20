@@ -1,5 +1,5 @@
 //! Queue stall while a provider launch or hook-consent wait is still viable.
-use super::super::{AgentId, BusState, LaunchOutcome, AGENT_STARTUP_FAILED};
+use super::super::{AgentId, BusState, LaunchOutcome, RequestId, AGENT_STARTUP_FAILED};
 
 /// Consent and launch waits. They are not evidence the provider refused delivery.
 ///
@@ -10,7 +10,8 @@ fn launch_consent_wait(reason: &str) -> bool {
 }
 
 impl BusState {
-    /// Idle delivery failure, or nothing while a launch or consent wait is still viable.
+    /// Idle delivery failure, or nothing while a launch, consent wait, or live
+    /// not-idle refusal is still viable.
     ///
     /// `hook_setup_unconfirmed` and `agent_launching` are not a refused submit.
     /// The queue keeps its position until the provider exits or the launch
@@ -18,15 +19,36 @@ impl BusState {
     /// an elapsed launch deadline as that failure; this stall must not invent
     /// one while the attempt is still pending. An idle agent with confirmed
     /// hooks still expires as `not_submitted`.
-    pub(super) fn queued_stall_reason(&self, agent_id: AgentId) -> Option<String> {
+    ///
+    /// A definite `agent_not_idle` refusal stays queued while that agent is
+    /// alive, including after the agent-level rejection is cleared. It closes
+    /// as `agent_not_idle` only once the agent has exited or deletion is pending.
+    pub(super) fn queued_stall_reason(
+        &self,
+        agent_id: AgentId,
+        request_id: RequestId,
+    ) -> Option<String> {
         let (reason, exited) = {
             let agent = self.agents.get(&agent_id)?;
+            let queued_not_idle = self
+                .requests
+                .get(&request_id)
+                .and_then(|request| request.queued_rejection.as_ref())
+                .is_some_and(|rejection| rejection.reason == "agent_not_idle");
+            let delivery_not_idle = agent.delivery_rejection.as_deref() == Some("agent_not_idle");
+            if queued_not_idle || delivery_not_idle {
+                let exited = agent.exit_snapshot.is_some() || agent.deletion_pending;
+                return exited.then(|| "agent_not_idle".into());
+            }
             let reason = agent
                 .delivery_rejection
                 .clone()
                 .or_else(|| agent.wait_reason().map(str::to_owned))
                 .unwrap_or_else(|| "not_submitted".into());
-            (reason, agent.exit_snapshot.is_some())
+            (
+                reason,
+                agent.exit_snapshot.is_some() || agent.deletion_pending,
+            )
         };
         if !launch_consent_wait(&reason) {
             return Some(reason);

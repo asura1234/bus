@@ -759,6 +759,31 @@ fn a_confirmed_idle_agent_missing_its_terminal_still_expires() {
 }
 
 #[test]
+fn a_queued_follow_up_behind_a_live_turn_is_not_closed_as_not_submitted() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.confirm_hook_setup(agent).unwrap();
+    state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+    let current = submit_text(&mut state, room, agent, "the live turn");
+    start_request(&mut state, current, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 12)
+        .unwrap();
+    let follow = submit_text(&mut state, room, agent, "deliver when the turn ends");
+    let later = 12 + QUEUED_STALL_MS * 4;
+    assert!(state
+        .expire_stalled_queued_requests(later)
+        .unwrap()
+        .is_empty());
+    assert_eq!(state.queued_requests(agent), &[follow]);
+    assert_eq!(state.agent(agent).unwrap().current_request, Some(current));
+    assert_eq!(state.request(follow).unwrap().phase, RequestPhase::Queued);
+    assert!(
+        state.request(follow).unwrap().failure_reason.is_none(),
+        "a live turn must not close its follow-up as not_submitted"
+    );
+}
+
+#[test]
 fn a_genuinely_idle_agent_still_expires_queued_work_as_not_submitted() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state.confirm_hook_setup(agent).unwrap();
