@@ -188,6 +188,7 @@ impl BusState {
             submitted_at_ms: now_ms,
             idle_agent_ids: Default::default(),
             attention_origin: None,
+            dialog_subject: None,
             in_reply_to: None,
         };
         let mut request_ids = Vec::with_capacity(prompt.recipient_ids.len());

@@ -62,7 +62,10 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
                 .flat_map(|room| next.notices(room.id).map(move |prompt| (room.id, prompt))),
         )
         .find(|(room, prompt)| {
-            prompt.author != Author::Developer && !known.contains(&prompt.id) && rings(*room)
+            prompt.author != Author::Developer
+                && !known.contains(&prompt.id)
+                && rings(*room)
+                && !next.stale_dialog_notice(*room, prompt)
         })
         .map(|(room, _)| room)
 }

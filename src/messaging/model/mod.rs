@@ -6,6 +6,9 @@ mod attention;
 mod callbacks;
 mod compactions;
 mod developer_notifications;
+mod dialog_notices;
+#[cfg(test)]
+pub(crate) use dialog_notices::BLOCKED_MESSAGE;
 mod disk_space;
 mod error;
 mod error_reports;
