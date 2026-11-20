@@ -46,35 +46,17 @@ impl Worker {
             } else {
                 polled_status(agent, info)
             };
-            self.reconcile_polled_claude_retirement(&mut state, agent.id, status)?;
-            if let Some(owner) = state.interrupt_retirement_owner(agent.id) {
-                let original_is_listed = state
-                    .interrupt_retirement_origin(owner)
-                    .and_then(|identity| identity.terminal_id.as_deref())
-                    .is_some_and(|terminal| infos.iter().any(|info| info.terminal_id == terminal));
-                if !original_is_listed
-                    && self.resolve_exited_claude_input(&mut state, agent.id, observed_at_ms)?
-                    && state
-                        .agent(agent.id)
-                        .is_some_and(|current| current.runtime_identity.pane_id.is_none())
-                {
-                    // The old terminal stays open, with no Bus delivery route.
-                    continue;
-                }
-            }
-            if state.interrupt_retirement_owner(agent.id).is_none() {
-                let (missing, exit_evidence) =
-                    self.observe_missing_binary(&mut state, agent, status, info)?;
-                if !missing {
-                    observe_exit(
-                        self.transport.as_mut(),
-                        &self.data_dir,
-                        &mut state,
-                        agent,
-                        info,
-                        exit_evidence,
-                    )?;
-                }
+            let (missing, exit_evidence) =
+                self.observe_missing_binary(&mut state, agent, status, info)?;
+            if !missing {
+                observe_exit(
+                    self.transport.as_mut(),
+                    &self.data_dir,
+                    &mut state,
+                    agent,
+                    info,
+                    exit_evidence,
+                )?;
             }
             confirm_interactive_agent(&mut state, agent, info)?;
             super::launch_metrics::observe(&mut state, previous_agent, info, observed_at_ms)?;

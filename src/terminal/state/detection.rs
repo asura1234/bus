@@ -13,13 +13,6 @@ impl TerminalState {
         self.recent_agent_process_exit.is_some()
     }
 
-    pub(crate) fn confirmed_exited_agent_session(&self) -> Option<&str> {
-        self.recent_agent_process_exit
-            .as_ref()?
-            .confirmed_session
-            .as_deref()
-    }
-
     pub fn set_detected_agent_process_at(
         &mut self,
         agent: AgentKind,

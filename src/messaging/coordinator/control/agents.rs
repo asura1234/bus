@@ -265,6 +265,7 @@ impl Worker {
                     expected_agent: launch::provider_kind(agent.provider).into(),
                     expected_session_id: session.clone(),
                     steer: false,
+                    allow_working: false,
                     expected_generation: Some(self.serving_generation),
                     expected_turn_id: None,
                 })
@@ -277,6 +278,7 @@ impl Worker {
                     expected_terminal_id: terminal.clone(),
                     expected_pane_id: pane.clone(),
                     expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
+                    allow_working: false,
                     expected_generation: Some(self.serving_generation),
                 })
             }
@@ -468,12 +470,6 @@ impl Worker {
         let mut row = json!({"agent_id": id, "name": agent.name});
         let status = agent.activity_status();
         match status {
-            RuntimeStatus::Unavailable if state.interrupt_retirement_owner(id).is_some() => {
-                row["outcome"] = json!("failed");
-                row["reason"] = json!(
-                    crate::messaging::model::ModelError::InterruptRetirementPending.to_string()
-                );
-            }
             RuntimeStatus::Unavailable if agent.provider_retry.is_some() => {
                 state
                     .close_interrupted(id, now)
@@ -540,59 +536,6 @@ impl Worker {
         Ok(())
     }
 
-    fn persist_claude_retirement_proof(
-        &mut self,
-        state: &mut crate::messaging::model::BusState,
-        id: AgentId,
-    ) -> Result<(), String> {
-        // The caller may journal only the follower send. A failed save leaves
-        // the old hold and a retryable native receipt.
-        let callbacks = self.retirement_callback_evidence(&self.state, id, false)?;
-        let mut durable = self.state.clone();
-        durable.reconcile_retirement_answers(id, &callbacks);
-        durable
-            .set_interrupt_retirement(id, false)
-            .map_err(|e| e.to_string())?;
-        durable.begin_interrupt(id).map_err(|e| e.to_string())?;
-        self.save(durable)?;
-        state.reconcile_retirement_answers(id, &callbacks);
-        state
-            .set_interrupt_retirement(id, false)
-            .map_err(|e| e.to_string())
-    }
-
-    fn prepare_claude_retirement(
-        &mut self,
-        state: &mut crate::messaging::model::BusState,
-        id: AgentId,
-        request: super::RequestId,
-        runtime: &crate::messaging::model::AgentRuntimeIdentity,
-    ) -> Result<Option<&'static str>, String> {
-        // Do not write Esc until the original prompt is durably tracked.
-        let mut durable = self.state.clone();
-        for target in [&mut *state, &mut durable] {
-            target
-                .set_interrupt_retirement(id, true)
-                .map_err(|e| e.to_string())?;
-            target
-                .clear_native_interrupt_wait(id)
-                .map_err(|e| e.to_string())?;
-        }
-        self.save(durable)?;
-        if runtime.terminal_id.as_deref().is_none_or(str::is_empty)
-            || runtime.session_id.as_deref().is_none_or(str::is_empty)
-        {
-            return Ok(Some(
-                "Claude's original native session is not yet confirmed; input remains tracked",
-            ));
-        }
-        Ok(match state.interrupt_retirement_origin(request) {
-            Some(original) if original == runtime => None,
-            Some(_) => Some("Original Claude terminal changed; resolve retirement of the original terminal first"),
-            None => Some("Cannot establish one original delivery terminal for this request group"),
-        })
-    }
-
     fn interrupt_running_agent(
         &mut self,
         state: &mut crate::messaging::model::BusState,
@@ -607,39 +550,14 @@ impl Worker {
         let agent = state.agent(id).ok_or("Unknown agent")?;
         let mut row = json!({"agent_id":id,"name":agent.name});
         let key = interrupt_key(agent.provider);
-        let claude = agent.provider.uses_claude_harness();
-        let current = agent.current_request;
         let runtime = agent.runtime_identity.clone();
-        let native_interrupt = (agent.provider == Provider::Codex || claude)
+        let native_interrupt = (agent.provider == Provider::Codex)
             .then(|| Some((runtime.terminal_id.clone()?, runtime.session_id.clone()?)))
             .flatten();
-        if let Some(request) = current.filter(|_| claude) {
-            if let Some(reason) = self.prepare_claude_retirement(state, id, request, &runtime)? {
-                row["outcome"] = json!("failed");
-                row["reason"] = json!(reason);
-                return Ok(row);
-            }
-        }
         let Some(pane) = runtime.pane_id else {
             row["outcome"] = json!("failed");
             row["reason"] = json!("The agent has no terminal yet");
             return Ok(row);
-        };
-        let expected_payloads = if claude {
-            current
-                .into_iter()
-                .chain(current.map_or_else(Vec::new, |id| state.group_members(id)))
-                .filter_map(|id| state.render_request_payload(id))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let claude_turn = if claude && expected_payloads.len() == 1 {
-            current.and_then(|request| {
-                super::super::callback_runtime::claude_retirement_turn(state, id, request)
-            })
-        } else {
-            None
         };
         self.admit_interrupt_attempt(id)?;
         let fence = self.native_interrupt_fence(state, id);
@@ -655,9 +573,6 @@ impl Worker {
                 schema::NativeInterruptIdentity {
                     expected_terminal_id,
                     expected_session_id,
-                    expected_payloads,
-                    claude_turn,
-                    retirement_request_id: current.filter(|_| claude).map(|id| id.0),
                 }
             }),
         );
@@ -666,26 +581,6 @@ impl Worker {
                 !error.definitely_rejected
                     || error.code.as_deref() == Some("agent_interrupt_unconfirmed")
             });
-        }
-        if claude {
-            let retired = matches!(&sent, Ok(ResponseResult::Ok {}));
-            if retired && current.is_some() {
-                self.persist_claude_retirement_proof(state, id)?;
-            }
-            if !retired {
-                state
-                    .clear_native_interrupt_wait(id)
-                    .map_err(|e| e.to_string())?;
-                row["outcome"] = json!("failed");
-                row["reason"] = json!(format!(
-                    "Claude interrupt retirement is unconfirmed; request remains tracked: {}",
-                    match &sent {
-                        Err(error) => error.message.as_str(),
-                        _ => "Unexpected native interrupt response",
-                    }
-                ));
-                return Ok(row);
-            }
         }
         match sent {
             Ok(ResponseResult::AgentInterrupted {

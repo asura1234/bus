@@ -96,6 +96,8 @@ pub(crate) struct Prompt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention_origin: Option<super::AttentionOrigin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dialog_subject: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) in_reply_to: Option<Box<super::feishu::InReplyTo>>,
 }
 
@@ -595,18 +597,9 @@ pub(crate) struct Request {
     pub(crate) send_interrupt_claim: Option<SendInterrupt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) send_interrupt_outcome: Option<SendInterruptOutcome>,
-    /// Native interrupt cannot settle until its restored Bus draft is retired.
+    /// Sent in interrupt mode: deliver as soon as the pane accepts input without waiting for turn end.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) interrupt_retirement_pending: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) interrupt_retirement_identity: Option<AgentRuntimeIdentity>,
-    /// Exact runtime targeted at native admission, never reconstructed by polling.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) native_delivery_identity: Option<AgentRuntimeIdentity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) native_delivery_callback_boundary: Option<u64>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) interrupt_retirement_resolved: bool,
+    pub(crate) interrupt_delivery: bool,
     /// Native launch/draft/recovery detail belongs to this send, beyond agent changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) submission_error: Option<String>,

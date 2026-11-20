@@ -5,7 +5,6 @@ use crate::terminal::runtime::draft_input::DraftInputLease;
 use bytes::Bytes;
 use std::{
     io,
-    sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 
@@ -26,14 +25,6 @@ impl ObservedSubmission {
         &self,
         lease: Option<&DraftInputLease>,
     ) -> io::Result<ClearOutcome> {
-        self.clear_draft(lease, None)
-    }
-
-    pub(super) fn clear_draft(
-        &self,
-        lease: Option<&DraftInputLease>,
-        retirement: Option<&std::cell::Cell<Option<u64>>>,
-    ) -> io::Result<ClearOutcome> {
         let mut sent = false;
         let mut progress = ClearProgress {
             revision: self.inspect.cleanup_progress(),
@@ -41,14 +32,9 @@ impl ObservedSubmission {
         };
         loop {
             for (index, key) in self.clear.iter().enumerate() {
-                if let Some(outcome) = self.clear_step(
-                    key.clone(),
-                    index,
-                    &mut sent,
-                    &mut progress,
-                    lease,
-                    retirement,
-                )? {
+                if let Some(outcome) =
+                    self.clear_step(key.clone(), index, &mut sent, &mut progress, lease)?
+                {
                     return Ok(outcome);
                 }
             }
@@ -62,54 +48,12 @@ impl ObservedSubmission {
         sent: &mut bool,
         progress: &mut ClearProgress,
         lease: Option<&DraftInputLease>,
-        retirement: Option<&std::cell::Cell<Option<u64>>>,
     ) -> io::Result<Option<ClearOutcome>> {
         let generation = self.clock.generation();
         let guard = self
             .content_lock
             .lock()
             .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-        let mut retirement_frame = None;
-        if let Some(retirement) = retirement {
-            let screen = self
-                .terminal
-                .active_ansi_if_complete()
-                .ok_or_else(|| io::Error::other("Incomplete Claude clear readback"))?;
-            let cursor = self
-                .terminal
-                .cursor_state()
-                .map(|cursor| (cursor.x, cursor.y));
-            let body = self.inspect.interrupted_input(&screen, cursor);
-            if self.inspect.native_draft_restored(&screen)
-                || self.inspect.native_stash_visible(&screen)
-                || !self.inspect.submission_available(&screen)
-            {
-                return Err(io::Error::other("Claude clear readback changed"));
-            }
-            if body.as_deref() == Some("") {
-                return Ok(Some(
-                    if retirement
-                        .get()
-                        .is_some_and(|before| before != self.content_seq.load(Ordering::Acquire))
-                    {
-                        ClearOutcome::Cleared
-                    } else {
-                        ClearOutcome::AlreadyEmpty
-                    },
-                ));
-            }
-            // A nonempty readback invalidates an earlier expected empty frame.
-            retirement.set(None);
-            if !body
-                .as_deref()
-                .is_some_and(|body| self.inspect.interrupted_remainder(body))
-            {
-                return Err(io::Error::other(
-                    "Claude clear remainder is no longer owned",
-                ));
-            }
-            retirement_frame = Some((screen, cursor));
-        }
         match self.observe("clear_preflight") {
             InputObservation::Empty => {
                 return Ok(Some(if *sent {
@@ -151,24 +95,14 @@ impl ObservedSubmission {
         };
         let completion = match lease {
             Some(lease)
-                if retirement.is_some()
-                    || self.inspect.confirm_consumption()
-                    || self.inspect.retry_owned_enter() =>
+                if self.inspect.confirm_consumption() || self.inspect.retry_owned_enter() =>
             {
                 lease.with_unedited(queue)
             }
             Some(lease) => lease.with_uninvalidated(queue),
             None => queue(),
         }?;
-        if let Some((screen, cursor)) = retirement_frame {
-            self.inspect.retirement_clear_frame(index, &screen, cursor);
-        }
         self.inspect.clearing(index);
-        if let Some(retirement) = retirement {
-            if index != 0 && self.inspect.cleanup_expects_empty() {
-                retirement.set(Some(self.content_seq.load(Ordering::Acquire)));
-            }
-        }
         drop(guard);
         completion
             .recv_timeout(self.clock.remaining(write_deadline))

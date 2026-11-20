@@ -66,6 +66,7 @@ impl BusUi {
             Action::Room(id) => format!("room:{}", self.room_name(*id)),
             Action::Agent(id) => format!("agent:{}", self.agent_name(*id)),
             Action::NewRoom => "new-room".into(),
+            Action::ReviewAgentSetup(id) => format!("review-agent-setup:{id}"),
             Action::NewAgent => "new-agent".into(),
             Action::ScrollFiles(up) => format!("scroll-files:{}", way(*up)),
             Action::Composer => "composer".into(),

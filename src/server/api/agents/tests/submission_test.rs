@@ -14,6 +14,9 @@ mod claude_image_submission_tests;
 #[path = "claude_plain_submission_test.rs"]
 mod claude_plain_submission_tests;
 
+#[path = "composer_copy_restore_test.rs"]
+mod composer_copy_restore_tests;
+
 fn clock(app: &App) -> crate::terminal::runtime::SubmissionClock {
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     app.lookup_runtime_sender(0, pane)
@@ -85,6 +88,7 @@ pub(super) fn provider_fixture(
             expected_agent: label.into(),
             expected_session_id: "session".into(),
             steer: false,
+            allow_working: false,
             expected_generation: None,
             expected_turn_id: None,
         })
@@ -95,6 +99,7 @@ pub(super) fn provider_fixture(
             expected_terminal_id: info.terminal_id,
             expected_pane_id: info.pane_id,
             expected_managed_name: "bus-r1-a2".into(),
+            allow_working: false,
             expected_generation: None,
         })
     };
@@ -632,7 +637,8 @@ mod paste_recovery_tests;
 #[path = "owned_draft_cleanup_test.rs"]
 mod owned_draft_cleanup_tests;
 
-// Before this attempt pastes, even an exact text match does not prove ownership.
+// Non-empty opaque drafts cannot block the queue: copy/clear/send delivers anyway
+// and logs the unrestorable loss rather than refusing with `agent_composer_busy`.
 pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
     for draft in [
         "[Image #138] developer draft",
@@ -646,22 +652,49 @@ pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
                 .test_process_pty_bytes("\r\n› stashed".as_bytes());
         }
         let response = start(&mut app, method);
+        clock(&app).resume();
         let mut response =
             tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
-        let (reply, key) = tokio::select! {
-            result=&mut response=>(result.unwrap(),None),
-            key=writes.recv()=>{
-                clock(&app).advance(Duration::from_secs(20));
-                (response.await.unwrap(),key)
+        let mut current = draft.to_owned();
+        let mut submitted = Vec::new();
+        let apply_chunk = |chunk: Bytes, current: &mut String, submitted: &mut Vec<String>| {
+            let text = std::str::from_utf8(&chunk).unwrap();
+            if let Some(pasted) = text
+                .strip_prefix("\x1b[200~")
+                .and_then(|s| s.strip_suffix("\x1b[201~"))
+            {
+                current.push_str(pasted);
+                redraw(&app, kind, current);
+            } else if text == "\r" {
+                submitted.push(std::mem::take(current));
+                redraw(&app, kind, "");
+            } else if text == "\x0b" || text == "\x15" {
+                current.clear();
+                redraw(&app, kind, "");
             }
         };
-        assert_eq!(key, None, "pre-paste cleanup touched unowned input");
-        assert!(reply.contains("agent_composer_busy"), "{reply}");
-        assert!(!reply.contains("agent_prompt_not_shown"), "{reply}");
+        let reply = loop {
+            tokio::select! {
+                result = &mut response => {
+                    while let Ok(chunk) = writes.try_recv() {
+                        apply_chunk(chunk, &mut current, &mut submitted);
+                    }
+                    break result.unwrap();
+                }
+                chunk = next_write(&mut writes) => {
+                    apply_chunk(chunk, &mut current, &mut submitted);
+                }
+            }
+        };
         assert!(
-            writes.try_recv().is_err(),
-            "no clear key, new paste or Enter"
+            reply.contains("agent_prompted"),
+            "{kind:?}/{draft}: opaque composer must deliver instead of blocking: {reply}"
         );
+        assert!(
+            !reply.contains("agent_composer_busy"),
+            "{kind:?}/{draft}: {reply}"
+        );
+        assert_eq!(submitted, ["from bus"], "{kind:?}/{draft}");
     }
 }
 
@@ -991,21 +1024,19 @@ async fn agy_busy_task_tray_guarded_prompt_writes_only_with_a_composer() {
     let active = include_str!("fixtures/agy_working_with_task_tray.txt");
     let cancellable = active.replacen("? for shortcuts", "esc to cancel", 1);
     let draft = active.replacen("\n>\n", "\n> [Pasted text #1 1500 chars]\n", 1);
-    for (frame, accepted, expected_error) in [
-        (active, true, None),
-        (cancellable.as_str(), true, None),
-        (
-            draft.as_str(),
-            false,
-            Some(crate::protocol::api::AGENT_COMPOSER_BUSY),
-        ),
+    for (frame, accepted, has_draft, expected_error) in [
+        (active, true, false, None),
+        (cancellable.as_str(), true, false, None),
+        (draft.as_str(), true, true, None),
         (
             include_str!("fixtures/agy_working_with_task_tray_no_composer.txt"),
+            false,
             false,
             Some(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN),
         ),
         (
             include_str!("fixtures/agy_command_permission.txt"),
+            false,
             false,
             None,
         ),
@@ -1024,17 +1055,52 @@ async fn agy_busy_task_tray_guarded_prompt_writes_only_with_a_composer() {
             unreachable!();
         };
         params.steer = true;
-        let runtime = app.lookup_runtime_sender(0, pane).unwrap();
         let frame = frame.replace('\n', "\r\n");
-        runtime.test_process_pty_bytes(format!("\x1b[2J\x1b[H{frame}\x1b[2;3H").as_bytes());
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(format!("\x1b[2J\x1b[H{frame}\x1b[2;3H").as_bytes());
 
-        let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+        let response = start(&mut app, method);
+        let response = if has_draft {
+            clock(&app).resume();
+            let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+            let empty_frame = active.replace('\n', "\r\n");
+            let mut response =
+                tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap());
+            let mut saw_paste = false;
+            let mut saw_enter = false;
+            let reply = loop {
+                tokio::select! {
+                    result = &mut response => break result.unwrap(),
+                    chunk = next_write(&mut writes) => {
+                        match chunk.as_ref() {
+                            b"\x0b" | b"\x15" => {
+                                runtime.test_process_pty_bytes(
+                                    format!("\x1b[2J\x1b[H{empty_frame}\x1b[2;3H").as_bytes(),
+                                );
+                            }
+                            b"\x1b[200~from bus\x1b[201~" => {
+                                saw_paste = true;
+                            }
+                            b"\r" => {
+                                saw_enter = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            };
+            assert!(saw_paste && saw_enter, "{reply}");
+            reply
+        } else {
+            response.recv_timeout(WAIT).unwrap()
+        };
         assert_eq!(response.contains("agent_prompted"), accepted, "{response}");
         if let Some(code) = expected_error {
             let response: serde_json::Value = serde_json::from_str(&response).unwrap();
             assert_eq!(response["error"]["code"], code, "{response}");
         }
-        if accepted {
+        if accepted && !has_draft {
             assert_eq!(
                 next_write(&mut writes).await.as_ref(),
                 b"\x1b[200~from bus\x1b[201~"

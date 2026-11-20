@@ -171,7 +171,7 @@ fn room_created_ack_after_dismiss_stays_in_the_selected_room() {
 }
 
 #[test]
-fn agent_added_ack_after_esc_does_not_open_the_created_terminal() {
+fn escape_after_agent_submission_keeps_the_room_open() {
     let (mut ui, room, _) = fixture();
     submit_agent_form(&mut ui);
     let command_id = ui.creation_origins.back().expect("creation origin").id;
@@ -212,7 +212,7 @@ fn agent_added_ack_after_esc_does_not_open_the_created_terminal() {
 }
 
 #[test]
-fn agent_added_ack_after_settlement_completes_its_origin_form() {
+fn agent_submission_closes_before_ack_and_does_not_open_the_terminal() {
     let (mut ui, room, _) = fixture();
     submit_agent_form(&mut ui);
     settle_creation_command(&mut ui);
@@ -235,7 +235,7 @@ fn agent_added_ack_after_settlement_completes_its_origin_form() {
     });
 
     assert!(ui.form.is_none());
-    assert_eq!(ui.terminal, Some(added));
+    assert!(ui.terminal.is_none());
 }
 
 #[test]
@@ -317,7 +317,7 @@ fn agent_added_ack_preserves_a_newer_non_dev_form_and_its_room_context() {
 }
 
 #[test]
-fn agent_added_ack_completes_its_still_current_form() {
+fn agent_added_ack_does_not_replace_the_room_with_the_terminal() {
     let (mut ui, room, _) = fixture();
     submit_agent_form(&mut ui);
     let command_id = ui.creation_origins.back().expect("creation origin").id;
@@ -339,7 +339,37 @@ fn agent_added_ack_completes_its_still_current_form() {
     });
 
     assert!(ui.form.is_none());
-    assert_eq!(ui.terminal, Some(added));
+    assert!(ui.terminal.is_none());
+}
+
+#[test]
+fn delayed_hook_consent_preserves_a_newer_form_until_reviewed() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    let command_id = ui.creation_origins.back().unwrap().id;
+    open_edited_file_form(&mut ui);
+    ui.receive_event(BusEvent::SetupRequired {
+        command_id,
+        input: crate::messaging::coordinator::agents::AddAgent {
+            room,
+            name: "first-agent".into(),
+            provider: Provider::Codex,
+            cwd: "/project".into(),
+            extra_args: String::new(),
+            consent_project_hooks: false,
+        },
+        orchestrator: None,
+        notice: crate::agents::providers::launch::SetupNotice {
+            path: "/project/.codex/hooks.json".into(),
+            message: "review hooks".into(),
+        },
+    });
+    assert_edited_file_form_survives(&ui, room);
+
+    ui.action(render::Action::Cancel);
+    assert!(room_screen(&mut ui, 100, 40).contains("Review hooks"));
+    ui.action(render::Action::ReviewAgentSetup(command_id));
+    assert!(matches!(ui.form, Some(forms::Form::Consent { .. })));
 }
 
 #[test]
@@ -867,7 +897,7 @@ fn add_agent_rejects_each_missing_required_field_and_keeps_the_form_open() {
         );
         let error = format!("{missing} is required.");
         let screen = room_screen(&mut ui, 100, 40);
-        assert!(!screen.contains(&error), "{missing}: {screen}");
+        assert!(screen.contains(&error), "{missing}: {screen}");
         let logs = capture.text();
         assert_eq!(
             logs.matches("bus.form.validation_failed").count(),
@@ -1131,7 +1161,7 @@ fn enter_submits_the_agent_form_from_each_unambiguous_field() {
             Some(("/projects/fr".into(), String::new())),
             "Enter in PWD must Add the typed directory; master={master}"
         );
-        assert_eq!(agent_focus(&ui).2, "/projects/fr");
+        assert!(ui.form.is_none());
 
         let mut ui = agent_form_with_open_pwd_suggestions(master);
         ui.action(render::Action::Field(0));
@@ -1282,7 +1312,7 @@ fn master_pwd_suggestions_stay_visible_and_enter_submits_the_typed_directory() {
         );
     }
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(matches!(&ui.form, Some(forms::Form::Agent { cwd, .. }) if cwd.text == "/projects/fr"));
+    assert!(ui.form.is_none());
     assert!(ui.pending.iter().any(|p| matches!(
         &p.command,
         BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _)
@@ -1404,7 +1434,7 @@ fn agy_appears_in_worker_form_and_is_omitted_from_master_orchestrator_form() {
 }
 
 #[test]
-fn async_pwd_rejection_is_log_only_with_its_field_and_path() {
+fn async_pwd_rejection_reaches_the_room_and_keeps_its_diagnostic_log() {
     let (mut ui, room, _) = fixture();
     ui.action(render::Action::NewAgent);
     ui.action(render::Action::Provider(Provider::Codex));
@@ -1445,8 +1475,8 @@ fn async_pwd_rejection_is_log_only_with_its_field_and_path() {
         ui.settle();
     });
     assert!(ui.error.is_none());
-    assert!(matches!(ui.form, Some(forms::Form::Agent { .. })));
-    assert!(!room_screen(&mut ui, 100, 40).contains(error));
+    assert!(ui.form.is_none());
+    assert!(room_screen(&mut ui, 100, 40).contains(error));
     let logs = capture.text();
     assert_eq!(logs.matches("bus.command.failed").count(), 1, "{logs}");
     assert_eq!(logs.matches(error).count(), 1, "{logs}");
@@ -1458,6 +1488,36 @@ fn async_pwd_rejection_is_log_only_with_its_field_and_path() {
     assert!(logs.contains("agent=\"worker\""), "{logs}");
     assert!(logs.contains("field=\"pwd\""), "{logs}");
     assert!(logs.contains("path=\"/definitely/missing\""), "{logs}");
+}
+
+#[test]
+fn failed_native_launch_stays_bound_to_its_saved_agent() {
+    let (mut ui, room, _) = fixture();
+    submit_agent_form(&mut ui);
+    let command_id = ui.creation_origins.back().unwrap().id;
+    let error = "Shell waiting for input after 30 seconds";
+    let mut snapshot = (*ui.snapshot).clone();
+    let agent = snapshot
+        .state
+        .create_agent(
+            room,
+            "first-agent",
+            Provider::ClaudeCode,
+            "/projects/first".into(),
+            None,
+        )
+        .unwrap();
+    snapshot.state.set_agent_error(agent, Some(error.into())).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot.clone()));
+    ui.settle_agent_creation(command_id, &Err(error.into()));
+    assert!(room_screen(&mut ui, 100, 40).contains(error));
+
+    snapshot.state.rename_agent(agent, "renamed-worker").unwrap();
+    ui.receive_snapshot(Arc::new(snapshot.clone()));
+    assert_eq!(ui.provisional_agents().count(), 0);
+    snapshot.state.delete_agent(agent, 0).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    assert!(!room_screen(&mut ui, 100, 40).contains(error));
 }
 
 #[test]

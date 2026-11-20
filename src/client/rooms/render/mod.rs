@@ -43,6 +43,7 @@ pub(super) enum Action {
     Agent(crate::messaging::model::AgentId),
     NewRoom,
     NewAgent,
+    ReviewAgentSetup(u64),
     ScrollFiles(bool),
     Composer,
     Search,

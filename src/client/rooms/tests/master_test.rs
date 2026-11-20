@@ -562,7 +562,7 @@ fn a_master_agent_cannot_be_added_without_a_free_work_room() {
     ui.action(render::Action::Provider(Provider::Codex));
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| ui.action(render::Action::Add));
-    assert!(!room_screen(&mut ui, 100, 30).contains("Orchestrates room is required"));
+    assert!(room_screen(&mut ui, 100, 30).contains("Orchestrates room is required"));
     let logs = capture.text();
     assert_eq!(
         logs.matches("bus.form.validation_failed").count(),
@@ -681,15 +681,23 @@ fn hook_consent_keeps_the_orchestrator_prompt() {
         room: other,
         system_prompt: Some("Run pr-456.".into()),
     };
+    let input = crate::messaging::coordinator::agents::AddAgent {
+        room: master,
+        name: "codex-orch".into(),
+        provider: Provider::Codex,
+        cwd: "/repo".into(),
+        extra_args: String::new(),
+        consent_project_hooks: false,
+    };
+    ui.submit_agent_creation(
+        BusCommand::AddOrchestrator(input.clone(), spec.clone()),
+        master,
+        input.name.clone(),
+    );
+    let command_id = ui.creation_origins.back().unwrap().id;
     ui.receive_event(BusEvent::SetupRequired {
-        input: crate::messaging::coordinator::agents::AddAgent {
-            room: master,
-            name: "codex-orch".into(),
-            provider: Provider::Codex,
-            cwd: "/repo".into(),
-            extra_args: String::new(),
-            consent_project_hooks: false,
-        },
+        command_id,
+        input,
         orchestrator: Some(spec.clone()),
         notice: crate::agents::providers::launch::SetupNotice {
             path: "/repo/.codex/hooks.json".into(),
@@ -807,7 +815,7 @@ fn unavailable_orchestration_is_log_only_and_work_agents_keep_their_detail_actio
 }
 
 #[test]
-fn master_agent_form_validation_is_log_only_in_a_24_row_terminal() {
+fn master_agent_form_validation_is_inline_in_a_24_row_terminal() {
     let (mut ui, master, _, _, _) = master_fixture();
     ui.open_room(master);
     ui.action(render::Action::NewAgent);
@@ -815,7 +823,7 @@ fn master_agent_form_validation_is_log_only_in_a_24_row_terminal() {
     capture.run(|| ui.action(render::Action::Add));
     let screen = room_screen(&mut ui, 100, 24);
     for expected in ["Name is required.", "Model is required."] {
-        assert!(!screen.contains(expected), "{screen}");
+        assert!(screen.contains(expected), "{screen}");
     }
     let logs = capture.text();
     assert_eq!(
@@ -833,7 +841,7 @@ fn master_agent_form_validation_is_log_only_in_a_24_row_terminal() {
 }
 
 #[test]
-fn system_prompt_validation_is_log_only_and_keeps_the_form_open() {
+fn system_prompt_validation_is_inline_and_keeps_the_form_open() {
     let (mut ui, master, _, _, _) = master_fixture();
     ui.open_room(master);
     ui.action(render::Action::NewAgent);
@@ -849,7 +857,7 @@ fn system_prompt_validation_is_log_only_and_keeps_the_form_open() {
     let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| ui.action(render::Action::Add));
     let screen = room_screen(&mut ui, 100, 40);
-    assert!(!screen.contains("System prompt is required."), "{screen}");
+    assert!(screen.contains("System prompt is required."), "{screen}");
     assert!(screen.contains("System prompt"), "{screen}");
     assert!(screen.contains("Add (Enter)"), "{screen}");
     let logs = capture.text();
@@ -1265,7 +1273,7 @@ fn master_pwd_list_scrolls_with_down_and_enter_submits_the_typed_directory() {
         }
     }
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(matches!(&ui.form, Some(forms::Form::Agent { cwd, .. }) if cwd.text == "/projects/f"));
+    assert!(ui.form.is_none());
     assert!(ui.pending.iter().any(|p| matches!(
         &p.command,
         BusCommand::AddAgent(input) | BusCommand::AddOrchestrator(input, _)

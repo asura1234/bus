@@ -14,6 +14,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "add_agent_test.rs"]
+mod add_agent;
+
 #[path = "restart_hotkey_test.rs"]
 mod restart_hotkey;
 

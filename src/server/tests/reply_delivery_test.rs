@@ -1685,40 +1685,108 @@ async fn orchestrator_inbox_textless_background_stop_does_not_block_or_invent_a_
 async fn developer_follow_up_interrupts_the_orchestrator_turn_without_blocking_the_inbox() {
     let mut f = Delivery::new(&[Provider::ClaudeCode], true);
     let orch = f.agents[0];
-    // Claude restores its accepted prompt on Esc. Keep the real native
-    // retirement guard and have this scripted provider render the restoration.
-    f.restore_claude_input_on_stop(orch);
     let lead = f.send(orch, f.master, "first", false, None);
     f.tick();
     f.start(orch, "shared", "first");
     let folded = f.send(orch, f.master, "folded followup", false, None);
     f.tick();
-    // The developer's message ends the turn instead of joining it.
+    // The developer's message interrupts the old turn and delivers immediately
+    // as its own turn without waiting for Idle or holding the inbox.
     assert_eq!(f.state().request(folded).unwrap().group, None);
-    assert!(f.state().agent(orch).unwrap().interrupt_pending);
+    assert_eq!(
+        f.state().request(lead).unwrap().failure_reason.as_deref(),
+        Some("interrupted")
+    );
     f.pump();
     assert_eq!(f.stop_keys(orch), 1);
-    f.stop(
-        orch,
-        "shared",
-        "stopped mid-answer",
-        json!([{"id":"wait","type":"shell","status":"running","command":"sleep 3600"}]),
-        json!([]),
-    );
-    f.status(orch, AgentState::Idle);
-    f.tick();
-    // The settling poll captures the original turn's Stop before ending it.
-    // Its answer belongs to the lead. The follow-up never joined that turn.
-    f.assert_reply(lead, "stopped mid-answer");
-    assert_eq!(f.state().request(folded).unwrap().group, None);
-    assert!(f.state().request(folded).unwrap().failure_reason.is_none());
-    // The follow-up starts the next turn; the inbox is not blocked.
     let payload = f.typed(orch).last().unwrap().clone();
     assert!(payload.ends_with("folded followup"), "{payload}");
     f.start(orch, "folded", &payload);
     f.stop(orch, "folded", "folded answer", json!([]), json!([]));
     f.elapse(31_000);
     f.assert_reply(folded, "folded answer");
+}
+
+#[tokio::test]
+async fn queue_steer_and_interrupt_snapshot_and_restore_at_pane_delivery_time() {
+    // Queue mode must snapshot at actual pane delivery time, NOT at room enqueue time.
+    for provider in [Provider::ClaudeCode, Provider::Codex] {
+        let mut f = Delivery::new(&[provider], false);
+        let worker = f.agents[0];
+        f.real_submission_time(worker);
+        let orch = f.add_orchestrator();
+
+        // 1. Queue mode: composer is EMPTY when message is enqueued in Bus room.
+        let lead = f.send(worker, f.work, "turn one", false, None);
+        f.tick();
+        f.start(worker, "t1", "turn one");
+        f.status(worker, AgentState::Working);
+        f.tick();
+        assert_eq!(f.composer_draft(worker), "");
+        let queued = f.send(worker, f.work, "queued after turn one", true, Some(orch));
+        f.tick();
+        assert_eq!(
+            f.state().request(queued).unwrap().phase,
+            RequestPhase::Queued
+        );
+
+        // Person types into the agent's composer AFTER room enqueue, while turn 1 still runs.
+        f.set_composer_draft(worker, "typed after room enqueue");
+        f.stop(worker, "t1", "turn one done", json!([]), json!([]));
+        f.status(worker, AgentState::Idle);
+        f.tick();
+        f.pump();
+        f.assert_reply(lead, "turn one done");
+        assert!(
+            f.typed_content(worker)
+                .last()
+                .is_some_and(|text| text.ends_with("queued after turn one")),
+            "{provider:?}: queued message must deliver"
+        );
+        assert_eq!(
+            f.composer_draft(worker),
+            "typed after room enqueue",
+            "{provider:?}: queue mode must snapshot and restore composer content present at delivery time"
+        );
+
+        // Finish turn 2 cleanly, then test Steer mode with composer content.
+        let q_payload = f.typed(worker).last().unwrap().clone();
+        f.start(worker, "t2", &q_payload);
+        f.status(worker, AgentState::Working);
+        f.tick();
+        f.set_composer_draft(worker, "draft during steer");
+        let _steered = f.send(worker, f.work, "steer into turn two", false, Some(orch));
+        f.tick();
+        f.pump();
+        assert!(
+            f.typed_content(worker)
+                .last()
+                .is_some_and(|text| text.ends_with("steer into turn two")),
+            "{provider:?}: steer message must deliver into running turn"
+        );
+        assert_eq!(
+            f.composer_draft(worker),
+            "draft during steer",
+            "{provider:?}: steer mode must restore composer copy after submit"
+        );
+
+        // 3. Interrupt mode: composer holds draft while turn 2 is Working; interrupt delivers immediately and restores.
+        f.set_composer_draft(worker, "draft during interrupt");
+        let _interrupted = f.send(worker, f.work, "interrupt turn two", false, None);
+        f.tick();
+        f.pump();
+        assert!(
+            f.typed_content(worker)
+                .last()
+                .is_some_and(|text| text.ends_with("interrupt turn two")),
+            "{provider:?}: interrupt message must deliver immediately without waiting for Idle"
+        );
+        assert_eq!(
+            f.composer_draft(worker),
+            "draft during interrupt",
+            "{provider:?}: interrupt mode must restore composer copy after submit"
+        );
+    }
 }
 
 #[tokio::test]

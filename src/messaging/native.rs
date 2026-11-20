@@ -118,9 +118,6 @@ impl BusTransport {
                     + crate::protocol::api::submission::RPC_MARGIN
             } else {
                 crate::protocol::api::submission::method_budget(&request.method)
-                    .or_else(|| {
-                        crate::protocol::api::submission::interrupt_method_budget(&request.method)
-                    })
                     .map(|budget| budget + crate::protocol::api::submission::RPC_MARGIN)
                     .unwrap_or(Duration::from_secs(3))
             };
@@ -498,6 +495,7 @@ mod tests {
                 expected_agent: "codex".into(),
                 expected_session_id: "s".into(),
                 steer: false,
+                allow_working: false,
                 expected_generation: None,
                 expected_turn_id: None,
             },

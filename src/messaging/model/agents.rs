@@ -3,8 +3,8 @@ use crate::messaging::prefs::colors;
 use std::path::PathBuf;
 use {
     super::{
-        AgentId, AgentRuntimeIdentity, BusState, Compactions, DialogNoticeTo, ModelError, Provider,
-        RequestPhase, RoomId, RuntimeStatus, UNBOUND_SETTLE_MS,
+        AgentId, AgentRuntimeIdentity, Author, BusState, Compactions, DialogNoticeTo, ModelError,
+        Provider, RequestPhase, RoomId, RuntimeStatus, UNBOUND_SETTLE_MS,
     },
     crate::messaging::model::RoomAgent,
 };
@@ -229,11 +229,56 @@ impl BusState {
                 request.failure_reason = Some(AGENT_DELETED.into());
             }
         }
+        self.retire_deleted_queued_requests(now_ms)?;
         for room in self.rooms.values_mut() {
             room.draft.recipient_ids.remove(&id);
             room.latest_replies.remove(&id);
         }
         Ok(())
+    }
+
+    /// A surviving recipient can still have work from a deleted sender or
+    /// a Bus notice about one. Close those requests before they are dispatched,
+    /// including queues persisted by an older coordinator.
+    pub(crate) fn retire_deleted_queued_requests(&mut self, now_ms: u64) -> Result<(), ModelError> {
+        let retired: Vec<_> = self
+            .queues
+            .values()
+            .flatten()
+            .filter_map(|id| {
+                let request = self.requests.get(id)?;
+                if request.phase != RequestPhase::Queued || !self.request_source_deleting(request) {
+                    return None;
+                }
+                let reason = if self
+                    .room(request.room_id)
+                    .is_some_and(|room| room.deletion_pending)
+                {
+                    "room_deleted"
+                } else {
+                    AGENT_DELETED
+                };
+                Some((*id, reason))
+            })
+            .collect();
+        for (id, reason) in retired {
+            self.recover_idle_request(id, now_ms)?;
+            if let Some(request) = self.requests.get_mut(&id) {
+                request.failure_reason = Some(reason.into());
+                request.send_interrupt = None;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn request_source_deleting(&self, request: &super::Request) -> bool {
+        match request.prompt.author {
+            Author::Agent(sender) => self
+                .agent(sender)
+                .is_none_or(|agent| agent.deletion_pending),
+            Author::Bus => self.stale_dialog_notice(request.room_id, &request.prompt),
+            Author::Developer => false,
+        }
     }
 
     pub(crate) fn set_agent_runtime_identity(
@@ -355,9 +400,6 @@ impl BusState {
 
     /// Marks the agent's provider context as reset by `agent clear`.
     pub(crate) fn begin_session_reset(&mut self, id: AgentId) -> Result<(), ModelError> {
-        if self.interrupt_retirement_owner(id).is_some() {
-            return Err(ModelError::InterruptRetirementPending);
-        }
         let agent = self
             .agents
             .get_mut(&id)
@@ -499,10 +541,6 @@ impl BusState {
     ) -> Result<bool, ModelError> {
         let agent = self.agent(id).ok_or(ModelError::UnknownAgent(id))?;
         let mut changed = agent.working_directory_error.as_ref() != Some(&error);
-        if self.interrupt_retirement_owner(id).is_some() {
-            self.observe_working_directory_error(id, Some(error))?;
-            return Ok(changed);
-        }
         let previous_error = agent.actionable_error.clone();
         let running = agent.current_request.filter(|current| {
             self.request(*current).is_some_and(|request| {

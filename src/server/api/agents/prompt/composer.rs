@@ -59,21 +59,8 @@ fn paste_ready(kind: AgentKind, screen: &str, expected: &str) -> bool {
 }
 
 fn draft_ready(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
-    if !submission_available(kind, screen) {
-        return false;
-    }
-    let Some(body) = input_since_launch(kind, screen, cursor, pristine) else {
-        return false;
-    };
-    body.is_empty()
-        || match kind {
-            AgentKind::Claude => {
-                preservation::default_claude_stash_binding()
-                    && !preservation::native_stash_present(screen)
-            }
-            AgentKind::Codex | AgentKind::Cursor | AgentKind::Kimi => !preservation::opaque(&body),
-            _ => false,
-        }
+    submission_available(kind, screen)
+        && input_since_launch(kind, screen, cursor, pristine).is_some()
 }
 
 #[cfg(test)]
@@ -83,7 +70,7 @@ pub(super) fn preserving_observer(
     directory: std::path::PathBuf,
     keys: Vec<bytes::Bytes>,
 ) -> impl crate::terminal::runtime::SubmissionInspector {
-    preserving_observer_for_submission(kind, expected, directory, keys, false)
+    preserving_observer_for_submission(kind, expected, directory, keys, false, true)
 }
 
 pub(super) fn preserving_observer_for_submission(
@@ -92,13 +79,16 @@ pub(super) fn preserving_observer_for_submission(
     directory: std::path::PathBuf,
     keys: Vec<bytes::Bytes>,
     steer: bool,
+    bracketed_paste: bool,
 ) -> impl crate::terminal::runtime::SubmissionInspector {
     let keys = if kind == AgentKind::Claude && !preservation::default_claude_stash_binding() {
         Vec::new()
     } else {
         keys
     };
-    preservation::PreservingComposer::new(kind, expected, directory, keys).with_steering(steer)
+    preservation::PreservingComposer::new(kind, expected, directory, keys)
+        .with_steering(steer)
+        .with_bracketed_paste(bracketed_paste)
 }
 
 pub(super) fn observer(
@@ -547,28 +537,6 @@ fn cursor_input_line(kind: AgentKind, line: &str) -> &str {
         }
     }
     line
-}
-
-fn claude_empty_editable_composer(screen: &str, cursor: Option<(u16, u16)>) -> bool {
-    let Some((2, y)) = cursor else { return false };
-    let Some(above) = usize::from(y).checked_sub(1) else {
-        return false;
-    };
-    let mut rows = screen.lines().skip(above).map(|row| {
-        styled_chars(row)
-            .iter()
-            .map(|cell| cell.character)
-            .collect::<String>()
-    });
-    let rail = |row: String| {
-        let row = row.trim_end_matches(' ');
-        row.chars().count() >= 12 && row.chars().all(|cell| cell == '─')
-    };
-    rows.next().is_some_and(rail)
-        && rows
-            .next()
-            .is_some_and(|row| matches!(row.trim_end_matches(' '), "❯" | "❯\u{a0}"))
-        && rows.next().is_some_and(rail)
 }
 
 fn plain_rule(line: &str) -> bool {

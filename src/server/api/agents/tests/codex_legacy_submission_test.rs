@@ -310,10 +310,18 @@ async fn codex_legacy_owned_opaque_paste_remains_eligible_for_cleanup() {
         .0;
     assert_eq!(
         state,
-        AgentState::Blocked,
-        "developer input revokes the old ownership even when its chip looks identical"
+        AgentState::Idle,
+        "an opaque developer draft stays deliverable without blocking the queue"
     );
-    assert!(writes.try_recv().is_err());
+    let error = recovery_without_new_input(&app, None)
+        .recv_timeout(WAIT)
+        .unwrap()
+        .unwrap_err();
+    assert!(crate::terminal::runtime::PromptNotShown::is(&error));
+    assert!(
+        writes.try_recv().is_err(),
+        "developer input revokes the old cleanup ownership even when its chip looks identical"
+    );
 }
 
 #[tokio::test]

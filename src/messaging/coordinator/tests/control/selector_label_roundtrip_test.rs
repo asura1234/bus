@@ -186,10 +186,15 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
                 .unwrap()[0],
         );
     }
+    let queued = serde_json::to_value(&w.state).unwrap();
     w.state.delete_agent(sender, 2).unwrap();
     let mut document = serde_json::to_value(&w.state).unwrap();
+    // Reconstruct a save from before deletion retired outgoing requests.
+    document["queues"] = queued["queues"].clone();
     for id in &ids {
-        document["requests"][id.0.to_string()]
+        let key = id.0.to_string();
+        document["requests"][&key] = queued["requests"][&key].clone();
+        document["requests"][&key]
             .as_object_mut()
             .unwrap()
             .remove("sender_identity");
@@ -200,7 +205,7 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
         .unwrap()
         .remove(&sender.0.to_string());
     w.state = serde_json::from_value(document).unwrap();
-    let payload = w.state.coalesce_queue(ids[0]).unwrap();
+    let payload = w.state.clone().coalesce_queue(ids[0]).unwrap();
     assert_eq!(
         payload
             .lines()
@@ -225,6 +230,15 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
         "{payload}"
     );
     assert!(!payload.contains("answer with bus send"), "{payload}");
+
+    w.state.expire_stalled_queued_requests(3).unwrap();
+    assert!(w.state.queued_requests(peer).is_empty());
+    for id in ids {
+        assert_eq!(
+            w.state.request(id).unwrap().failure_reason.as_deref(),
+            Some("agent_deleted")
+        );
+    }
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();
 }

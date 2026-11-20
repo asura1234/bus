@@ -85,6 +85,7 @@ impl BusUi {
         self.form_generation = self.form_generation.wrapping_add(1);
         crate::messaging::coordinator::publish_form_generation(self.form_generation);
         self.form = Some(form);
+        self.agent_form_error = None;
     }
 
     pub(in crate::client::rooms) fn clear_form(&mut self) {
@@ -93,9 +94,10 @@ impl BusUi {
             crate::messaging::coordinator::publish_form_generation(self.form_generation);
         }
         self.form = None;
+        self.agent_form_error = None;
     }
 
-    pub(super) fn open_form(&mut self, form: Form) {
+    pub(in crate::client::rooms) fn open_form(&mut self, form: Form) {
         self.clear_selection();
         self.set_form(form);
         self.terminal = None;
@@ -436,13 +438,14 @@ impl BusUi {
                 .collect::<Vec<_>>()
                 .join(" ");
             log_rejection(&fields, &error);
+            self.agent_form_error = Some(error);
             return;
         }
         if orchestrates.is_some_and(|choice| choice.0.is_none()) {
-            log_rejection(
-                "orchestrates",
-                "Orchestrates room is required: create a work room without an orchestrator first.",
-            );
+            let error =
+                "Orchestrates room is required: create a work room without an orchestrator first.";
+            log_rejection("orchestrates", error);
+            self.agent_form_error = Some(error.into());
             return;
         }
         let system_prompt = prompt.map(|prompt| prompt.editor.text);
@@ -450,44 +453,44 @@ impl BusUi {
             .as_ref()
             .is_some_and(|text| text.trim().is_empty())
         {
-            log_rejection("system_prompt", "System prompt is required.");
+            let error = "System prompt is required.";
+            log_rejection("system_prompt", error);
+            self.agent_form_error = Some(error.into());
             return;
         }
-        self.error = None;
-        if let Some(room) = self.room {
-            let input = AddAgent {
-                room,
-                name: name.text,
-                provider: provider.expect("validated provider"),
-                cwd: cwd.text,
-                extra_args: args.text,
-                consent_project_hooks: false,
-            };
-            let command = match orchestrates.and_then(|choice| choice.0) {
-                Some(room) => BusCommand::AddOrchestrator(
-                    input,
-                    OrchestratorSpec {
-                        room,
-                        system_prompt,
-                    },
-                ),
-                None => BusCommand::AddAgent(input),
-            };
-            self.queue(command, Effect::None);
-        }
+        let name = match self.validate_agent_form_name(&name.text) {
+            Ok(name) => name,
+            Err(error) => {
+                log_rejection("name", &error);
+                self.agent_form_error = Some(error);
+                return;
+            }
+        };
+        let Some(room) = self.room else {
+            return;
+        };
+        let input = AddAgent {
+            room,
+            name: name.clone(),
+            provider: provider.expect("validated provider"),
+            cwd: cwd.text,
+            extra_args: args.text,
+            consent_project_hooks: false,
+        };
+        let command = match orchestrates.and_then(|choice| choice.0) {
+            Some(room) => BusCommand::AddOrchestrator(
+                input,
+                OrchestratorSpec {
+                    room,
+                    system_prompt,
+                },
+            ),
+            None => BusCommand::AddAgent(input),
+        };
+        self.submit_agent_creation(command, room, name);
     }
 
     pub(super) fn add(&mut self) {
-        if self.pending.iter().any(|p| {
-            matches!(
-                p.command,
-                BusCommand::AddAgent(_)
-                    | BusCommand::AddOrchestrator(..)
-                    | BusCommand::CreateRoom(_)
-            )
-        }) {
-            return;
-        }
         let Some(form) = self.form.clone() else {
             return;
         };
@@ -505,7 +508,13 @@ impl BusUi {
                 self.set_form(Form::Settings);
             }
             Form::Room(editor) => {
-                self.queue(BusCommand::CreateRoom(editor.text), Effect::None);
+                if !self
+                    .pending
+                    .iter()
+                    .any(|p| matches!(p.command, BusCommand::CreateRoom(_)))
+                {
+                    self.queue(BusCommand::CreateRoom(editor.text), Effect::None);
+                }
             }
             form @ Form::Agent { .. } => self.add_agent_form(form),
             Form::Files(editor) => {
@@ -520,11 +529,12 @@ impl BusUi {
                 ..
             } => {
                 input.consent_project_hooks = true;
+                let (room, name) = (input.room, input.name.clone());
                 let command = match orchestrator {
                     Some(spec) => BusCommand::AddOrchestrator(input, spec),
                     None => BusCommand::AddAgent(input),
                 };
-                self.queue(command, Effect::None);
+                self.submit_agent_creation(command, room, name);
             }
         }
     }

@@ -245,32 +245,7 @@ impl BusState {
         Ok(())
     }
 
-    /// The recipients outside this room will keep their native terminals.
-    fn require_retired_cross_room_inputs(&self, room: RoomId) -> Result<(), ModelError> {
-        let deleting = self.agents_deleted_with_room(room);
-        for owner in self
-            .agents
-            .values()
-            .filter(|owner| !deleting.contains(&owner.id))
-        {
-            let Some(lead) = self.interrupt_retirement_owner(owner.id) else {
-                continue;
-            };
-            if std::iter::once(lead)
-                .chain(self.group_members(lead))
-                .any(|id| {
-                    self.request(id)
-                        .is_some_and(|request| request.room_id == room)
-                })
-            {
-                return Err(ModelError::InterruptRetirementPending);
-            }
-        }
-        Ok(())
-    }
-
     pub(crate) fn prepare_delete_room(&mut self, id: RoomId) -> Result<(), ModelError> {
-        self.require_retired_cross_room_inputs(id)?;
         let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
         if room.kind == RoomKind::Master {
             return Err(ModelError::MasterRoomFixed);
@@ -283,12 +258,15 @@ impl BusState {
     }
 
     pub(crate) fn delete_room(&mut self, id: RoomId, now_ms: u64) -> Result<(), ModelError> {
-        self.require_retired_cross_room_inputs(id)?;
         match self.rooms.get(&id) {
             None => return Err(ModelError::UnknownRoom(id)),
             Some(room) if room.kind == RoomKind::Master => return Err(ModelError::MasterRoomFixed),
             Some(_) => {}
         }
+        self.rooms
+            .get_mut(&id)
+            .expect("checked room")
+            .deletion_pending = true;
         for agent in self.agents_deleted_with_room(id) {
             self.delete_agent(agent, now_ms)?;
         }
@@ -484,6 +462,7 @@ impl BusState {
             submitted_at_ms: now_ms,
             idle_agent_ids: BTreeSet::new(),
             attention_origin: None,
+            dialog_subject: None,
             in_reply_to: None,
         };
         // The latest prompt is what rings and what the composer recalls, as

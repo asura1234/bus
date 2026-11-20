@@ -7,7 +7,6 @@ use super::{
 #[path = "callback_latency.rs"]
 mod callback_latency;
 mod kimi;
-mod retirement;
 
 impl BusState {
     /// Report identity ignores incidental changes to the hook envelope. Keep
@@ -18,6 +17,33 @@ impl BusState {
 
     pub(crate) fn record_reported_final(&mut self, key: String, launch: String) {
         std::sync::Arc::make_mut(&mut self.consumed_callbacks).insert(key, Some(launch));
+    }
+
+    pub(crate) fn is_consumed_provider_turn(
+        &self,
+        launch: &str,
+        session: Option<&str>,
+        turn: Option<&str>,
+    ) -> bool {
+        provider_turn_key(launch, session, turn)
+            .is_some_and(|key| self.consumed_provider_turns.contains(&key))
+    }
+
+    /// Bind an unbound AGY request once its transcript proves the prompt ran in `turn`.
+    pub(crate) fn bind_reconciled_agy_turn(
+        &mut self,
+        request_id: RequestId,
+        session: String,
+        turn: String,
+    ) {
+        if let Some(request) = self.requests.get_mut(&request_id) {
+            request.phase = RequestPhase::Active;
+            request.trusted_start_bound = true;
+            request.uncertain_outcome = false;
+            request.submission_error = None;
+            request.provider_session_id = Some(session);
+            request.provider_turn_id = Some(turn);
+        }
     }
 
     fn match_owned_claude_paste(&self, callback: &mut ProviderCallback) {
@@ -299,29 +325,9 @@ impl BusState {
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
-                let runtime = self
-                    .agents
-                    .get(&callback.agent_id)
-                    .map(|agent| &agent.runtime_identity);
                 let Some(request) = self.requests.get_mut(&request_id) else {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 };
-                if let (Some(origin), Some(runtime)) =
-                    (request.native_delivery_identity.as_mut(), runtime)
-                {
-                    if provider.uses_claude_harness()
-                        && origin.session_id.is_none()
-                        && origin.launch_id == runtime.launch_id
-                        && origin.terminal_id == runtime.terminal_id
-                        && origin.pane_id == runtime.pane_id
-                        && callback.provider_session_id == runtime.session_id
-                    {
-                        if request.interrupt_retirement_identity.as_ref() == Some(&*origin) {
-                            request.interrupt_retirement_identity = Some(runtime.clone());
-                        }
-                        origin.session_id = runtime.session_id.clone();
-                    }
-                }
                 let binds_provisional_owner = request.phase == RequestPhase::Submitting;
                 request.provider_session_id = callback.provider_session_id;
                 request.provider_turn_id = callback.provider_turn_id;
@@ -329,9 +335,7 @@ impl BusState {
                 request.trusted_start_bound = true;
                 request.phase = RequestPhase::Active;
                 request.uncertain_outcome = false;
-                if !request.interrupt_retirement_pending {
-                    request.submission_error = None;
-                }
+                request.submission_error = None;
                 request.pending_final = None;
                 request.turn_ended_at_ms = None;
                 request.awaiting_background = false;
@@ -436,11 +440,6 @@ impl BusState {
                 })
             });
             if let Some(member) = steered {
-                if request.interrupt_retirement_pending
-                    && callback.provider_turn_id != request_turn_id
-                {
-                    return false;
-                }
                 if let Some(member_state) = self.requests.get_mut(&member) {
                     member_state
                         .latency
@@ -546,9 +545,6 @@ impl BusState {
             .requests
             .get(&request_id)
             .ok_or(ModelError::UnknownRequest(request_id))?;
-        if request.interrupt_retirement_pending {
-            return Ok(false);
-        }
         let Some(pending) = request.pending_final.clone() else {
             return Ok(false);
         };

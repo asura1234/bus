@@ -47,64 +47,6 @@ impl Worker {
         true
     }
 
-    /// Attest only the main-thread submit that actually bound this request.
-    pub(super) fn save_claude_retirement_anchor(
-        &self,
-        state: &super::BusState,
-        id: AgentId,
-        record: &callbacks::Record,
-    ) {
-        use crate::agents::providers::claude_code::retirement::TranscriptAnchor;
-
-        if !record.manifest.provider.uses_claude_harness()
-            || record.nested_provider
-            || record
-                .value
-                .get("hook_event_name")
-                .and_then(serde_json::Value::as_str)
-                != Some("UserPromptSubmit")
-        {
-            return;
-        }
-        let Some(agent) = state.agent(id) else { return };
-        let Some(request) = agent.current_request.and_then(|id| state.request(id)) else {
-            return;
-        };
-        let runtime = &agent.runtime_identity;
-        let hook = |key| record.value.get(key).and_then(serde_json::Value::as_str);
-        let (Some(session), Some(prompt), Some(terminal), Some(path)) = (
-            runtime.session_id.as_deref(),
-            request.provider_prompt_id.as_deref(),
-            runtime.terminal_id.as_deref(),
-            hook("transcript_path"),
-        ) else {
-            return;
-        };
-        if runtime.launch_id.as_deref() != Some(record.manifest.launch_id.as_str())
-            || request.expected_launch_id != runtime.launch_id
-            || request.provider_session_id.as_deref() != Some(session)
-            || hook("session_id") != Some(session)
-            || hook("prompt_id") != Some(prompt)
-            || !request.trusted_start_bound
-        {
-            return;
-        }
-        let Some(anchor) = TranscriptAnchor::from_hook(Path::new(path), session, prompt) else {
-            return;
-        };
-        if anchor
-            .save(
-                &self.data_dir,
-                &record.manifest.launch_id,
-                terminal,
-                request.id.0,
-            )
-            .is_err()
-        {
-            tracing::debug!(event = "bus.callback.retirement_anchor_unavailable");
-        }
-    }
-
     /// Observe shell ownership for rejecting inherited wake notifications.
     /// A captured Stop answer is final regardless of these shells.
     pub(super) fn observe_background_shells(
@@ -204,31 +146,6 @@ impl Worker {
             ),
         }
     }
-}
-
-pub(in crate::messaging::coordinator) fn claude_retirement_turn(
-    state: &super::BusState,
-    agent: AgentId,
-    request: crate::messaging::model::RequestId,
-) -> Option<crate::protocol::api::schema::ClaudeRetirementTurn> {
-    let runtime = &state.agent(agent)?.runtime_identity;
-    if !state.group_members(request).is_empty() {
-        return None;
-    }
-    let request = state.request(request)?;
-    let launch = runtime.launch_id.as_ref()?;
-    let session = runtime.session_id.as_ref()?;
-    let prompt = request.provider_prompt_id.as_ref()?;
-    (request.trusted_start_bound
-        && !prompt.is_empty()
-        && request.native_delivery_identity.as_ref() == Some(runtime)
-        && request.expected_launch_id.as_ref() == Some(launch)
-        && request.provider_session_id.as_ref() == Some(session)
-        && request.provider_turn_id.as_ref() == Some(prompt))
-    .then(|| crate::protocol::api::schema::ClaudeRetirementTurn {
-        launch_id: launch.clone(),
-        prompt_id: prompt.clone(),
-    })
 }
 
 /// Map an observation only after the coordinator has validated its routing facts.

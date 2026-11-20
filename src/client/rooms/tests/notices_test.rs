@@ -179,13 +179,18 @@ fn failed_agent_add_logs_its_worker_projected_cause_once() {
     });
     let logs = capture.text();
     eprintln!("worker rejection logs:\n{logs}");
-    assert!(matches!(ui.form, Some(forms::Form::Agent { .. })));
+    assert!(ui.form.is_none());
     assert!(ui
         .snapshot
         .state
         .agents()
         .all(|agent| agent.name != "worker"));
-    assert!(!room_screen(&mut ui, 100, 40).contains(error));
+    let screen = room_screen(&mut ui, 100, 40);
+    assert!(
+        screen.contains("Could not add worker: Agent PWD"),
+        "{screen}"
+    );
+    assert!(screen.contains("cannot be read"), "{screen}");
     assert!(
         logs.contains(&format!("room_id=Some({})", room.0)),
         "{logs}"

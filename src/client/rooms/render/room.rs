@@ -307,6 +307,13 @@ impl BusUi {
             view.history_divider =
                 Rect::new(main.x + 1, history_y - 1, main.width.saturating_sub(2), 1);
         }
+        let notice = Rect::new(
+            x,
+            history_y,
+            width,
+            view.composer_box.y.saturating_sub(history_y),
+        );
+        history_y += self.agent_creation_error(view, room.id, notice);
         // The open search takes the top of the history pane, full width, and
         // the history shrinks by its height until it closes.
         if self.chat_search.is_some() && history_y + SEARCH_BOX_HEIGHT < view.composer_box.y {
@@ -319,6 +326,29 @@ impl BusUi {
             history_y += SEARCH_BOX_HEIGHT;
         }
         history_y
+    }
+
+    fn agent_creation_error(&self, view: &mut View, room: RoomId, rect: Rect) -> u16 {
+        let mut used = 0;
+        let available = rect.height.min(6);
+        for (name, error) in self.agent_creation_errors(room) {
+            if used >= available {
+                break;
+            }
+            let reason = error.lines().next().unwrap_or(error);
+            let text = format!("Could not add {name}: {reason}");
+            let height = (wrap(&text, rect.width).len() as u16)
+                .min(available - used)
+                .min(3);
+            view.lines(
+                Rect::new(rect.x, rect.y + used, rect.width, height),
+                &text,
+                None,
+                false,
+            );
+            used += height;
+        }
+        used
     }
 
     fn history_rows(&self, view: &mut View, content: &[Line], links: &[Vec<Candidate>]) {
