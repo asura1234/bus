@@ -2,7 +2,7 @@
 pub(super) const TEXT: &str = "Composer
 Enter          Send with the room's delivery mode (Interrupt by default)
 Option+Enter   Same as Enter
-F4             Open delivery modes (also click the Mode pill)
+F4             Open delivery modes (also click ▼)
                Up / Down choose, Enter / Space apply, Esc / Tab / F4 close
 History        [queued] marks queue mode. [pending] marks steer mode.
                Interrupt-mode messages have no mode marker.

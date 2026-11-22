@@ -1,4 +1,4 @@
-//! Composer delivery pill and its keyboard- and mouse-selectable options.
+//! Composer delivery arrow and its keyboard- and mouse-selectable options.
 use super::{wrap, Action, View, ACCENT};
 use crate::messaging::model::SendMode::{self, Interrupt, Queue, Steer};
 use ratatui::{
@@ -16,39 +16,17 @@ const OPTIONS: [(SendMode, &str, &str); 3] = [
     (Queue, "Queue", "Deliver after the current turn ends."),
 ];
 
-const FULL_PILL_WIDTH: u16 = 20;
-const COMPACT_PILL_WIDTH: u16 = 13;
+/// ▼ plus the blank column the toolbar leaves before `+`.
+const TRIGGER_RESERVE: u16 = 2;
+const TRIGGER: &str = "▼";
 
 pub(super) fn delivery_pill_width(width: u16) -> u16 {
-    if width >= FULL_PILL_WIDTH + 19 {
-        FULL_PILL_WIDTH
-    } else {
-        // Leave space for +, @ and a recipient chip, including its border.
-        width
-            .saturating_sub(11)
-            .clamp(1, COMPACT_PILL_WIDTH)
-            .min(width)
-    }
+    TRIGGER_RESERVE.min(width)
 }
 
-pub(super) fn delivery_pill(view: &mut View, rect: Rect, mode: SendMode, open: bool) {
-    let label = match mode {
-        Interrupt => "Interrupt",
-        Steer => "Steer",
-        Queue => "Queue",
-    };
-    let width = usize::from(rect.width);
-    let text = if width + 1 == usize::from(FULL_PILL_WIDTH) {
-        format!(" Mode: {label} ⌄ ")
-    } else if width > label.len() + 1 {
-        format!(" {label} ⌄")
-    } else if width >= label.len() {
-        label.to_owned()
-    } else {
-        format!("{}…", &label[..width.saturating_sub(1)])
-    };
-    // Paint padding too, so the text and hit target share one pill.
-    view.overlay_row(rect, text, Some(Action::DeliveryMode), open);
+pub(super) fn delivery_pill(view: &mut View, rect: Rect, _mode: SendMode, open: bool) {
+    // The current mode is labeled only in the open menu. The closed hit is the arrow.
+    view.overlay_row(rect, TRIGGER.to_owned(), Some(Action::DeliveryMode), open);
     view.style_last_row(
         rect,
         Style::default().fg(ACCENT).bg(if open {
@@ -66,8 +44,10 @@ impl View {
         if width < 3 || composer.bottom() < 3 {
             return;
         }
-        let options = OPTIONS
-            .map(|(mode, label, detail)| (mode, wrap(&format!("{label}  {detail}"), width - 2)));
+        let options = OPTIONS.map(|(mode, label, detail)| {
+            let mark = if mode == selected { "● " } else { "  " };
+            (mode, wrap(&format!("{mark}{label}  {detail}"), width - 2))
+        });
         let desired = 2 + options
             .iter()
             .map(|(_, lines)| lines.len() as u16)

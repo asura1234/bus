@@ -19,6 +19,8 @@ fn assert_composer_toolbar(
     assert_eq!(mode.right() + 1, files.x);
     assert_eq!((files.y, recipients.y), (y, y));
     assert_eq!(files.x + 3, recipients.x);
+    assert_eq!(mode.width, 1, "the delivery hit is only the arrow");
+    assert_eq!(buffer[(mode.x, y)].symbol(), "▼");
     assert_eq!(buffer[(files.x, y)].symbol(), "+");
     assert_eq!(buffer[(recipients.x, y)].symbol(), "@");
 }
@@ -77,6 +79,30 @@ fn composer_box_encloses_controls_and_grows_with_matching_column_divider() {
         }
         assert_composer_toolbar(&ui, &buffer, editor.x, top + 1);
     }
+}
+
+#[test]
+fn delivery_trigger_is_a_down_arrow_and_the_open_menu_marks_the_current_mode() {
+    let (mut ui, _, _) = fixture();
+    let closed = room_screen(&mut ui, 100, 30);
+    assert!(closed.contains("▼"), "{closed}");
+    assert!(!closed.contains("Mode:"), "{closed}");
+    for name in ["Interrupt", "Steer", "Queue"] {
+        assert!(
+            !closed.contains(name),
+            "{name} is not on the closed composer:\n{closed}"
+        );
+    }
+    key(&mut ui, KeyCode::F(4), KeyModifiers::NONE);
+    let open = room_screen(&mut ui, 100, 30);
+    assert!(open.contains("● Interrupt"), "{open}");
+    assert!(open.contains("Steer"), "{open}");
+    assert!(open.contains("Queue"), "{open}");
+    assert!(!open.contains("Mode:"), "{open}");
+    ui.action(render::Action::NewRoom);
+    assert!(ui.delivery_menu.is_none());
+    let form = room_screen(&mut ui, 120, 40);
+    assert!(!form.contains("Mode:"), "{form}");
 }
 
 #[test]

@@ -158,10 +158,13 @@ draft cases in [stash-draft-delivery.md](stash-draft-delivery.md).
 and a fake MASTER orchestrator bound to that room. Use a long fake turn with
 a trusted start. Scratch CLI sends for steer and queue use that orchestrator.
 
-1. Inspect the composer and `/help` → there is no `Mode:` control and F4 does
-   not open a delivery menu. Help says Enter and Option+Enter both interrupt.
-   Send `fake:work 40 MODE_LEAD` with Enter → one long turn and a history
-   header with no delivery badge.
+1. Inspect the composer and `/help` → the delivery control is only `▼`. It
+   shows no `Mode:` label and no current-mode name. Help does not say `Mode:`;
+   it says F4 opens delivery modes (also click `▼`) and that Enter and
+   Option+Enter send with the room's delivery mode. Press F4 → the menu lists
+   Interrupt, Steer and Queue, and Interrupt is marked with `●`. Esc closes
+   the menu and the composer again shows only `▼`. Send `fake:work 40 MODE_LEAD`
+   with Enter → one long turn and a history header with no delivery badge.
 2. While the lead is Working, send `MODE_ALT` with Option+Enter → the lead
    stops and the new payload is accepted before the lead's scheduled natural
    end. Its history header also has no delivery badge. A developer attempt
@@ -178,13 +181,15 @@ a trusted start. Scratch CLI sends for steer and queue use that orchestrator.
    and Queue still shows `[queued]`. Scan the exchange for any stop-outcome
    badge.
 
-**Evidence:** composer and help text showing no mode picker, each
-prompt/request ID, native start and end evidence, the developer mode refusal,
-group/status before and after settlement, and restored history. If step 3
-misses the active interval, report the missing observation.
+**Evidence:** composer text showing only `▼`, help text without `Mode:`, the
+open menu with Interrupt marked `●`, each prompt/request ID, native start and
+end evidence, the developer mode refusal, group/status before and after
+settlement, and restored history. If step 3 misses the active interval, report
+the missing observation.
 
-**Pass criteria:** the composer always interrupts and draws no mode badge.
-Orchestrator steer joins and queue waits, and history keeps only those badges.
+**Pass criteria:** the closed composer shows only the down arrow, and the open
+menu marks the current mode. A default Enter send has no badge. Orchestrator
+steer joins and queue waits, and history keeps only those badges.
 
 ### APP-27 — NEW: Explicit and captured developer answers render once
 
@@ -843,7 +848,7 @@ build missing a required product lane still fails the target assertion.
 | Area | Source at review | Check on the run head |
 | --- | --- | --- |
 | APP-25, agy portion of APP-30 | Master `f00cc3b3d` removes interrupt retirement. Interrupt delivery runs while the agent is Working (`delivery.rs` `interrupt_ready`, `allow_working: true`). Pane-time copy-send-restore is `terminal/runtime/submission/copy.rs`: readable plaintext is snapshotted, sent, then restored; unrestorable content logs `bus.draft.copy_loss` and still delivers. The same commit reconciles confirmed AGY turns. | On this head, APP-25 requires exact restoration of readable plaintext and no retirement or fence notice. Opaque or clipped content may log `bus.draft.copy_loss` and must still deliver. Keep rich-draft and genuine-blocker checks separate. |
-| APP-26 | Master `f00cc3b3d` has no composer mode picker. Enter and Option+Enter both interrupt (`drafts.rs` `request_queued_send`, `delivery_mode_test.rs`). Badges from `af8e243c6` remain in `history/exchange.rs`: interrupt has no marker, steer is `[pending]`, queue is `[queued]`. Developer steer/queue is refused; an orchestrator may pass `--mode` (`messages.rs` `send_delivery`). | Do not look for `Mode:` or F4. Composer sends are interrupt with no badge. Produce steer and queue with an orchestrator `--mode` send and check that those badges persist. |
+| APP-26 | The composer delivery control is only `▼` (`render/delivery_mode.rs` `delivery_pill`). F4 and that arrow open Interrupt, Steer and Queue, and the current mode is marked `●` (`delivery_menu`). Default Enter and Option+Enter still interrupt (`drafts.rs` `request_send_with`). Badges from `af8e243c6` remain in `history/exchange.rs`: interrupt has no marker, steer is `[pending]`, queue is `[queued]`. Developer CLI steer/queue is refused; an orchestrator may pass `--mode` (`messages.rs` `send_delivery`). | Expect `▼` and no `Mode:` on the closed composer or in `/help`. Open the menu and confirm the current mode is marked `●`. Default composer sends are interrupt with no badge. Produce steer and queue with an orchestrator `--mode` send and check that those badges persist. |
 | APP-27 | Master `af8e243c6` renders developer replies using the same projection as room history. | Check the still-open explicit acknowledgement and restored history independently. |
 | APP-28 | #472 `067ea8672` returns to the room on submit (`agent_creation.rs` `submit_agent_creation` calls `open_room`) and shows a `Launching` row (`render/sidebar.rs`). Inline missing-field text stays on the form (`input/forms.rs`). The room renders `Could not add {name}: {reason}` (`render/room.rs`). Hook consent opens later, only while that room is idle (`receive_agent_setup`). | Expect the immediate close, the provisional row, inline Name/Model/PWD errors, and the room-local failure line. Consent must not hold the Add form open across startup. |
 | APP-29 | Master `1ab9d1c5b` and `f83ba7013` use immediate keypress confirmation. | A separate confirmation prompt is not in the inspected restart contract. If a prompt is required, the restart lane must change before adding that expectation. |
