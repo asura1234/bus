@@ -85,6 +85,20 @@ peer-only. The owner does not forward a second copy of a verdict or result.
 - Re-announcing an unchanged verdict without fresh evidence for the new head.
 - Answers to questions nobody asked.
 
+## Kick blockers upward
+
+**Escalate a blocker as soon as you know you can't get past it.** Don't sit on
+it or retry in a loop. Workers go to their orchestrator, and orchestrators go to
+the developer when they can't clear it. A worker may go straight to the developer
+when that's faster, when the orchestrator can't resolve it, or when the
+orchestrator is the blocker. Take that direct path from your own work room.
+Keep it out of MASTER.
+
+Give the exact blocking state, what you've already tried, the decision or action
+you need, and what you'll do the moment you're unblocked. Silently looping on
+something you can't get past is the worst outcome. One message is usually all
+it takes to fix it.
+
 ## To you (the developer)
 
 Any agent may message the developer directly, workers from their own room. It
