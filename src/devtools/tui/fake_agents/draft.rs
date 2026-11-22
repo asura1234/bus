@@ -52,6 +52,22 @@ impl FakeAgent {
         None
     }
 
+    /// Keystrokes typed while Claude hid its composer waited in `pending`.
+    /// They are the whole draft. The submitted prompt stays in the transcript
+    /// and is not copied back: delivery snapshots this screen and would
+    /// restore that payload.
+    pub(super) fn keep_keystrokes_typed_during_turn(&mut self) {
+        let inputs = super::drain_input(&mut self.pending);
+        for input in inputs {
+            if matches!(
+                input,
+                Input::Text(_) | Input::Paste(_) | Input::Backspace | Input::KillLine
+            ) {
+                let _ = self.apply(input);
+            }
+        }
+    }
+
     pub(super) fn stash(&mut self) {
         if self.draft.trim().is_empty() {
             if let Some((draft, collapsed)) = self.stashed.take() {

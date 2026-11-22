@@ -1037,3 +1037,57 @@ fn fake_overload_once_uses_the_recorded_native_error_shape() {
     );
     assert!(api_error("codex", "fake:overload-once").is_none());
 }
+
+/// Enter submits these exact bytes, then Esc ends the hidden Claude turn.
+/// The composer afterwards is only what was typed during the turn.
+fn claude_composer_after_interrupt(prompt: &str, typed_during_turn: Option<&[u8]>) -> String {
+    let (sender, receiver) = mpsc::channel();
+    let mut agent = FakeAgent::new("claude", Value::Null);
+    agent.input = Some(receiver);
+    agent.draft = prompt.to_owned();
+    let submitted = match agent.apply(Input::Enter) {
+        Some(Typed::Submit(text)) => text,
+        _ => panic!("enter did not submit"),
+    };
+    assert_eq!(submitted, prompt, "exact submit bytes");
+    assert!(
+        agent.draft.is_empty(),
+        "enter must clear the composer before the turn; draft was {:?}",
+        agent.draft
+    );
+    if let Some(bytes) = typed_during_turn {
+        sender.send(bytes.to_vec()).unwrap();
+    }
+    sender.send(b"\x1b".to_vec()).unwrap();
+    assert!(agent.submit(prompt).is_none());
+    // The read loop applies keystrokes that were still buffered when Esc won.
+    for input in drain_input(&mut agent.pending) {
+        let _ = agent.apply(input);
+    }
+    agent.draft
+}
+
+#[test]
+fn claude_interrupt_restores_only_the_draft_typed_during_the_hidden_turn() {
+    let prompt = "[Bus message 4 from you (room 2)]\nfake:work 30 FIRST";
+    let typed = b"aa  fake:draft-bytes APP25";
+    let draft = claude_composer_after_interrupt(prompt, Some(typed));
+    assert_eq!(
+        draft, "aa  fake:draft-bytes APP25",
+        "composer must be only the typed draft; submitted payload was {prompt:?}"
+    );
+    assert!(
+        !draft.contains("[Bus message"),
+        "delivered payload leaked into the composer: {draft:?}"
+    );
+}
+
+#[test]
+fn claude_interrupt_with_no_typed_draft_leaves_the_composer_empty() {
+    let prompt = "[Bus message 8 from you (room 2)]\nfake:work 30 STEP2";
+    let draft = claude_composer_after_interrupt(prompt, None);
+    assert!(
+        draft.is_empty(),
+        "interrupt invented a draft {draft:?} from submitted payload {prompt:?}"
+    );
+}
