@@ -1084,10 +1084,10 @@ impl Delivery {
             assert!(replies[0]["reply"].is_null(), "{history}");
             assert_eq!(replies[0]["stage"], "ended");
             if r.reply().is_some() {
-                let reason = if matches!(r.prompt.author, Author::Agent(_)) {
-                    "requester_reply"
-                } else {
-                    "shared_reply"
+                let reason = match r.prompt.author {
+                    Author::Agent(_) => "requester_reply",
+                    Author::Developer => "shared_reply",
+                    Author::Bus => "internal_reply",
                 };
                 assert_eq!(replies[0]["reason"], reason, "{history}");
             }

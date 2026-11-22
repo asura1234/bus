@@ -523,7 +523,7 @@ prior_request_active, unavailable). Recovery deadlines stay internal and never
 change the reported stage. After 5m blocked the reason is blocked_unanswered.
 A turn that ends settles at once; its captured final is stored as the reply.
 An explicit --reply-to answer is never replaced by a later turn final, and a
-textless turn close stores no reply.
+textless turn close uses reason turn_ended_without_reply.
 Transient native provider errors retain the delivery and show Working while Bus retries
 with backoff or waits for a quota reset; details and deadlines go to the client log.
 Permanent-error settlement without a final closes as provider_error: MESSAGE.

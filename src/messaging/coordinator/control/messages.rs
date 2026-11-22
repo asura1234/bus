@@ -612,8 +612,10 @@ impl Worker {
             let stage = r.delivery_stage();
             // The native server's last refusal explains a queued wait best.
             let reason = r.failure_reason.clone()
+                .filter(|reason| !reason.trim().is_empty())
                 .or_else(|| self.state.blocked_unanswered(r, now_ms).then(|| "blocked_unanswered".into()))
-                .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
+                .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten())
+                .or_else(|| (stage == "ended").then(|| "turn_ended_without_reply".into()));
             let submission = if r.submission_notice().is_some() { r } else { r.group.and_then(|lead| self.state.request(lead)).unwrap_or(r) };
             let failure_detail = self.state.steered_turn_failure(r);
             let detail = failure_detail.as_ref()

@@ -154,6 +154,12 @@ fn orchestrator_steer_and_queue_settle_when_the_lead_turn_ends() {
     );
 
     fixture.deliver();
+    assert_eq!(fixture.request(steer).group, Some(lead));
+    assert_eq!(
+        fixture.request(steer).history_mode_marker(),
+        Some(" [pending]"),
+        "an attempted write needs provider start evidence"
+    );
     let steered_body = test_prompt_content(
         fixture
             .request(steer)
@@ -184,8 +190,11 @@ fn orchestrator_steer_and_queue_settle_when_the_lead_turn_ends() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.reply(steer).as_deref(), Some("lead settled"));
     assert_status_settled(&mut fixture, steer);
-    assert_history_settled(&history_row(&mut fixture, steer));
+    let steer_row = history_row(&mut fixture, steer);
+    assert_history_settled(&steer_row);
+    assert_eq!(steer_row["reason"], "requester_reply");
     assert_eq!(
         fixture.request(queue).phase,
         RequestPhase::Queued,
@@ -219,6 +228,27 @@ fn orchestrator_steer_and_queue_settle_when_the_lead_turn_ends() {
     assert!(queue_row["reply"].is_null(), "{queue_row}");
     assert_status_settled(&mut fixture, steer);
     assert_history_settled(&history_row(&mut fixture, steer));
+}
+
+#[test]
+fn a_silent_turn_has_a_reason_in_status_and_history() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "no answer", "1");
+    fixture.stopped("1", " ");
+    fixture.consume();
+
+    let status = fixture
+        .worker
+        .control_message(fixture.request(lead).prompt.id)
+        .unwrap();
+    for row in [
+        status["requests"][0].clone(),
+        history_row(&mut fixture, lead),
+    ] {
+        assert_eq!(row["stage"], "ended", "{row}");
+        assert!(row["reply"].is_null(), "{row}");
+        assert_eq!(row["reason"], "turn_ended_without_reply", "{row}");
+    }
 }
 
 /// A steer the provider never claims closes with a named reason when the

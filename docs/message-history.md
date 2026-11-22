@@ -14,9 +14,11 @@ reply or a named failure reason. Room history never leaves one at stage
 `ended` with a null reply and no reason. A shared developer answer is shown
 once; the other rows keep stage `ended` and reason `shared_reply`. An
 agent-authored answer is delivered to the requester and is not repeated in the
-room; that row uses reason `requester_reply`. Older records can identify steer
-when the message joined a running turn. A legacy independent-turn flag can
-represent several send modes and is insufficient to assign a badge.
+room; that row uses reason `requester_reply`. A completed turn with no captured
+answer uses `turn_ended_without_reply` when no other reason is recorded.
+Older records can identify steer when the message joined a running turn.
+A legacy independent-turn flag can represent several send modes and is
+insufficient to assign a badge.
 
 A developer's captured reply appears in the original exchange. Each room shows
 one copy of a shared answer. A correlated explicit reply takes precedence over

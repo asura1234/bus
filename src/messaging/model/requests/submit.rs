@@ -38,9 +38,7 @@ impl Request {
         }
         match self.history_send_mode() {
             Some(SendMode::Queue) if self.phase == RequestPhase::Queued => Some(" [queued]"),
-            Some(SendMode::Steer) if !self.trusted_start_bound && self.group.is_none() => {
-                Some(" [pending]")
-            }
+            Some(SendMode::Steer) if !self.trusted_start_bound => Some(" [pending]"),
             _ => None,
         }
     }
