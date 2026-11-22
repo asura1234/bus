@@ -50,9 +50,18 @@ impl ObservedSubmission {
             if fresh && !queued && observation == InputObservation::Empty {
                 return Ok(());
             }
-            // Working chrome can belong to an unrelated background turn;
-            // only a cleared composer or restored native stash proves consumption.
-            // A changed draft loses ownership in the inspector permanently.
+            // Some turns hide the composer. Require a new transcript echo
+            // of this prompt, since Working alone can be unrelated activity.
+            if fresh
+                && !queued
+                && observation == InputObservation::Accepted
+                && !self.inspect.native_draft_preserved()
+                && screen
+                    .as_ref()
+                    .is_some_and(|screen| self.inspect.submitted_prompt_visible(screen))
+            {
+                return Ok(());
+            }
             if let Err(error) = self.check_deadline() {
                 drop(guard);
                 if observation == InputObservation::Pending || queued {
@@ -92,6 +101,9 @@ impl ObservedSubmission {
             let completion = if retry {
                 match lease.filter(|lease| !lease.edited()) {
                     Some(lease) => {
+                        if let Some(screen) = &screen {
+                            self.inspect.record_submit_frame(screen);
+                        }
                         self.enter_content_seq
                             .set(self.content_seq.load(Ordering::Acquire));
                         self.diagnostics.enter(&self.enter, self.clock.now());

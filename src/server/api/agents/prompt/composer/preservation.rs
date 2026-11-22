@@ -126,6 +126,12 @@ impl SubmissionInspector for PreservingComposer {
     fn native_queue_visible(&self, screen: &str) -> bool {
         self.owned.native_queue_visible(screen)
     }
+    fn record_submit_frame(&self, screen: &str) {
+        self.owned.record_submit_frame(screen);
+    }
+    fn submitted_prompt_visible(&self, screen: &str) -> bool {
+        self.owned.submitted_prompt_visible(screen)
+    }
     fn retry_owned_enter(&self) -> bool {
         self.owned.retry_owned_enter()
     }

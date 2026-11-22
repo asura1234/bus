@@ -118,6 +118,10 @@ pub(crate) trait SubmissionInspector: Send {
     fn native_queue_visible(&self, _screen: &str) -> bool {
         false
     }
+    fn record_submit_frame(&self, _screen: &str) {}
+    fn submitted_prompt_visible(&self, _screen: &str) -> bool {
+        false
+    }
     /// Claude plain pastes need owned render and consumption evidence; a
     /// still-owned draft may receive one extra Enter after a dropped key.
     fn retry_owned_enter(&self) -> bool {
@@ -634,6 +638,7 @@ impl ObservedSubmission {
                             if self.inspect.confirm_consumption() || self.inspect.waits_for_idle() {
                                 self.observe("enter_ownership");
                             }
+                            self.inspect.record_submit_frame(&screen);
                             self.enter_content_seq
                                 .set(self.content_seq.load(Ordering::Acquire));
                             self.diagnostics.enter(&key, self.clock.now());

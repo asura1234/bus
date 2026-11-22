@@ -254,3 +254,49 @@ async fn claude_plain_paste_does_not_confirm_unrelated_background_activity() {
         .contains("agent_prompted"));
     assert!(writes.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn claude_plain_paste_releases_draft_keys_when_a_fresh_prompt_echo_hides_the_composer() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let receipt = clock(&app).hold_next_write_completion();
+    let response = start(&mut app, method);
+    next_write(&mut writes).await;
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let render = |text: &str| {
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(text.as_bytes());
+    };
+    let old_echo = "\x1b[2J\x1b[H> from bus\r\n";
+    render(&format!(
+        "{old_echo}\r\n────────────────────────\r\n❯ from bus\r\n────────────────────────\r\n"
+    ));
+    receipt.send(()).unwrap();
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    clock(&app).wait_for_enters(1);
+    let draft = Bytes::from_static(b"aa  developer draft");
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .try_send_developer_bytes(draft.clone())
+        .unwrap();
+
+    let work = "✻ Working… (0s · esc to interrupt)\r\n";
+    for frame in [
+        format!("{old_echo}{work}"),
+        format!("{old_echo}> from bus\r\n{work}ctrl+enter to send now\r\n"),
+    ] {
+        render(&frame);
+        let generation = clock(&app).advance(Duration::from_millis(100));
+        clock(&app).wait_for_submission_check(generation);
+        assert!(response.try_recv().is_err(), "stale echo or native queue");
+        assert!(writes.try_recv().is_err(), "draft keys are still buffered");
+    }
+
+    render(&format!("{old_echo}> from bus\r\n{work}"));
+    assert!(response
+        .recv_timeout(WAIT)
+        .unwrap()
+        .contains("agent_prompted"));
+    assert_eq!(next_write(&mut writes).await, draft);
+    assert!(writes.try_recv().is_err());
+}
