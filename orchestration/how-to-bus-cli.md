@@ -206,7 +206,7 @@ a dialog: Kitty graphics in kitty/Ghostty/WezTerm/iTerm2 3.7+, inline images in 
 tmux, disabled terminal.kitty_graphics, missing/unreadable images and unsupported hosts use clickable
 file rows. Clicking an image opens file detail.
 
-Click **Mode** or press **F4**. Move with **Up/Down**, apply with **Enter/Space**, and close with **Esc/Tab/F4**.
+Click the down arrow or press **F4**. Move with **Up/Down**, apply with **Enter/Space**, and close with **Esc/Tab/F4**.
 The room remembers its mode for the TUI session. Enter and Option/Alt+Enter send with that mode, initially Interrupt.
 Ctrl+J or supported Shift+Enter adds a newline. See `bus --help` for shortcuts and `bus settings --help` for shared defaults.
 Settings exposes details visibility and color-blind mode.

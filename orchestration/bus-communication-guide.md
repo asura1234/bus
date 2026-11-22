@@ -205,7 +205,7 @@ disturb the running turn. Does the current work become waste if it
 continues unchanged? Interrupt. Does it need direction while it continues?
 Steer. Is this the next task rather than a change to this one? Queue.
 
-The developer's room composer defaults to Interrupt. Click the Mode pill or
+The developer's room composer defaults to Interrupt. Click the down arrow or
 press F4 to choose Interrupt, Steer, or Queue for that room during the TUI
 session. Developer `bus send` and Feishu replies use Interrupt. The CLI refuses
 `--queue` and `--mode steer`/`queue` for developer sends. Orchestrator messages

@@ -2296,7 +2296,8 @@ fn scriptable_fake_resumes_without_reusing_prior_turns() {
 #[test]
 fn composer_mode_dropdown_sets_the_delivery_of_sent_messages() {
     let session = Session::start("mdsend");
-    session.ok(&["wait", "--text", "Mode: Interrupt ⌄", "--timeout", "5s"]);
+    session.ok(&["wait", "--text", "▼", "--timeout", "5s"]);
+    session.ok(&["wait", "--text", "Mode:", "--gone"]);
 
     let work = session_dir(&session.0).join("work");
     let (code, added) = parse(scratch_bus(
@@ -2327,12 +2328,17 @@ fn composer_mode_dropdown_sets_the_delivery_of_sent_messages() {
     session.ok(&["press", "esc"]);
 
     session.ok(&["click", "--hit", "delivery-mode"]);
-    for description in [
-        "Stop the running turn",
-        "Join the running turn",
-        "Deliver after the current turn",
+    session.ok(&["wait", "--text", "● Interrupt"]);
+    let menu = session.ok(&["hits"]);
+    let hits = menu["hits"].as_array().unwrap();
+    for (name, text) in [
+        ("delivery-mode:interrupt", "● Interrupt"),
+        ("delivery-mode:steer", "Steer"),
+        ("delivery-mode:queue", "Queue"),
     ] {
-        session.ok(&["wait", "--text", description]);
+        let row = hits.iter().find(|hit| hit["name"] == name).unwrap();
+        assert_eq!(row["text"], text, "{menu}");
+        assert_eq!(row["height"], 1, "{menu}");
     }
     session.ok(&["click", "--hit", "delivery-mode:steer"]);
     assert_composer_mode_send(&session, "Steer", "steered from composer", false);
@@ -2343,13 +2349,20 @@ fn composer_mode_dropdown_sets_the_delivery_of_sent_messages() {
     assert_composer_mode_send(&session, "Queue", "queued from composer", true);
 
     session.ok(&["click", "--hit", "room:MASTER"]);
-    session.ok(&["wait", "--text", "Mode: Interrupt ⌄"]);
+    session.ok(&["press", "f4"]);
+    session.ok(&["wait", "--text", "● Interrupt"]);
+    session.ok(&["press", "esc"]);
     session.ok(&["click", "--hit", "room:bus"]);
-    session.ok(&["wait", "--text", "Mode: Queue ⌄"]);
+    session.ok(&["press", "f4"]);
+    session.ok(&["wait", "--text", "● Queue"]);
+    session.ok(&["press", "esc"]);
 }
 
 fn assert_composer_mode_send(session: &Session, mode: &str, text: &str, queue: bool) {
-    session.ok(&["wait", "--text", &format!("Mode: {mode} ⌄")]);
+    session.ok(&["press", "f4"]);
+    session.ok(&["wait", "--text", &format!("● {mode}")]);
+    session.ok(&["wait", "--text", "Mode:", "--gone"]);
+    session.ok(&["press", "esc"]);
     session.ok(&["type", text]);
     session.ok(&["press", "enter"]);
     session.ok(&[
@@ -2409,6 +2422,8 @@ fn composer_mode_dropdown_key_coexists_with_existing_composer_chords() {
     session.ok(&["type", "/help"]);
     session.ok(&["press", "enter"]);
     session.ok(&["wait", "--text", "F4"]);
+    session.ok(&["wait", "--text", "Mode:", "--gone"]);
+    session.ok(&["wait", "--text", "▼"]);
 }
 
 #[test]
@@ -2436,7 +2451,8 @@ fn composer_mode_dropdown_keeps_controls_separate_at_narrow_width() {
     session.ok(&["click", "--hit", "recipient:recipient"]);
     session.ok(&["press", "esc"]);
     session.ok(&["resize", "46x24"]);
-    session.ok(&["wait", "--text", "Interrupt"]);
+    session.ok(&["wait", "--text", "▼"]);
+    session.ok(&["wait", "--text", "Mode:", "--gone"]);
     let frame = session.ok(&["hits"]);
     assert!(frame["stale"].is_null(), "{frame}");
     let hits = frame["hits"].as_array().unwrap();
@@ -2472,5 +2488,7 @@ fn composer_mode_dropdown_keeps_controls_separate_at_narrow_width() {
     );
     session.ok(&["click", "--hit", "delivery-mode"]);
     session.ok(&["click", "--hit", "delivery-mode:queue"]);
-    session.ok(&["wait", "--text", "Queue ⌄"]);
+    session.ok(&["press", "f4"]);
+    session.ok(&["wait", "--text", "● Queue"]);
+    session.ok(&["wait", "--text", "Mode:", "--gone"]);
 }
