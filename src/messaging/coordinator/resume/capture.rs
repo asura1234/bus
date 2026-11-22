@@ -76,6 +76,31 @@ pub(crate) fn load(
     if !facts.is_bus_owned() {
         return Ok(LaunchExtras::default());
     }
+    let state = load_state(context)?;
+    let (agent, corrected, hooks) = verified_owner(context, facts, plan, &state)?;
+    prepare_capture(context, facts, agent, corrected, &hooks)
+}
+
+pub(crate) fn revalidate(
+    context: &NativeResumeContext,
+    facts: &NativeResumeFacts,
+    plan: &AgentResumePlan,
+    session: Option<&PersistedAgentSession>,
+    env: &[(String, String)],
+) -> Result<(), String> {
+    let state = load_state(context)?;
+    let (_, corrected, hooks) = verified_owner(context, facts, plan, &state)?;
+    if corrected.as_ref() != session
+        || !env
+            .iter()
+            .any(|(key, value)| key == "BUS_LAUNCH_ID" && *value == hooks.launch_id)
+    {
+        return Err("Bus resume owner changed during preparation".into());
+    }
+    Ok(())
+}
+
+fn load_state(context: &NativeResumeContext) -> Result<crate::messaging::model::BusState, String> {
     let root = context
         .root
         .as_deref()
@@ -84,7 +109,7 @@ pub(crate) fn load(
     if !context.is_bus_server() {
         return Err("Bus resume context belongs to another server session".into());
     }
-    let state = JsonStore::new(root.join("state.json"))
+    JsonStore::new(root.join("state.json"))
         .load()
         .map_err(|error| {
             let (stage, raw_os_error, _) = error.diagnostic();
@@ -92,14 +117,29 @@ pub(crate) fn load(
                 "Bus resume state load failed");
             "Bus resume state is unreadable"
         })?
-        .ok_or("Bus resume state is missing")?;
+        .ok_or_else(|| "Bus resume state is missing".into())
+}
+
+fn verified_owner<'a>(
+    context: &NativeResumeContext,
+    facts: &NativeResumeFacts,
+    plan: &AgentResumePlan,
+    state: &'a crate::messaging::model::BusState,
+) -> Result<
+    (
+        &'a crate::messaging::model::RoomAgent,
+        Option<PersistedAgentSession>,
+        HookContext,
+    ),
+    String,
+> {
     let (agent, corrected) = if facts.session.is_none() {
         if super::unstarted_plan(facts, Some(&plan.argv)).as_ref() != Some(plan) {
             return Err("Bus resume has no saved provider session".into());
         }
-        (ownership::unstarted_owner(&state, facts)?, None)
+        (ownership::unstarted_owner(state, facts)?, None)
     } else {
-        ownership::resume_owner(&state, facts, saved_session(facts, plan)?)?
+        ownership::resume_owner(state, facts, saved_session(facts, plan)?)?
     };
     if agent.deletion_pending
         || state
@@ -109,12 +149,26 @@ pub(crate) fn load(
     {
         return Err("Bus resume is suspended by deletion or invalidated identity".into());
     }
+    let root = context
+        .root
+        .as_deref()
+        .ok_or("Bus resume data root unavailable")?;
     let hooks = ownership::verified_capture(root, agent, &context.binary)?;
     if facts.session.is_none()
         && crate::agents::providers::launch::reserved_session(&hooks.spool).is_some()
     {
         return Err("Bus resume cannot replace an adopted session with an empty launch".into());
     }
+    Ok((agent, corrected, hooks))
+}
+
+fn prepare_capture(
+    context: &NativeResumeContext,
+    facts: &NativeResumeFacts,
+    agent: &crate::messaging::model::RoomAgent,
+    corrected: Option<PersistedAgentSession>,
+    hooks: &HookContext,
+) -> Result<LaunchExtras, String> {
     let mut args = crate::agents::providers::launch::saved_options(
         identity::provider_kind(agent.provider),
         &hooks.spool,
@@ -146,7 +200,7 @@ pub(crate) fn load(
     } else {
         context.project.clone()
     };
-    let (path, capture, rebound) = capture_args(agent.provider, &hooks, &project)?;
+    let (path, capture, rebound) = capture_args(agent.provider, hooks, &project)?;
     crate::agents::providers::launch::extend_generated_args(
         identity::provider_kind(agent.provider),
         &mut args,
@@ -175,7 +229,7 @@ pub(crate) fn load(
         prompt,
     );
     Ok(LaunchExtras {
-        env: capture_environment(agent.provider, &hooks)?,
+        env: capture_environment(agent.provider, hooks)?,
         args,
         session: corrected,
     })

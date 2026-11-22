@@ -9,6 +9,7 @@ pub(crate) mod scrollback_read;
 mod theme_sync;
 mod titles;
 
+pub(super) use resume::AgentResumeInFlight;
 pub(crate) use resume::{api_session_kind, unstarted_restore_plan};
 
 #[cfg(all(test, unix))]

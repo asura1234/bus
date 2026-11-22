@@ -102,6 +102,21 @@ impl LaunchTransaction {
             .and_then(|attempt| attempt.error.clone())
     }
 
+    pub(super) fn input_pending(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .is_some_and(|attempt| {
+                matches!(
+                    attempt.phase,
+                    LaunchPhase::WaitingForPrompt
+                        | LaunchPhase::Verifying
+                        | LaunchPhase::Submitting
+                )
+            })
+    }
+
     pub(super) fn has_return_witness(&self, witness: Option<(u64, u64)>) -> bool {
         self.0
             .lock()

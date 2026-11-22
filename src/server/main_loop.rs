@@ -707,7 +707,7 @@ impl HeadlessServer {
 
     fn resume_pending_agents_at(&mut self, now: Instant) -> bool {
         self.app.sync_pending_agent_resume_deadline(now);
-        self.app.has_pending_agent_resumes()
+        (self.app.has_pending_agent_resumes() || !self.app.agent_resumes_in_flight.is_empty())
             && self
                 .app
                 .start_pending_agent_resumes(self.app.pending_agent_resume_due(now))

@@ -117,11 +117,7 @@ async fn close_reaps_installer_after_its_session_leader_exits() {
 async fn run_pane_shutdown_fixture(script: &str) -> (TerminalRuntime, std::path::PathBuf, u32) {
     use std::time::{Duration, Instant};
 
-    let marker = std::env::temp_dir().join(format!(
-        "bus-pane-shutdown-{}-{}",
-        std::process::id(),
-        crate::utils::time::now_ns()
-    ));
+    let marker = crate::utils::test_temp::unique_temp_path("bus-pane-shutdown");
     let (events, _event_rx) = mpsc::channel(8);
     let runtime = TerminalRuntime::spawn_argv_command(
         PaneId::from_raw(45),

@@ -243,6 +243,23 @@ fn marker_resume_test_argv() -> Vec<String> {
 }
 
 #[cfg(unix)]
+async fn finish_resume_preparation(app: &mut App) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app
+        .agent_resumes_in_flight
+        .values()
+        .any(|phase| matches!(phase, super::AgentResumeInFlight::Preparing(_)))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "resume preparation did not finish"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        app.start_pending_agent_resumes(true);
+    }
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn invalid_bus_resume_context_does_not_launch_or_retry_and_keeps_session() {
     let root = crate::utils::test_temp::unique_temp_path("bus-resume-missing-context-test");
@@ -273,7 +290,8 @@ async fn invalid_bus_resume_context_does_not_launch_or_retry_and_keeps_session()
         dedupe_key: "test-untrusted-plan".into(),
     });
 
-    assert!(app.start_pending_agent_resumes(true));
+    app.start_pending_agent_resumes(true);
+    finish_resume_preparation(&mut app).await;
     assert!(
         app.terminal_runtimes.get(&terminal_id).is_none(),
         "an owned Bus terminal must not resume without validated capture context"
@@ -751,7 +769,7 @@ async fn pending_agent_resume_shell_spawn_failure_keeps_saved_conversation() {
     terminal.set_persisted_agent_session(session.clone());
     terminal.pending_agent_resume_plan = Some(plan);
 
-    assert!(!app.start_pending_agent_resumes(true));
+    assert!(app.start_pending_agent_resumes(true));
     assert!(app.terminal_runtimes.get(&terminal_id).is_none());
     let terminal = &app.state.terminals[&terminal_id];
     assert_eq!(
@@ -1006,6 +1024,7 @@ async fn native_resume_failures_keep_owner_and_reason_without_interactive_readin
             let (mut app, id) = native_attempt_app(kind, label);
             app.state.default_shell = root.join("missing-shell").to_string_lossy().into_owned();
             app.start_pending_agent_resumes(true);
+            finish_resume_preparation(&mut app).await;
             let info = app.collect_agent_infos().pop().unwrap();
             assert!(
                 !info.interactive_ready && !info.launch_pending,

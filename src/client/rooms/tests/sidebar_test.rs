@@ -281,7 +281,18 @@ fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
         }
         ui.receive_snapshot(Arc::new(snapshot));
         let after = room_screen(&mut ui, 100, rows);
-        assert_eq!(sidebar(&after), sidebar(&before));
+        let mut expected = sidebar(&before);
+        if invalidated || deleting {
+            // These flags unmask the fixture's Launching status. The label
+            // can change while the error still must not add a row.
+            let row = expected
+                .iter_mut()
+                .find(|row| row.trim_start().starts_with("author "))
+                .expect("author row");
+            assert!(row.contains("Unavailable"), "{row}");
+            *row = row.replacen("Unavailable", "  Launching", 1);
+        }
+        assert_eq!(sidebar(&after), expected);
         assert_eq!(ui.view.sidebar_max_scroll, max_scroll);
         assert!(ui
             .view
@@ -719,6 +730,28 @@ fn entire_sidebar_scrolls_together_and_all_agents_remain_reachable() {
     }
     assert_eq!(room_screen(&mut ui, 100, 30), start);
     assert_eq!(ui.main_scroll, 0);
+}
+
+#[test]
+fn sidebar_shows_launching_for_an_agent_queued_to_resume() {
+    let (mut ui, _, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            crate::messaging::model::AgentRuntimeIdentity {
+                launch_id: Some("saved-launch".into()),
+                session_id: Some("saved-session".into()),
+                terminal_id: Some("restored-terminal".into()),
+                pane_id: Some("restored-pane".into()),
+            },
+        )
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    set_sidebar_agent_status(&mut ui, agent, RuntimeStatus::Launching);
+
+    let _ = rendered_agent_status_colors(&mut ui, agent, "Launching");
 }
 
 #[test]

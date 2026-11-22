@@ -5,7 +5,9 @@ use crate::messaging::identity;
 mod capture;
 #[cfg(test)]
 pub(crate) use capture::load;
-pub(crate) use capture::{for_native_resume, LaunchExtras, NativeResumeContext, NativeResumeFacts};
+pub(crate) use capture::{
+    for_native_resume, revalidate, LaunchExtras, NativeResumeContext, NativeResumeFacts,
+};
 
 /// Sessionless managed providers keep their empty launch across restore.
 /// Snapshot argv must pass that provider's launch-argument check, so Kimi
