@@ -2328,12 +2328,17 @@ fn composer_mode_dropdown_sets_the_delivery_of_sent_messages() {
     session.ok(&["press", "esc"]);
 
     session.ok(&["click", "--hit", "delivery-mode"]);
-    for description in [
-        "Stop the running turn",
-        "Join the running turn",
-        "Deliver after the current turn",
+    session.ok(&["wait", "--text", "● Interrupt"]);
+    let menu = session.ok(&["hits"]);
+    let hits = menu["hits"].as_array().unwrap();
+    for (name, text) in [
+        ("delivery-mode:interrupt", "● Interrupt"),
+        ("delivery-mode:steer", "Steer"),
+        ("delivery-mode:queue", "Queue"),
     ] {
-        session.ok(&["wait", "--text", description]);
+        let row = hits.iter().find(|hit| hit["name"] == name).unwrap();
+        assert_eq!(row["text"], text, "{menu}");
+        assert_eq!(row["height"], 1, "{menu}");
     }
     session.ok(&["click", "--hit", "delivery-mode:steer"]);
     assert_composer_mode_send(&session, "Steer", "steered from composer", false);

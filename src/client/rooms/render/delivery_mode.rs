@@ -1,20 +1,15 @@
 //! Composer delivery arrow and its keyboard- and mouse-selectable options.
-use super::{wrap, Action, View, ACCENT};
+use super::{Action, View, ACCENT};
 use crate::messaging::model::SendMode::{self, Interrupt, Queue, Steer};
 use ratatui::{
     layout::{Margin, Rect},
     style::{Color, Style},
 };
 
-const OPTIONS: [(SendMode, &str, &str); 3] = [
-    (
-        Interrupt,
-        "Interrupt",
-        "Stop the running turn and deliver now.",
-    ),
-    (Steer, "Steer", "Join the running turn when eligible."),
-    (Queue, "Queue", "Deliver after the current turn ends."),
-];
+const OPTIONS: [(SendMode, &str); 3] =
+    [(Interrupt, "Interrupt"), (Steer, "Steer"), (Queue, "Queue")];
+/// The border, the selection marker and a space, and the longest label.
+const MENU_WIDTH: u16 = 2 + 2 + "Interrupt".len() as u16;
 
 /// ▼ plus the blank column the toolbar leaves before `+`.
 const TRIGGER_RESERVE: u16 = 2;
@@ -38,20 +33,13 @@ pub(super) fn delivery_pill(view: &mut View, rect: Rect, _mode: SendMode, open: 
 }
 
 impl View {
-    pub(super) fn delivery_menu(&mut self, selected: SendMode) {
+    pub(super) fn delivery_menu(&mut self, current: SendMode, focused: SendMode) {
         let composer = self.composer_box;
-        let width = composer.width.min(52);
+        let width = composer.width.min(MENU_WIDTH);
         if width < 3 || composer.bottom() < 3 {
             return;
         }
-        let options = OPTIONS.map(|(mode, label, detail)| {
-            let mark = if mode == selected { "● " } else { "  " };
-            (mode, wrap(&format!("{mark}{label}  {detail}"), width - 2))
-        });
-        let desired = 2 + options
-            .iter()
-            .map(|(_, lines)| lines.len() as u16)
-            .sum::<u16>();
+        let desired = 2 + OPTIONS.len() as u16;
         let bottom = if composer.y >= desired {
             composer.y
         } else {
@@ -66,28 +54,18 @@ impl View {
         let body = menu.inner(Margin::new(1, 1));
         self.begin_picker(menu);
         let mut y = body.y;
-        for (mode, lines) in options {
-            if body.height < 3 && mode != selected {
+        for (mode, label) in OPTIONS {
+            if body.height < OPTIONS.len() as u16 && mode != focused {
                 continue;
             }
-            let height = if menu.height == desired {
-                lines.len() as u16
-            } else {
-                1
-            };
-            for (index, line) in lines.into_iter().take(usize::from(height)).enumerate() {
-                self.overlay_row(
-                    Rect::new(body.x, y + index as u16, body.width, 1),
-                    line,
-                    None,
-                    mode == selected,
-                );
-            }
-            self.hit(
-                Rect::new(body.x, y, body.width, height),
-                Action::ChooseDelivery(mode),
+            let mark = if mode == current { "● " } else { "  " };
+            self.overlay_row(
+                Rect::new(body.x, y, body.width, 1),
+                format!("{mark}{label}"),
+                Some(Action::ChooseDelivery(mode)),
+                mode == focused,
             );
-            y += height;
+            y += 1;
         }
     }
 }

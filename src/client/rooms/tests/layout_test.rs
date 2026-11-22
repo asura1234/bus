@@ -1,9 +1,4 @@
-fn assert_composer_toolbar(
-    ui: &BusUi,
-    buffer: &ratatui::buffer::Buffer,
-    x: u16,
-    y: u16,
-) {
+fn assert_composer_toolbar(ui: &BusUi, buffer: &ratatui::buffer::Buffer, x: u16, y: u16) {
     let control = |action| {
         ui.view
             .hits
@@ -99,6 +94,10 @@ fn delivery_trigger_is_a_down_arrow_and_the_open_menu_marks_the_current_mode() {
     assert!(open.contains("Steer"), "{open}");
     assert!(open.contains("Queue"), "{open}");
     assert!(!open.contains("Mode:"), "{open}");
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    let navigating = room_screen(&mut ui, 100, 30);
+    assert!(navigating.contains("● Interrupt"), "{navigating}");
+    assert!(!navigating.contains("● Steer"), "{navigating}");
     ui.action(render::Action::NewRoom);
     assert!(ui.delivery_menu.is_none());
     let form = room_screen(&mut ui, 120, 40);

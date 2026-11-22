@@ -138,8 +138,8 @@ impl BusUi {
         }
         self.file_detail_view(view, layout);
         self.recipient_menu_view(view, room, local);
-        if let Some(mode) = self.delivery_menu {
-            view.delivery_menu(mode);
+        if let Some(focused) = self.delivery_menu {
+            view.delivery_menu(local.delivery, focused);
         }
     }
 
