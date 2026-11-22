@@ -28,6 +28,20 @@ impl Request {
         // independent turns, and group can come from ordinary coalescing.
         self.send_mode.or(self.steered.then_some(SendMode::Steer))
     }
+
+    /// `[pending]` only while a steer has not reached the running turn.
+    /// `[queued]` only while a queue-mode message is still waiting for that
+    /// boundary. Settlement clears both.
+    pub(crate) fn history_mode_marker(&self) -> Option<&'static str> {
+        if self.settled() {
+            return None;
+        }
+        match self.history_send_mode() {
+            Some(SendMode::Queue) if self.phase == RequestPhase::Queued => Some(" [queued]"),
+            Some(SendMode::Steer) if !self.trusted_start_bound => Some(" [pending]"),
+            _ => None,
+        }
+    }
 }
 
 impl BusState {

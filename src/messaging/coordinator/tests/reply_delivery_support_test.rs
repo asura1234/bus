@@ -1076,20 +1076,21 @@ impl Delivery {
             .filter(|row| row["request_id"].as_u64() == Some(request.0))
             .collect();
         assert_eq!(replies.len(), 1, "request missing/duplicated: {history}");
-        let developer_reply = r.prompt.author == Author::Developer
-            && !self.state().requests().any(|earlier| {
-                earlier.id < r.id
-                    && earlier.room_id == r.room_id
-                    && earlier.prompt.author == Author::Developer
-                    && earlier.reply().is_some()
-                    && earlier.reply_key() == r.reply_key()
-            });
-        if developer_reply {
+        let shown = self.state().developer_history_reply(&r).is_some();
+        if shown {
             assert_eq!(replies[0]["reply"]["text"], text, "{history}");
             assert_eq!(replies[0]["stage"], "replied");
         } else {
             assert!(replies[0]["reply"].is_null(), "{history}");
             assert_eq!(replies[0]["stage"], "ended");
+            if r.reply().is_some() {
+                let reason = match r.prompt.author {
+                    Author::Agent(_) => "requester_reply",
+                    Author::Developer => "shared_reply",
+                    Author::Bus => "internal_reply",
+                };
+                assert_eq!(replies[0]["reason"], reason, "{history}");
+            }
         }
         assert!(replies[0].get("answered_with_message").is_none());
         assert_eq!(replies[0]["reply_ack"], json!(false));

@@ -40,6 +40,7 @@ fn batch_history_assert_projection(f: &mut Fixture, requests: &[RequestId]) {
         } else {
             assert_eq!(request["stage"], "ended");
             assert!(request["reply"].is_null(), "{request}");
+            assert_eq!(request["reason"], "shared_reply", "{request}");
         }
         assert!(request["group"].is_null(), "{request}");
         assert!(request.get("answered_with_message").is_none());
@@ -98,6 +99,7 @@ fn batch_history_page_without_the_lead_does_not_repeat_the_answer() {
         assert!(request["reply"].is_null(), "{request}");
         assert!(request.get("answered_with_message").is_none(), "{request}");
         assert_eq!(request["stage"], "ended");
+        assert_eq!(request["reason"], "shared_reply", "{request}");
         assert!(
             !page.to_string().contains("SHARED_BATCH_ANSWER"),
             "history page contains the shared final: {page}"

@@ -64,6 +64,47 @@ fn history_send_mode_steer_has_a_pending_marker_without_a_group() {
 }
 
 #[test]
+fn a_settled_queue_drops_its_badge() {
+    let mut state = BusState::default();
+    let room = state.create_room("work").unwrap();
+    let worker = state
+        .create_agent(room, "builder", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    state.set_draft_recipients(room, [worker]).unwrap();
+    state.set_draft_text(room, "MODE_QUEUE").unwrap();
+    let id = state.submit_draft_queued(room, 1).unwrap()[0];
+    let mut document = serde_json::to_value(state).unwrap();
+    let request = &mut document["requests"][id.0.to_string()];
+    request["send_mode"] = "queue".into();
+    request["phase"] = "completed".into();
+    request["completed_reply"] = serde_json::json!({
+        "group": id.0,
+        "content": {
+            "callback_id": "final",
+            "text": "queue settled",
+            "received_at_ms": 2
+        }
+    });
+    let restored: BusState = serde_json::from_value(document).unwrap();
+    let text = History::default()
+        .lines(
+            &restored,
+            restored.room(room).unwrap(),
+            100,
+            1,
+            3,
+            &mut Thumbnails::default(),
+        )
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("queue settled"), "{text}");
+    assert!(!text.contains("[queued]"), "{text}");
+    assert!(!text.contains("[pending]"), "{text}");
+}
+
+#[test]
 fn captured_developer_reply_is_visible_once_after_reload() {
     let mut state = BusState::default();
     let room = state.create_room("work").unwrap();

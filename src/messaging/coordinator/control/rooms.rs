@@ -1,6 +1,6 @@
 //! Rooms development commands on the single coordinator.
 use super::{mpsc, required, unique, BTreeMap, BusCommand, BusEvent, RoomId, Worker};
-use crate::messaging::model::{PromptId, Request};
+use crate::messaging::model::{Author, PromptId, Request};
 use serde_json::{json, Value};
 
 impl Worker {
@@ -140,6 +140,11 @@ impl Worker {
             .filter(|request| self.state.developer_history_reply(request).is_some())
             .map(|request| request.id.0)
             .collect();
+        let hidden_reply_reason = match requests.first().map(|request| &request.prompt.author) {
+            Some(Author::Agent(_)) => "requester_reply",
+            Some(Author::Developer) => "shared_reply",
+            Some(Author::Bus) | None => "internal_reply",
+        };
         let mut delivery = self.control_message_from(message, now, requests).ok()?;
         for request in delivery.get_mut("requests")?.as_array_mut()? {
             let Some(object) = request.as_object_mut() else {
@@ -149,15 +154,20 @@ impl Worker {
                 .get("request_id")
                 .and_then(Value::as_u64)
                 .is_some_and(|id| visible_replies.contains(&id));
-            if !visible {
+            if !visible && object.get("stage").and_then(Value::as_str) == Some("replied") {
                 object.insert("reply".into(), Value::Null);
+                object.insert("stage".into(), json!("ended"));
+                let reason_missing = object
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .is_none_or(|reason| reason.trim().is_empty());
+                if reason_missing {
+                    object.insert("reason".into(), json!(hidden_reply_reason));
+                }
             }
             object.insert("group".into(), Value::Null);
             object.remove("answered_with_message");
             object.insert("reply_ack".into(), Value::Bool(false));
-            if !visible && object.get("stage").and_then(Value::as_str) == Some("replied") {
-                object.insert("stage".into(), json!("ended"));
-            }
         }
         Some(delivery)
     }
