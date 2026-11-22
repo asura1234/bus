@@ -238,6 +238,10 @@ impl TerminalRuntime {
         self.launch_transaction.error(true)
     }
 
+    pub(crate) fn launch_input_pending(&self) -> bool {
+        self.launch_transaction.input_pending()
+    }
+
     #[cfg(test)]
     pub(crate) fn test_capture_shell_editor(&self) -> io::Result<Vec<u8>> {
         let probe = self

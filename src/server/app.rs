@@ -72,6 +72,8 @@ pub struct App {
     pub(crate) last_api_notification_at: Option<Instant>,
     pub(crate) loaded_host_cursor: crate::utils::config::HostCursorModeConfig,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
+    pub(super) agent_resumes_in_flight:
+        HashMap<crate::utils::ids::TerminalId, super::terminals::AgentResumeInFlight>,
     #[cfg(test)]
     pub(crate) resume_geometry_derivations: std::sync::atomic::AtomicUsize,
     pub(crate) session_save_deadline: Option<Instant>,
@@ -188,6 +190,7 @@ impl App {
             event_rx,
             loaded_host_cursor: config.ui.host_cursor,
             pending_agent_resume_deadline: None,
+            agent_resumes_in_flight: HashMap::new(),
             #[cfg(test)]
             resume_geometry_derivations: std::sync::atomic::AtomicUsize::new(0),
             session_save_deadline: None,

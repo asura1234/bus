@@ -40,8 +40,9 @@ impl Worker {
             let observed_at_ms = self.now_ms();
             self.observe_cursor_info(&mut state, agent, info, observed_at_ms)?;
             let status = if state.awaiting_restart_resume(agent.id)
-                && info.is_none_or(|info| !info.native_ready || !info.interactive_ready)
-            {
+                && info.is_none_or(|info| {
+                    !info.launch_pending && (!info.native_ready || !info.interactive_ready)
+                }) {
                 RuntimeStatus::Unavailable
             } else {
                 polled_status(agent, info)
@@ -474,6 +475,10 @@ fn inconclusive_screen(info: &schema::AgentInfo) -> bool {
 fn polled_status(agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> RuntimeStatus {
     info.map_or(RuntimeStatus::Unavailable, |info| {
         if agent.session_binding_invalidated || agent.deletion_pending {
+            return RuntimeStatus::Unavailable;
+        }
+        if !info.interactive_ready && super::startup::explicit_startup_error(agent, info).is_some()
+        {
             return RuntimeStatus::Unavailable;
         }
         if info.agent_status == schema::AgentStatus::Blocked {

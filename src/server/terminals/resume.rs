@@ -2,10 +2,17 @@ use std::time::Instant;
 
 use ratatui::layout::Rect;
 
-use crate::messaging::coordinator::resume::{LaunchExtras, NativeResumeContext, NativeResumeFacts};
+use crate::agents::resume::catalog::{AgentResumePlan, PersistedAgentSession};
+use crate::messaging::coordinator::resume::{
+    self, LaunchExtras, NativeResumeContext, NativeResumeFacts,
+};
 use crate::server::app::App;
+use crate::utils::ids::{PaneId, TerminalId};
+use tokio::sync::oneshot;
 
 type ResumeInputs = (Vec<String>, Vec<(String, String)>);
+// Four panes keep restart responsive without a burst of provider probes and startups.
+const MAX_CONCURRENT_AGENT_RESUMES: usize = 4;
 
 fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeResumeFacts {
     NativeResumeFacts {
@@ -33,14 +40,12 @@ pub(crate) fn unstarted_restore_plan(
     crate::messaging::coordinator::resume::unstarted_plan(&facts, argv)
 }
 
-fn for_native_resume(
-    terminal: &crate::terminal::TerminalState,
-    plan: &crate::agents::resume::catalog::AgentResumePlan,
+fn native_resume_context(
+    facts: &NativeResumeFacts,
     cwd: &std::path::Path,
-) -> Result<LaunchExtras, String> {
-    let facts = terminal_resume_facts(terminal);
+) -> Result<Option<NativeResumeContext>, String> {
     if !facts.is_bus_owned() {
-        return Ok(LaunchExtras::default());
+        return Ok(None);
     }
     // Capture the same env bytes locally, without importing the CLI edge.
     let root = std::env::var_os("BUS_DATA_DIR").map(std::path::PathBuf::from);
@@ -51,28 +56,36 @@ fn for_native_resume(
         .is_some_and(|root| root.is_absolute() && config_root == root.join("herdr-config"))
         || session_name.as_deref() != Some(crate::messaging::coordinator::DEFAULT_SESSION)
     {
-        return Ok(LaunchExtras::default());
+        return Ok(None);
     }
     let binary = crate::platform::fs::running_executable()
         .map_err(|_| "Bus resume executable unavailable")?;
-    // Project lookup is a native-resume operation, never a rendering read.
-    let project = std::process::Command::new("git")
+    Ok(Some(NativeResumeContext {
+        root,
+        session_name,
+        config_root,
+        project: cwd.to_path_buf(),
+        binary,
+    }))
+}
+
+fn prepare_native_resume(
+    mut context: NativeResumeContext,
+    facts: &NativeResumeFacts,
+    plan: &AgentResumePlan,
+) -> Result<PreparedResume, String> {
+    if let Some(project) = std::process::Command::new("git")
         .arg("-C")
-        .arg(cwd)
+        .arg(&context.project)
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .ok()
         .filter(|output| output.status.success())
         .map(|output| std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
-        .unwrap_or_else(|| cwd.to_path_buf());
-    let context = NativeResumeContext {
-        root,
-        session_name,
-        config_root,
-        project,
-        binary,
-    };
-    crate::messaging::coordinator::resume::for_native_resume(&context, &facts, plan)
+    {
+        context.project = project;
+    }
+    PreparedResume::new(plan, resume::for_native_resume(&context, facts, plan)?)
 }
 
 /// Map the agents-domain kind into the API's neutral serialized DTO.
@@ -90,12 +103,55 @@ pub(crate) fn api_session_kind(
 }
 
 struct PendingAgentResumeCandidate {
-    pane_id: crate::utils::ids::PaneId,
-    terminal_id: crate::utils::ids::TerminalId,
+    pane_id: PaneId,
+    terminal_id: TerminalId,
     cwd: std::path::PathBuf,
     plan: crate::agents::resume::catalog::AgentResumePlan,
     rows: u16,
     cols: u16,
+}
+
+pub(in crate::server) enum AgentResumeInFlight {
+    Preparing(Box<PreparingResume>),
+    Launching,
+}
+
+pub(in crate::server) struct PreparingResume {
+    candidate: PendingAgentResumeCandidate,
+    facts: NativeResumeFacts,
+    context: NativeResumeContext,
+    result: oneshot::Receiver<Result<PreparedResume, String>>,
+}
+
+struct PreparedResume {
+    session: Option<PersistedAgentSession>,
+    inputs: ResumeInputs,
+}
+
+impl PreparedResume {
+    fn new(plan: &AgentResumePlan, extras: LaunchExtras) -> Result<Self, String> {
+        let session = extras.session.clone();
+        let corrected_plan = session
+            .as_ref()
+            .map(|session| {
+                crate::agents::resume::catalog::plan(
+                    &session.source,
+                    &session.agent,
+                    &session.session_ref,
+                )
+                .ok_or("Corrected conversation has no provider resume plan")
+            })
+            .transpose()?;
+        let plan = corrected_plan.as_ref().unwrap_or(plan);
+        let provider_argv = matches!(plan.agent.as_str(), "grok" | "kimi")
+            .then(|| resume_argv(plan, &extras))
+            .transpose()?;
+        let (argv, env) = resume_launch_inputs(plan, extras);
+        Ok(Self {
+            session,
+            inputs: (provider_argv.unwrap_or(argv), env),
+        })
+    }
 }
 
 impl App {
@@ -125,29 +181,34 @@ impl App {
     }
 
     pub(crate) fn start_pending_agent_resumes(&mut self, allow_empty_theme: bool) -> bool {
-        let pending = self.pending_agent_resume_candidates();
-        let mut changed = false;
-        for PendingAgentResumeCandidate {
-            pane_id,
-            terminal_id,
-            cwd,
-            plan,
-            rows,
-            cols,
-        } in pending
+        self.agent_resumes_in_flight.retain(|id, phase| {
+            matches!(phase, AgentResumeInFlight::Preparing(_))
+                || self.terminal_runtimes.get(id).is_some_and(|runtime| {
+                    runtime.launch_input_pending()
+                        || (runtime.definite_launch_input_error().is_none()
+                            && self.state.terminals.get(id).is_some_and(|terminal| {
+                                terminal.next_managed_agent_deadline().is_some()
+                            }))
+                })
+        });
+        let mut changed = self.finish_prepared_agent_resumes();
+        if !self.agent_resume_at_capacity()
+            && self.has_pending_agent_resumes()
+            && (!self.state.host_terminal_theme.is_empty() || allow_empty_theme)
         {
-            if self.terminal_runtimes.get(&terminal_id).is_some() {
-                continue;
+            for candidate in self.pending_agent_resume_candidates() {
+                if self.agent_resume_at_capacity() {
+                    break;
+                }
+                if self
+                    .agent_resumes_in_flight
+                    .contains_key(&candidate.terminal_id)
+                    || self.terminal_runtimes.get(&candidate.terminal_id).is_some()
+                {
+                    continue;
+                }
+                changed |= self.prepare_pending_agent_resume(candidate);
             }
-            changed |= self.start_pending_agent_resume(
-                pane_id,
-                terminal_id,
-                cwd,
-                plan,
-                rows,
-                cols,
-                allow_empty_theme,
-            );
         }
 
         if changed {
@@ -155,6 +216,103 @@ impl App {
         }
         if !self.has_pending_agent_resumes() || self.pending_agent_resume_candidates().is_empty() {
             self.pending_agent_resume_deadline = None;
+        }
+        changed
+    }
+
+    pub(in crate::server) fn agent_resume_at_capacity(&self) -> bool {
+        self.agent_resumes_in_flight.len() >= MAX_CONCURRENT_AGENT_RESUMES
+    }
+
+    fn prepare_pending_agent_resume(&mut self, candidate: PendingAgentResumeCandidate) -> bool {
+        let facts = terminal_resume_facts(&self.state.terminals[&candidate.terminal_id]);
+        match native_resume_context(&facts, &candidate.cwd) {
+            Ok(Some(context)) => {
+                let (sender, result) = oneshot::channel();
+                let worker_context = context.clone();
+                let worker_facts = facts.clone();
+                let plan = candidate.plan.clone();
+                let wake = self.render_notify.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _ =
+                        sender.send(prepare_native_resume(worker_context, &worker_facts, &plan));
+                    wake.notify_one();
+                });
+                self.agent_resumes_in_flight.insert(
+                    candidate.terminal_id.clone(),
+                    AgentResumeInFlight::Preparing(Box::new(PreparingResume {
+                        candidate,
+                        facts,
+                        context,
+                        result,
+                    })),
+                );
+                false
+            }
+            Ok(None) => {
+                let prepared = PreparedResume::new(&candidate.plan, LaunchExtras::default());
+                self.start_prepared_agent_resume(candidate, prepared)
+            }
+            Err(reason) => self.start_prepared_agent_resume(candidate, Err(reason)),
+        }
+    }
+
+    fn finish_prepared_agent_resumes(&mut self) -> bool {
+        let finished: Vec<_> = self
+            .agent_resumes_in_flight
+            .iter_mut()
+            .filter_map(|(id, phase)| {
+                let AgentResumeInFlight::Preparing(job) = phase else {
+                    return None;
+                };
+                let result = match job.result.try_recv() {
+                    Ok(result) => result,
+                    Err(oneshot::error::TryRecvError::Closed) => {
+                        Err("Provider resume preparation stopped".into())
+                    }
+                    Err(oneshot::error::TryRecvError::Empty) => return None,
+                };
+                Some((id.clone(), result))
+            })
+            .collect();
+        let mut changed = false;
+        for (id, result) in finished {
+            let Some(AgentResumeInFlight::Preparing(job)) =
+                self.agent_resumes_in_flight.remove(&id)
+            else {
+                continue;
+            };
+            let PreparingResume {
+                candidate,
+                facts,
+                context,
+                ..
+            } = *job;
+            // The loop still owns every PTY and applies the result only to the
+            // exact pane, plan and saved identity that the worker prepared.
+            if self.terminal_runtimes.get(&id).is_some()
+                || !self
+                    .find_pane(candidate.pane_id)
+                    .is_some_and(|(_, pane)| pane.attached_terminal_id == id)
+                || !self.state.terminals.get(&id).is_some_and(|terminal| {
+                    terminal.pending_agent_resume_plan.as_ref() == Some(&candidate.plan)
+                        && terminal.cwd == candidate.cwd
+                        && terminal_resume_facts(terminal) == facts
+                })
+            {
+                continue;
+            }
+            let result = result.and_then(|prepared| {
+                resume::revalidate(
+                    &context,
+                    &facts,
+                    &candidate.plan,
+                    prepared.session.as_ref(),
+                    &prepared.inputs.1,
+                )?;
+                Ok(prepared)
+            });
+            changed |= self.start_prepared_agent_resume(candidate, result);
         }
         changed
     }
@@ -242,28 +400,6 @@ impl App {
         pane_infos
     }
 
-    fn prepared_resume_inputs(
-        &mut self,
-        pane_id: crate::utils::ids::PaneId,
-        terminal_id: &crate::utils::ids::TerminalId,
-        plan: &crate::agents::resume::catalog::AgentResumePlan,
-        extras: LaunchExtras,
-    ) -> Option<ResumeInputs> {
-        let provider_argv =
-            matches!(plan.agent.as_str(), "grok" | "kimi").then(|| resume_argv(plan, &extras));
-        let (mut argv, env) = resume_launch_inputs(plan, extras);
-        if let Some(result) = provider_argv {
-            match result {
-                Ok(bound) => argv = bound,
-                Err(reason) => {
-                    self.suspend_pending_agent_resume(pane_id, terminal_id, &reason);
-                    return None;
-                }
-            }
-        }
-        Some((argv, env))
-    }
-
     fn record_resume_command(
         &mut self,
         terminal_id: &crate::utils::ids::TerminalId,
@@ -276,60 +412,49 @@ impl App {
         command
     }
 
-    fn start_pending_agent_resume(
+    fn start_prepared_agent_resume(
         &mut self,
-        pane_id: crate::utils::ids::PaneId,
-        terminal_id: crate::utils::ids::TerminalId,
-        cwd: std::path::PathBuf,
-        plan: crate::agents::resume::catalog::AgentResumePlan,
-        rows: u16,
-        cols: u16,
-        allow_empty_theme: bool,
+        candidate: PendingAgentResumeCandidate,
+        prepared: Result<PreparedResume, String>,
     ) -> bool {
+        let PendingAgentResumeCandidate {
+            pane_id,
+            terminal_id,
+            cwd,
+            plan,
+            rows,
+            cols,
+        } = candidate;
         let host_terminal_theme = self.state.host_terminal_theme;
-        if host_terminal_theme.is_empty() && !allow_empty_theme {
-            return false;
-        }
-
         let Some(terminal) = self.state.terminals.get_mut(&terminal_id) else {
             return false;
         };
         terminal.begin_native_resume(shell_command_from_argv(&plan.argv));
-        let extras = match for_native_resume(terminal, &plan, &cwd) {
-            Ok(extras) => extras,
+        let PreparedResume {
+            session,
+            inputs: (argv, env),
+        } = match prepared {
+            Ok(prepared) => prepared,
             Err(reason) => {
                 return self.suspend_pending_agent_resume(pane_id, &terminal_id, &reason);
             }
         };
-        let plan = match &extras.session {
-            Some(session) => {
-                let Some(plan) = crate::agents::resume::catalog::plan(
-                    &session.source,
-                    &session.agent,
-                    &session.session_ref,
-                ) else {
-                    return false;
-                };
-                tracing::info!(event = "bus.resume.session_corrected", pane = pane_id.raw(),
-                    terminal = %terminal_id, session = %session.session_ref.value,
-                    "Resuming the conversation Bus bound instead of the terminal's stale one");
-                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-                    terminal.set_persisted_agent_session(session.clone());
-                }
-                plan
-            }
-            None => plan,
-        };
-        let Some((argv, env)) = self.prepared_resume_inputs(pane_id, &terminal_id, &plan, extras)
-        else {
-            return false;
-        };
+        if let Some(session) = session {
+            tracing::info!(event = "bus.resume.session_corrected", pane = pane_id.raw(),
+                terminal = %terminal_id, session = %session.session_ref.value,
+                "Resuming the conversation Bus bound instead of the terminal's stale one");
+            terminal.set_persisted_agent_session(session);
+        }
         self.record_resume_command(&terminal_id, &argv);
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, env))
         else {
-            return false;
+            return self.suspend_pending_agent_resume(
+                pane_id,
+                &terminal_id,
+                "resume pane identity unavailable",
+            );
         };
 
         let runtime = match crate::terminal::TerminalRuntime::spawn(
@@ -360,12 +485,11 @@ impl App {
                 );
                 // No process ran, so nothing replaced the saved conversation:
                 // keep it for a later restart once the shell is fixed.
-                self.suspend_pending_agent_resume(
+                return self.suspend_pending_agent_resume(
                     pane_id,
                     &terminal_id,
                     &format!("shell failed to start: {err}"),
                 );
-                return false;
             }
         };
 
@@ -391,6 +515,8 @@ impl App {
             terminal.pending_agent_resume_plan = None;
             terminal.respawn_shell_on_exit = false;
         }
+        self.agent_resumes_in_flight
+            .insert(terminal_id, AgentResumeInFlight::Launching);
         true
     }
 
@@ -642,7 +768,13 @@ fn native_resume_is_empty_for_test(
     plan: &crate::agents::resume::catalog::AgentResumePlan,
     cwd: &std::path::Path,
 ) -> Result<bool, String> {
-    for_native_resume(terminal, plan, cwd).map(|extras| extras == LaunchExtras::default())
+    let facts = terminal_resume_facts(terminal);
+    match native_resume_context(&facts, cwd)? {
+        Some(context) => {
+            resume::load(&context, &facts, plan).map(|extras| extras == LaunchExtras::default())
+        }
+        None => Ok(true),
+    }
 }
 
 #[cfg(test)]

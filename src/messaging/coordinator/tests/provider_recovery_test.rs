@@ -243,6 +243,11 @@ fn room_outage_survives_restart_without_chat_errors_and_resolves_when_provider_r
 fn pending_restore_tracks_the_new_terminal_before_provider_detection() {
     for foreign in [false, true] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let request = queue(&mut worker, room, agent, "resume the interrupted task");
+        let mut saved = serde_json::to_value(&worker.state).unwrap();
+        saved["requests"][request.0.to_string()]["restart_resume"] = json!("awaiting");
+        worker.save(serde_json::from_value(saved).unwrap()).unwrap();
+        assert!(worker.state.awaiting_restart_resume(agent));
         let mut pending = native_info(
             "restored-pane",
             "codex",
