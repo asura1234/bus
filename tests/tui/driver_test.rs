@@ -2360,7 +2360,14 @@ fn assert_composer_mode_send(session: &Session, mode: &str, text: &str, queue: b
         "30s",
     ]);
     let marker = if queue { "[queued]" } else { "[pending]" };
-    session.ok(&["wait", "--text", &format!("mode-agent {marker}")]);
+    session.ok(&[
+        "wait",
+        "--text",
+        &format!("mode-agent {marker}"),
+        "--gone",
+        "--timeout",
+        "5s",
+    ]);
     let (code, history) = parse(scratch_bus(
         session,
         &["history", "--room", "bus", "--limit", "20"],

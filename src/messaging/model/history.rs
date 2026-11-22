@@ -185,6 +185,8 @@ const DIALOG_ANSWER_TTL_MS: u64 = 60 * 60 * 1000;
 impl super::BusState {
     /// Replies to developer messages belong to their original exchange. A
     /// shared final is shown once per room, even across history page boundaries.
+    /// Agent-authored answers are delivered to the requester and are not
+    /// repeated here; history names that omission instead of dropping the row.
     pub(crate) fn developer_history_reply<'a>(
         &self,
         request: &'a Request,
