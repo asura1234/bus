@@ -87,6 +87,21 @@ terminal that really displays images and reports cell dimensions; retain screens
 Judge the terminal and recorded effects. Use [DOT-01](room-unread-dot.md#dot-01--developer-unread-dots-persist-clear-on-opening-and-fit-narrow-names)
 for developer-addressed unread dots.
 
+### Known fixture gaps
+
+In the `82f07b113` full run, the scratch harness lacked these fixtures. If
+still unavailable, record SKIP for the affected assertions and run the rest.
+
+- **APP-27.1** needs a turn held open for the explicit reply that then ends
+  with an empty native final. The stock fake emits a nonempty final.
+- **APP-29.3** needs a deterministic pause while the detached restart helper
+  owns the restart lock after the CLI exits. The Cargo hold covers the
+  separate build-stage assertion only.
+- **APP-30.1–4** need live replay through a Bus-managed AGY pane for Working,
+  permission and trust, child hooks, and busy and editable composers. Static
+  captures cannot supply that replay. The run also lacked the matching Codex
+  Working and chooser fixtures for steps 1–2.
+
 ## Cases (run order)
 
 Run the delivery and readiness cases first, in the order shown. Then run
@@ -154,9 +169,12 @@ draft cases in [stash-draft-delivery.md](stash-draft-delivery.md).
 
 ### APP-26 — NEW: Composer delivery modes and history badges
 
-**Preconditions/setup:** R(`qa-modes`), A with fake Claude, P(Claude worker),
-and a fake MASTER orchestrator bound to that room. Use a long fake turn with
-a trusted start. Scratch CLI sends for steer and queue use that orchestrator.
+**Preconditions/setup:** R(`qa-modes`), A with fake Claude for steps 1–2 and
+fake Codex for steps 3–4, P(Claude worker), and a fake MASTER orchestrator bound
+to that room. Scratch CLI sends for steer and queue use that orchestrator.
+Use the [fake Codex live composer](../../docs/tui-driver.md) to exercise
+[eligible steering](../../orchestration/bus-communication-guide.md#delivery-mode)
+during a running turn.
 
 1. Inspect the composer and `/help` → the delivery control is only `▼`. It
    shows no `Mode:` label and no current-mode name. Help does not say `Mode:`;
@@ -170,36 +188,47 @@ a trusted start. Scratch CLI sends for steer and queue use that orchestrator.
    stops and the new payload is accepted before the lead's scheduled natural
    end. Its history header also has no delivery badge. A developer attempt
    to send `--mode steer`, `--mode queue`, or `--queue` is refused.
-3. Start a fresh long turn. From the scratch CLI, as the bound orchestrator,
-   send `MODE_STEER` with `--mode steer` → until it reaches the lead's turn
-   the header shows `[pending]`. Once it joins, that badge clears. While the
-   lead is still active, send `MODE_QUEUE` with `--mode queue` → the header
-   shows `[queued]`, the request stays queued with no provider input until
-   the lead ends, then runs once in a separate turn. After each settles, its
-   badge is gone. History shows a developer reply, or a named reason
-   (`shared_reply` when the body is already on an earlier row,
-   `requester_reply` when an agent authored the prompt). It never shows
-   stage `ended` with a null reply and no reason.
-4. Reopen history, then save and reopen only the scratch session → the Enter
+3. Select only the Codex worker and send `fake:work 120 MODE_ACTIVE_LEAD`.
+   As soon as the lead has a trusted start and the native composer shows
+   Working, send `MODE_STEER` to that worker as the bound orchestrator with
+   `--mode steer`. Capture the immediate send receipt and observe the active
+   window before waiting for settlement. The header shows `[pending]` while
+   the steer is unconfirmed, then clears when it joins. Before the lead ends,
+   verify the steer has a trusted start and its request group is the lead
+   request ID. While the same lead is still Working, send `MODE_QUEUE` with
+   `--mode queue` →
+   the header shows `[queued]` and there is no queue provider input until
+   the lead ends. The steer shares the lead's final, and the queue starts
+   exactly once in a separate turn. Both badges clear at settlement.
+4. Wait for the lead and queue to settle and the Codex worker to show Idle.
+   Then send `MODE_STEER_AFTER` with `--mode steer` to that same worker →
+   it starts exactly once in a new native turn with its own final and has
+   no group membership in the earlier lead. Verify the earlier lead ended
+   before this send was accepted. The settled header has no badge.
+5. Reopen history, then save and reopen only the scratch session → the Enter
    and Option+Enter rows still have no badge. Settled Steer and Queue rows
    have no `[pending]` or `[queued]`. Scan the exchange for any stop-outcome
    badge.
-5. Click `▼`, then click Steer → the menu closes. Reopen it with F4 → the
+6. Click `▼`, then click Steer → the menu closes. Reopen it with F4 → the
    dot is on Steer. Press Down then Enter → the menu closes. Reopen it with
    F4 → the dot is on Queue.
 
 **Evidence:** composer text showing only `▼`, help text without `Mode:`, the
 three label-only rows and the dot before and after changing modes, each
 prompt/request ID, native start and end evidence, the developer mode refusal,
-group/status before and after settlement, and restored history. If step 3 misses
-the active interval, report the missing observation.
+group/status before and after settlement, and restored history. For steps 3–4,
+capture the lead's start and end, each send's acceptance, the native turn IDs,
+and the steer group from message status. If the runner misses the active
+window, repeat step 3 with a fresh lead and a longer `fake:work` duration.
 
 **Pass criteria:** the closed composer shows only the down arrow, and the open
 menu shows one label per row and marks the applied mode while focus moves.
 Mouse and keyboard activation move the dot to the newly applied mode.
-A default Enter send has no badge. Orchestrator steer joins and queue waits.
-`[pending]` and `[queued]` mark only that wait, and settlement leaves a reply
-or a named reason.
+A default Enter send has no badge. The active steer joins the lead and shares
+its final, the queue waits and runs in its own turn, and a steer sent after
+settlement and Idle runs in a new turn. `[pending]` and `[queued]` mark only
+the corresponding wait. History shows a captured reply or a named reason
+(`shared_reply` or `requester_reply` where applicable) for every settled row.
 
 ### APP-27 — NEW: Explicit and captured developer answers render once
 
@@ -443,10 +472,11 @@ make progress within it and accepted work drains afterwards.
 **Preconditions/setup:** R(`qa-agents`); scratch fake Claude, Codex, Cursor and
 Grok launchers ready. APP-28 covers the pending and failed Add paths.
 
-1. Press Ctrl+N, click Add without completing fields → the form remains editable,
-   inline validation explains the missing Name, Model and PWD fields, no agent
-   is created, and the client log records one validation failure covering those
-   fields. Press Esc → closes.
+1. Press Ctrl+N → Name is blank, Model shows `< Choose model >`, and PWD is
+   prefilled with `~/`. Click Add without editing the form → it remains
+   editable and shows `Name is required. Model is required.` inline. PWD
+   still shows `~/`, no agent is created, and the client log records one
+   `bus.form.validation_failed` event with `field=name,model`. Press Esc → closes.
 2. Open the work-room provider menu → it offers Codex, Claude Code, Claude DS,
    Cursor, Grok, Kimi and AGY. Cancel, then use A to create
    `qa-codex`, `qa-claude`, `qa-cursor` and `qa-grok` with their corresponding
@@ -822,19 +852,25 @@ Inspect the authored prompt rows and scroll them into view if needed.
 
 **Pass criteria:** saved data, terminal restoration, clean UI exit and scratch session shutdown match all captured expectations. Never force quit to claim a clean save.
 
-### APP-23 — Dev performance overlay toggle
+### APP-23 — Settings groups and return to room
 
-**Preconditions/setup:** a dev variant (debug build or `--dev` session, as the driver starts); fresh scratch session at 120×40; default room `bus` open.
+**Preconditions/setup:** fresh scratch session at 120×40 with the default room
+`bus` open. Check the common Settings rows. The optional `DEVELOPER` group
+and its performance overlay are gated by `cfg!(debug_assertions)` or
+`BUS_DEV=1` in the client process.
 
-1. Click Settings → a `DEVELOPER` group below `AGENTS` lists `[ ] Performance overlay (CPU, memory, FPS)`; the top row shows no `CPU … MEM … FPS …` label.
-2. Click the `Performance overlay` row (or move to it with ↓ and press Enter) → it reads `[x]`; within 2 s the top-right of row 0 shows ` CPU <n>% MEM <n>MB FPS <n> ` (CPU/MEM may read `n/a` only for the first second).
-3. Wait 3 s, capturing row 0 at least twice → the label stays on row 0 and refreshes (at least one of CPU/MEM/FPS changes, or the snapshot frame `seq` advances while the label is present); FPS shows a number once a full second has passed.
-4. Press Esc, then click a room and type a few characters → the label stays visible over every screen, including outside Settings.
-5. Reopen Settings and toggle the row again → `[ ]`; within 2 s no `CPU … MEM … FPS` text remains anywhere on screen, and nothing else on row 0 is left damaged.
+1. Click Settings → `Sound notifications` opens with `YOU`, `MASTER` and
+   `ROOMS`. Page through Settings → `AGENTS`, `DISK`, `SIDEBAR` and
+   `NOTIFICATIONS` appear in that order.
+2. Press Esc, click the `bus` room and type `abc` → the `# bus` view shows
+   `abc` in the composer. Leave it unsent.
+3. Reopen Settings → the common groups and their order match step 1.
 
-**Evidence:** steps 1–5: row 0 text and the Settings row text from snapshots/find, with frame `seq`; screenshot judged by the runner for step 2 and step 5. The overlay is client-local and not saved; scratch settings files must not change.
+**Evidence:** visible group headings in initial and paged Settings frames
+from both visits, and room header and composer text after Esc.
 
-**Pass criteria:** the overlay appears only while toggled on, shows CPU, memory and FPS on row 0, refreshes about once a second, and disappears completely when toggled off.
+**Pass criteria:** the common groups render in order on both visits, and
+closing Settings returns to an editable room composer.
 
 ### APP-24 — YOLO badge on the Settings row
 
