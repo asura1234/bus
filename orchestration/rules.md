@@ -102,7 +102,7 @@ the wrapper remains held.
     them for the same task; drop stale holds while honoring current explicit
     holds. Do not reuse the agent itself for a different task.
   - Your own notes to workers must not widen a PR's locked goal.
-  - Don't wait silently. Audit on a timer for missing finals, queued or
+  - Audit without room narration. Check on a timer for missing finals, queued or
     undelivered messages, idle agents with work waiting and dead agents.
     Chase an owner whose own task is waiting. Replace a dead or Unavailable
     agent with a new agent for that same open task. Do not hand the waiting
@@ -238,6 +238,11 @@ the wrapper remains held.
 - **Secure continuation before ending a turn.** Every active item has a next
   executing owner, a live durable wait, a named dependency or an explicit
   developer hold. Never delete a worker while a required follow-up has no owner.
+  Record each dependency and its owner in the workflow. On a tool or Bus wake,
+  check the current request and owner, then act on any new recovery, cleanup
+  or handoff. Notify the affected recipient only when the dependency changes
+  or you need a decision from them. For a blocker only the developer can
+  clear, send a direct, self-contained [`[waiting-on-you]` ask](#waiting-on-you).
 
 - **Delegate everything; write no code.** Send every task to an agent in your
   room. *Why:* your context stays fresh for long-running work, and you stay

@@ -13,11 +13,21 @@ message, when, and what you leave out.
 
 ## The one rule
 
-**Send a message only when it changes what the receiver does next.**
+**Send once when the receiver has a new next action, decision, or result they can use.**
 
 Silence is the default. Nobody needs a message to stay busy, and nobody is kept
 "awake" by messages. An idle agent waiting on a peer is fine. If your message
 would leave the receiver doing exactly what it was already doing, don't send it.
+
+When handing work over, name the exact artifact, device or environment, verified
+current state, and what the next owner can do now. Before calling it ready,
+verify the prerequisite for that action on the actual running artifact.
+
+For example, the LibTV App handoff for !1648 named the Oppo `a8dcc2bf`, head
+`ab5a3135`, active hotreload package `hr-1795341022784`, and logged-in home
+screen. The next action was to clear the welcome record in DevTool and verify
+onboarding steps 4 and 5 on a new blank canvas. Before saying it is ready,
+check that the DevTool action is available in the active package.
 
 ## Where to send
 
@@ -28,8 +38,8 @@ reached from your own room too; names resolve across rooms.
 Bus refuses new worker sends in MASTER; replies to requests received there remain allowed.
 
 A message sent to several recipients lists them all in its header. Anyone
-listed already has it: never relay, summarise or "correct" it to them. Message
-only agents who weren't addressed, and only with what changes their next action.
+listed already has it: never relay or summarise it to them. Send only the
+changed instruction, grant or result to the people whose next action it changes.
 
 ## Peer to peer first
 
@@ -169,7 +179,7 @@ To settle a request before its turn ends, run `bus send --reply-to MESSAGE_ID --
 
 **No message without new information.** This applies to the developer, the orchestrator, other agents, and the room. Send a message only when it carries a new fact: a verdict, a merge, an exact head, a `file:line`, a path, a blocker, or a question. A status update is that fact and the next action, as in "review round N finished: verdict, findings, author please fix", "fix done at HEAD, reviewer please verify", or "verified, e2e PASS, ready to merge".
 
-**One copy of each result.** Follow [Verdicts and results](#verdicts-and-results) for its recipients. After an explicit send of your verdict or result, end the turn with no text. Do not repeat a delivered result. One explicit send to the intended recipient is the delivery. If the target agent no longer exists on Bus when you reply, ignore it. Do not retry and do not treat it as an error. A later note that says "reply-to failed, the result is in message N" is not a new fact.
+**One copy of each result or grant.** Follow [Verdicts and results](#verdicts-and-results) for result recipients. A send, an explicit reply, or a turn final can deliver it once. After delivery by send or reply, end the turn with no text. Skip recaps, acknowledgements and final-text copies of what the recipients already have. Check delivery before retrying.
 
 **No "still working" posts.** A turn that changed nothing sends nothing. Do not send "still in progress", "nothing changed", "already handled", "still paused", "still waiting", or an acknowledgement of a rule or of a late copy. A background job whose head and result are unchanged sends nothing, including when the job exits; a new verdict, finding, blocker, or question is still sent once.
 
