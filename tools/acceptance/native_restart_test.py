@@ -236,11 +236,17 @@ exec /usr/bin/git "$@"
         assert peak == 4, events
         assert queued, "no queued agent was visible as launching"
         assert current["broken"]["status"] == "unavailable", current["broken"]
-        assert current["stalled"]["status"] == "launching", current["stalled"]
+        # A stalled resume escalates to Blocked while its launch deadline runs.
+        deadline = started + 43
+        while current["stalled"]["status"] == "launching":
+            assert time.monotonic() < deadline, current["stalled"]
+            time.sleep(0.1)
+            current = agents()
+        assert current["stalled"]["status"] == "blocked", current["stalled"]
+        evidence["stalled_statuses"] = ["blocked"]
         for name in healthy:
             assert current[name]["runtime_identity"]["session_id"] == prior[name]["session_id"]
         assert round_trip(sorted(healthy), "after restart") == {name: sessions[name] for name in healthy}
-        deadline = started + 43
         while True:
             stalled = agents()["stalled"]
             if stalled["status"] == "unavailable" and stalled["actionable_error"]:
@@ -248,6 +254,7 @@ exec /usr/bin/git "$@"
             assert time.monotonic() < deadline, f"each resumed shell must keep its launch timeout: {stalled}"
             time.sleep(0.2)
         assert "deadline elapsed" in stalled["actionable_error"] or "Enter was not sent" in stalled["actionable_error"], stalled
+        evidence["stalled_statuses"].append(stalled["status"])
         print(json.dumps({"result": "PASS", "peak": peak, "queued": sorted(queued),
                           "events": events}), flush=True)
     except BaseException as error:
