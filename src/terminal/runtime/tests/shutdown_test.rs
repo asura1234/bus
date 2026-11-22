@@ -98,6 +98,9 @@ async fn close_reaps_installer_after_its_session_leader_exits() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     let stopped = runtime.stop_session_for_close();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let escaped = pane_fixture_is_executing(child);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let escaped = crate::platform::process_exists(child);
     // Always clean the harmless scratch child, also on the red run.
     crate::platform::signal_processes(&[child], crate::platform::Signal::Kill);
@@ -108,4 +111,143 @@ async fn close_reaps_installer_after_its_session_leader_exits() {
         !escaped,
         "pane close reported success but orphan installer {child} survived"
     );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn run_pane_shutdown_fixture(script: &str) -> (TerminalRuntime, std::path::PathBuf, u32) {
+    use std::time::{Duration, Instant};
+
+    let marker = std::env::temp_dir().join(format!(
+        "bus-pane-shutdown-{}-{}",
+        std::process::id(),
+        crate::utils::time::now_ns()
+    ));
+    let (events, _event_rx) = mpsc::channel(8);
+    let runtime = TerminalRuntime::spawn_argv_command(
+        PaneId::from_raw(45),
+        24,
+        80,
+        std::env::temp_dir(),
+        &[
+            "python3".into(),
+            "-c".into(),
+            script.into(),
+            marker.to_str().unwrap().into(),
+        ],
+        &PaneLaunchEnv::default(),
+        AgentDetection::Disabled,
+        0,
+        crate::utils::theme::color::TerminalTheme::default(),
+        None,
+        events,
+        Arc::new(Notify::new()),
+        Arc::new(RenderSignal::new()),
+    )
+    .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(&marker) {
+            if let Some(pid) = text.strip_suffix('\n').and_then(|pid| pid.parse().ok()) {
+                return (runtime, marker, pid);
+            }
+        }
+        assert!(Instant::now() < deadline, "shutdown fixture did not start");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn shutdown_kills_term_ignoring_grandchild_that_left_the_pty_session() {
+    use std::time::{Duration, Instant};
+
+    let (runtime, marker, grandchild) = run_pane_shutdown_fixture(
+        r#"
+import os, signal, sys, time
+
+if os.fork() == 0:
+    if os.fork() == 0:
+        os.setsid()
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        with open(sys.argv[1], "w") as ready:
+            print(os.getpid(), file=ready)
+time.sleep(15)
+"#,
+    )
+    .await;
+    let original_group = runtime.child_pid.load(Ordering::Acquire);
+    assert!(!crate::platform::session_processes(original_group).contains(&grandchild));
+
+    let started = Instant::now();
+    let stopped = runtime.stop_session_for_close();
+    let elapsed = started.elapsed();
+    let escaped = pane_fixture_is_executing(grandchild);
+    // Clean up the fixture on both sides of the regression.
+    if escaped {
+        crate::platform::signal_processes(&[grandchild], crate::platform::Signal::Kill);
+    }
+    let _ = std::fs::remove_file(marker);
+    runtime.shutdown();
+
+    assert!(
+        !escaped,
+        "detached grandchild {grandchild} survived pane shutdown"
+    );
+    assert!(stopped, "checked shutdown did not confirm the tree exited");
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "checked shutdown took {elapsed:?}"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn pane_fixture_is_executing(pid: u32) -> bool {
+    // A grandchild can already be dead while its new parent has yet to wait.
+    let output = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "stat="])
+        .output()
+        .unwrap();
+    let status = std::str::from_utf8(&output.stdout).unwrap().trim();
+    !status.is_empty() && !status.starts_with('Z')
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn assert_pane_shutdown_allows_hangup_handler_to_finish(delay_seconds: &str) {
+    let script = format!(
+        r#"
+import os, signal, sys, time
+
+def hangup(_signal, _frame):
+    time.sleep({delay_seconds})
+    with open(sys.argv[1], "a") as ready:
+        print("hangup completed", file=ready)
+    sys.exit(0)
+
+signal.signal(signal.SIGHUP, hangup)
+with open(sys.argv[1], "w") as ready:
+    print(os.getpid(), file=ready)
+time.sleep(15)
+"#
+    );
+    let (runtime, marker, pid) = run_pane_shutdown_fixture(&script).await;
+    let stopped = runtime.stop_session_for_close();
+    let observed = std::fs::read_to_string(&marker).unwrap();
+    let _ = std::fs::remove_file(marker);
+    runtime.shutdown();
+    assert!(stopped);
+    assert_eq!(observed, format!("{pid}\nhangup completed\n"));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn pane_shutdown_allows_a_cooperative_child_to_exit() {
+    assert_pane_shutdown_allows_hangup_handler_to_finish("0").await;
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn pane_shutdown_allows_child_to_finish_within_hangup_grace() {
+    assert_pane_shutdown_allows_hangup_handler_to_finish("0.08").await;
 }

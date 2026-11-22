@@ -1,4 +1,5 @@
 //! Process facts and process control for macos.
+use super::PaneProcessInfo;
 #[cfg(test)]
 use crate::platform::desktop::macos::build_terminal_notifier_command;
 #[cfg(test)]
@@ -11,7 +12,7 @@ use crate::platform::desktop::macos::show_terminal_notifier_notification_with_op
 use crate::platform::desktop::macos::terminal_bundle_identifier_from_env;
 use crate::platform::ForegroundJob;
 use crate::platform::ForegroundProcess;
-use crate::platform::Signal;
+use crate::platform::ProcessInstance;
 use std::ffi::OsStr;
 use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
@@ -300,6 +301,13 @@ fn kern_procargs2(pid: u32) -> Option<Vec<u8>> {
 }
 
 fn process_bsdinfo(pid: u32) -> Option<libc::proc_bsdinfo> {
+    process_bsdinfo_with_zombies(pid, false).ok()
+}
+
+fn process_bsdinfo_with_zombies(
+    pid: u32,
+    include_zombies: bool,
+) -> std::io::Result<libc::proc_bsdinfo> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
 
@@ -307,13 +315,17 @@ fn process_bsdinfo(pid: u32) -> Option<libc::proc_bsdinfo> {
         libc::proc_pidinfo(
             pid as libc::c_int,
             libc::PROC_PIDTBSDINFO,
-            0,
+            u64::from(include_zombies),
             &mut info as *mut _ as *mut libc::c_void,
             size,
         )
     };
 
-    (ret == size).then_some(info)
+    if ret == size {
+        Ok(info)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 fn comm_from_bsdinfo(info: &libc::proc_bsdinfo) -> Option<String> {
@@ -503,27 +515,44 @@ fn collect_positive_pids(pids: Vec<libc::pid_t>, count: usize) -> Vec<u32> {
         .collect()
 }
 
-pub fn signal_processes(pids: &[u32], signal: Signal) {
-    let sig = match signal {
-        Signal::Hangup => libc::SIGHUP,
-        Signal::Terminate => libc::SIGTERM,
-        Signal::Kill => libc::SIGKILL,
-    };
+pub(super) fn pane_processes() -> impl Iterator<Item = PaneProcessInfo> {
+    all_pids()
+        .into_iter()
+        .filter_map(|pid| pane_process_info(pid).ok())
+}
 
-    for &pid in pids {
-        if pid == 0 {
-            continue;
-        }
-        unsafe {
-            libc::kill(pid as libc::c_int, sig);
-        }
-    }
+pub(super) fn pane_process_info(pid: u32) -> std::io::Result<PaneProcessInfo> {
+    // Darwin's SZOMB from sys/proc.h. Normal libproc lookups omit zombies.
+    const SZOMB: u32 = 5;
+
+    let info = process_bsdinfo_with_zombies(pid, true)?;
+    let session_id = unsafe { libc::getsid(pid as libc::pid_t) };
+    Ok(PaneProcessInfo {
+        instance: ProcessInstance {
+            pid,
+            birth: process_start_time(&info),
+        },
+        parent_pid: info.pbi_ppid,
+        session_id: u32::try_from(session_id).ok(),
+        state: match info.pbi_status {
+            1 => "idle",
+            2 => "running",
+            3 => "sleeping",
+            4 => "stopped",
+            SZOMB => "zombie",
+            _ => "unknown",
+        },
+    })
 }
 
 /// Start time in microseconds since the epoch; stable for the life of the process.
 pub(crate) fn process_birth(pid: u32) -> Option<u64> {
     let info = process_bsdinfo(pid)?;
-    Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+    Some(process_start_time(&info))
+}
+
+fn process_start_time(info: &libc::proc_bsdinfo) -> u64 {
+    info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
 }
 
 pub(crate) fn process_parent(pid: u32) -> Option<u32> {

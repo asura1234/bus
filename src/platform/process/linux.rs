@@ -1,4 +1,5 @@
 //! Process facts and process control for linux.
+use super::PaneProcessInfo;
 #[cfg(test)]
 use crate::platform::desktop::linux::bytes_match_image_signature;
 #[cfg(test)]
@@ -27,7 +28,7 @@ use crate::platform::ClipboardCommand;
 use crate::platform::ClipboardImage;
 use crate::platform::ForegroundJob;
 use crate::platform::ForegroundProcess;
-use crate::platform::Signal;
+use crate::platform::ProcessInstance;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::os::fd::RawFd;
@@ -380,41 +381,47 @@ pub fn session_processes(child_pid: u32) -> Vec<u32> {
     // portable-pty starts this child with setsid; keep the ID after it exits.
     let session_id = child_pid as i32;
 
-    let mut pids = Vec::new();
-    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let file_name = entry.file_name();
-        let Some(pid_str) = file_name.to_str() else {
-            continue;
-        };
-        if !pid_str.bytes().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-
-        let Ok(pid) = pid_str.parse::<u32>() else {
-            continue;
-        };
-        if process_session_id(pid) == Some(session_id) {
-            pids.push(pid);
-        }
-    }
-    pids
+    all_pids()
+        .filter(|pid| process_session_id(*pid) == Some(session_id))
+        .collect()
 }
 
-pub fn signal_processes(pids: &[u32], signal: Signal) {
-    let sig = match signal {
-        Signal::Hangup => libc::SIGHUP,
-        Signal::Terminate => libc::SIGTERM,
-        Signal::Kill => libc::SIGKILL,
-    };
+fn all_pids() -> impl Iterator<Item = u32> {
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+}
 
-    for &pid in pids {
-        if pid == 0 {
-            continue;
-        }
-        unsafe {
-            libc::kill(pid as i32, sig);
-        }
-    }
+pub(super) fn pane_processes() -> impl Iterator<Item = PaneProcessInfo> {
+    all_pids().filter_map(|pid| pane_process_info(pid).ok())
+}
+
+pub(super) fn pane_process_info(pid: u32) -> std::io::Result<PaneProcessInfo> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let parse = || {
+        let mut fields = stat.get(stat.rfind(')')? + 2..)?.split_whitespace();
+        let state = match fields.next()? {
+            "R" => "running",
+            "S" => "sleeping",
+            "D" => "uninterruptible sleep",
+            "T" | "t" => "stopped",
+            "Z" | "X" | "x" => "zombie",
+            "I" => "idle",
+            _ => "unknown",
+        };
+        let parent_pid = fields.next()?.parse().ok()?;
+        let session_id = fields.nth(1)?.parse().ok()?;
+        let birth = fields.nth(15)?.parse().ok()?;
+        Some(PaneProcessInfo {
+            instance: ProcessInstance { pid, birth },
+            parent_pid,
+            session_id: Some(session_id),
+            state,
+        })
+    };
+    parse().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid proc stat"))
 }
 
 pub fn process_exists(pid: u32) -> bool {

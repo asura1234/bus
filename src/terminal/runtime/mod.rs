@@ -168,6 +168,8 @@ pub struct TerminalRuntime {
     child_instance: Option<crate::platform::ProcessInstance>,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
     child_wait_completed: Option<Arc<AtomicBool>>,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    shutdown_tree: Cell<Option<crate::platform::PaneProcessTree>>,
     kitty_keyboard_flags: Arc<AtomicU16>,
     content_seq: Arc<AtomicU64>,
     content_write_lock: Arc<Mutex<()>>,

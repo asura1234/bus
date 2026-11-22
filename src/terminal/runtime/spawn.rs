@@ -774,6 +774,8 @@ impl TerminalRuntime {
             reported_cwd,
             child_instance,
             child_wait_completed: Some(child_wait_completed),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            shutdown_tree: std::cell::Cell::new(None),
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq,
             content_write_lock,

@@ -186,6 +186,8 @@ impl TerminalRuntime {
                 child_instance: None,
                 reported_cwd: Arc::new(Mutex::new(None)),
                 child_wait_completed: None,
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                shutdown_tree: std::cell::Cell::new(None),
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
                 content_seq: content_seq.clone(),
                 content_write_lock: Arc::new(Mutex::new(())),
