@@ -382,7 +382,7 @@ impl FakeAgent {
         }
         if stopped {
             // No provider reports an interrupted turn with a hook.
-            self.stop_turn(prompt);
+            self.stop_turn();
             return None;
         }
         let failure = if self.overload_once_seen && prompt.contains("fake:overload-once") {
@@ -469,15 +469,14 @@ impl FakeAgent {
         stopped
     }
 
-    /// Ends a turn the stop key interrupted, without a reply or a hook, as
-    /// each provider does: Codex notes it in the transcript, Claude Code puts
-    /// the prompt back into its box, Cursor returns to its composer.
-    fn stop_turn(&mut self, prompt: &str) {
+    /// Ends a turn the stop key interrupted, without a reply or a hook.
+    /// Codex notes it. Claude keeps only keystrokes from the hidden turn.
+    fn stop_turn(&mut self) {
         let mut out = std::io::stdout();
         if self.codex() {
             let _ = write!(out, "{CODEX_INTERRUPTED}\r\n");
         } else if !self.cursor() {
-            self.draft = prompt.to_owned();
+            self.keep_keystrokes_typed_during_turn();
         }
         let _ = out.flush();
         self.draw_prompt();
