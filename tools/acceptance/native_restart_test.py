@@ -151,6 +151,113 @@ def build_identity(binary):
     return json.loads(output)["sha"]
 
 
+def parallel_resume_scenario(binary, root):
+    """Measure deferred restore with real PTYs and deterministic slow preparation."""
+    work, home, fake_bin = (root / name for name in ("work", "home", "bin"))
+    for path in (work, home, fake_bin):
+        path.mkdir()
+    for name in ("claude", "open", "osascript", "terminal-notifier", "afplay"):
+        (fake_bin / name).symlink_to(binary)
+    (fake_bin / "git").write_text(
+        """#!/bin/sh
+if [ -f "$RESUME_PROBES" ] && [ "$1" = -C ] && [ "$*" = "-C $2 rev-parse --show-toplevel" ]; then
+    printf 'start %s\n' "${2##*/}" >> "$RESUME_PROBES"
+    sleep 2
+    printf 'finish %s\n' "${2##*/}" >> "$RESUME_PROBES"
+fi
+exec /usr/bin/git "$@"
+"""
+    )
+    (fake_bin / "git").chmod(0o700)
+    probes = root / "resume-probes"
+    slow_shell = 'if [[ -f $RESUME_PROBES && ${PWD##*/} == stalled ]]; then sleep 45; fi\n'
+    for profile in (".bash_profile", ".bashrc"):
+        (home / profile).write_text(slow_shell)
+    env = {"PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home),
+           "BUS_DATA_DIR": str(root / "data"), "BUS_TUI_FAKE_AGENT": "1",
+           "TERM": "xterm-256color", "SHELL": "/bin/bash",
+           "XDG_CONFIG_HOME": str(root / "xdg"), "RESUME_PROBES": str(probes)}
+    bus = Bus(binary, root, env, workspace=work)
+    healthy = {f"worker-{i}" for i in range(9)}
+    names = ["stalled", "broken", *sorted(healthy)]
+    evidence = {}
+    original_error = None
+
+    def agents():
+        return {a["name"]: a for a in bus.cli("state", timeout=5)["agents"]}
+
+    def round_trip(recipients, prompt):
+        sent = bus.cli("send", "--room", "bus", "--to", ",".join(recipients), "--text", prompt)
+        settled = bus.cli("wait", "--message", str(sent["message_id"]), "--timeout", "30")
+        requests = settled["requests"]
+        assert len(requests) == len(recipients), settled
+        assert all(r["stage"] == "replied" and r["reply"]["text"] for r in requests), settled
+        return {r["agent_name"]: r["session_id"] for r in requests}
+
+    try:
+        initial = bus.start()["build"]
+        initial_client = bus.child.pid
+        for name in names:
+            cwd = work / name
+            cwd.mkdir()
+            bus.cli("agent", "add", "--room", "bus", "--name", name,
+                    "--provider", "claude", "--pwd", str(cwd), "--consent-hooks")
+        sessions = round_trip(names, "bootstrap")
+        assert len(set(sessions.values())) == len(names), sessions
+        prior = {name: a["runtime_identity"] for name, a in agents().items()}
+        bus.stop()
+        (bus.data / "callbacks" / prior["broken"]["launch_id"] / "claude-settings.json").unlink()
+        probes.touch()
+        started = time.monotonic()
+        restarted = bus.start()["build"]
+        assert bus.child.pid != initial_client
+        assert restarted["server"]["pid"] != initial["server"]["pid"], restarted
+        assert restarted["client"]["sha"] == restarted["server"]["sha"] == build_identity(binary)
+        deadline = started + 19  # Eleven two-second preparations cannot finish serially.
+        queued = set()
+        while True:
+            current = agents()
+            events = [line.split() for line in probes.read_text().splitlines()]
+            began = {name for event, name in events if event == "start"}
+            assert all(current[name]["status"] != "unavailable" for name in healthy - began), current
+            queued.update(name for name in healthy - began if current[name]["status"] == "launching")
+            evidence.update(events=events, queued=sorted(queued),
+                            status={name: agent["status"] for name, agent in current.items()})
+            if all(current[name]["status"] == "idle" for name in healthy):
+                break
+            assert time.monotonic() < deadline, f"serialized resume exceeded wave budget: {evidence}"
+            time.sleep(0.1)
+        assert time.monotonic() < deadline, evidence
+        count = peak = 0
+        for event, _ in events:
+            count += 1 if event == "start" else -1
+            peak = max(peak, count)
+        assert sorted(name for event, name in events if event == "start") == sorted(names), events
+        assert peak == 4, events
+        assert queued, "no queued agent was visible as launching"
+        assert current["broken"]["status"] == "unavailable", current["broken"]
+        assert current["stalled"]["status"] == "launching", current["stalled"]
+        for name in healthy:
+            assert current[name]["runtime_identity"]["session_id"] == prior[name]["session_id"]
+        assert round_trip(sorted(healthy), "after restart") == {name: sessions[name] for name in healthy}
+        deadline = started + 43
+        while True:
+            stalled = agents()["stalled"]
+            if stalled["status"] == "unavailable" and stalled["actionable_error"]:
+                break
+            assert time.monotonic() < deadline, f"each resumed shell must keep its launch timeout: {stalled}"
+            time.sleep(0.2)
+        assert "deadline elapsed" in stalled["actionable_error"] or "Enter was not sent" in stalled["actionable_error"], stalled
+        print(json.dumps({"result": "PASS", "peak": peak, "queued": sorted(queued),
+                          "events": events}), flush=True)
+    except BaseException as error:
+        original_error = error
+        evidence["error"] = str(error)
+        raise
+    finally:
+        complete_restart_fixture(bus, root, evidence, original_error)
+
+
 def scenario(binary, root, whole_session=False, unhealthy=False, replacement_binary=None,
              retain_failure=False):
     replacement_binary = replacement_binary or binary
@@ -320,6 +427,7 @@ def main():
     parser.add_argument("--retain-failure", action="store_true")
     parser.add_argument("--whole-session", action="store_true")
     parser.add_argument("--unhealthy", action="store_true")
+    parser.add_argument("--parallel-resume", action="store_true")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     replacement_binary = (args.replacement_binary or binary).resolve(strict=True)
@@ -329,8 +437,11 @@ def main():
     for candidate in (binary, replacement_binary):
         assert not (candidate == live.resolve() or (live.exists() and candidate.samefile(live))), "live binary forbidden"
     with restart_directory(args.run_dir, args.retain_failure) as directory:
-        scenario(binary, directory, args.whole_session, args.unhealthy, replacement_binary,
-                 args.retain_failure)
+        if args.parallel_resume:
+            parallel_resume_scenario(binary, directory)
+        else:
+            scenario(binary, directory, args.whole_session, args.unhealthy, replacement_binary,
+                     args.retain_failure)
 
 
 if __name__ == "__main__":

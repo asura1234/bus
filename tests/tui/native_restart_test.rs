@@ -97,6 +97,24 @@ fn immediate_delivery_survives_native_server_restart() {
 }
 
 #[test]
+fn restart_resumes_fake_providers_in_bounded_waves() {
+    let (mut command, _binary) = restart_command(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tools/acceptance/native_restart_test.py"
+    ));
+    let output = command
+        .arg("--parallel-resume")
+        .output()
+        .expect("run isolated parallel restart scenario");
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn whole_bus_restart_and_rollback_preserve_native_provider_session_and_draft() {
     for rollback in [false, true] {
         let (mut command, _binary) = restart_command(concat!(
