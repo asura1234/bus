@@ -403,8 +403,11 @@ completes the original request.
 Result: {message_id,request_ids:[NUMBER,...],stage:queued|posted|replied}.
 Interrupt-mode receipts include per-recipient stop outcomes in interrupts. A
 queued next turn can coexist with an in-progress or unconfirmed stop.
-In chat, [queued] marks queue mode and [pending] marks steer mode. An
-interrupt-mode message has no marker. Read stop outcomes with message status.
+In chat, [queued] is a message still waiting for the turn boundary and
+[pending] is a steer that has not reached the running turn. Neither badge
+remains after settlement. An interrupt-mode message has no marker. Read
+stop outcomes with message status. A settled row has its captured reply,
+or reason shared_reply / requester_reply when room history omits the body.
   --reply-to also returns requester_turn_queued:false and a notice: no requester
   turn was queued. If the requester must act, use a fresh normal send:
   bus send --room ROOM --as YOUR_AGENT_ID --to REQUESTER --text TEXT.

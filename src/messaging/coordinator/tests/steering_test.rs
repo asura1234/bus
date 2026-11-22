@@ -22,6 +22,9 @@ mod busy_steer_tests;
 #[path = "delivery_mode_test.rs"]
 mod delivery_mode_tests;
 
+#[path = "mode_badge_settlement_test.rs"]
+mod mode_badge_settlement_tests;
+
 #[path = "steer_failure_test.rs"]
 mod steer_failure_tests;
 

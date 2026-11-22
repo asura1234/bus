@@ -6,12 +6,17 @@ of a session. Agent deletion retires a runtime and closes unfinished requests as
 requests as `room_deleted`. Neither operation erases the audit record. Context
 clear and provider compaction do not remove Bus messages.
 
-Chat shows `[queued]` for queue-mode messages and `[pending]` for steer-mode
-messages. The badge records how the message was sent, even after delivery.
-Interrupt-mode messages have no mode badge. Read their stop outcome with
-`bus message status`. Older records can identify steer when the message joined
-a running turn. A legacy independent-turn flag can represent several send modes
-and is insufficient to assign a badge.
+Chat shows `[queued]` while a queue-mode message is still waiting for the
+turn boundary and `[pending]` while a steer has not reached the running turn.
+Settlement clears both. Interrupt-mode messages have no mode badge. Read their
+stop outcome with `bus message status`. A settled request stores its captured
+reply or a named failure reason. Room history never leaves one at stage
+`ended` with a null reply and no reason. A shared developer answer is shown
+once; the other rows keep stage `ended` and reason `shared_reply`. An
+agent-authored answer is delivered to the requester and is not repeated in the
+room; that row uses reason `requester_reply`. Older records can identify steer
+when the message joined a running turn. A legacy independent-turn flag can
+represent several send modes and is insufficient to assign a badge.
 
 A developer's captured reply appears in the original exchange. Each room shows
 one copy of a shared answer. A correlated explicit reply takes precedence over

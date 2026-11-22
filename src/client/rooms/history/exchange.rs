@@ -6,7 +6,7 @@ use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
 };
-use crate::messaging::model::{AgentId, Author, BusState, Prompt, Room, RoomId, SendMode};
+use crate::messaging::model::{AgentId, Author, BusState, Prompt, Room, RoomId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -229,16 +229,11 @@ impl History {
             }
             header.push((state.agent_label(*id), Tone::Agent(*id)));
         }
-        let mode = exchange
+        if let Some(label) = exchange
             .requests
             .values()
-            .find_map(|request| request.history_send_mode());
-        let mode_label = match mode {
-            Some(SendMode::Queue) => Some(" [queued]"),
-            Some(SendMode::Steer) => Some(" [pending]"),
-            Some(SendMode::Interrupt) | None => None,
-        };
-        if let Some(label) = mode_label {
+            .find_map(|request| request.history_mode_marker())
+        {
             header.push((label.into(), Tone::Muted));
         }
         if prompt.recipient_ids.is_empty() {
@@ -489,6 +484,7 @@ fn signature(
         request.prompt.submitted_at_ms.hash(&mut hash);
         request.group.map(|lead| lead.0).hash(&mut hash);
         request.history_send_mode().hash(&mut hash);
+        request.history_mode_marker().hash(&mut hash);
         let outcome = request
             .group
             .and_then(|lead| state.request(lead))

@@ -167,15 +167,18 @@ a trusted start. Scratch CLI sends for steer and queue use that orchestrator.
    end. Its history header also has no delivery badge. A developer attempt
    to send `--mode steer`, `--mode queue`, or `--queue` is refused.
 3. Start a fresh long turn. From the scratch CLI, as the bound orchestrator,
-   send `MODE_STEER` with `--mode steer` → the recipient accepts it in the
-   lead's turn group before the lead ends. Its history header shows
-   `[pending]`, including after it settles. While that group is still active,
-   send `MODE_QUEUE` with `--mode queue` → the header shows `[queued]`, the
-   request stays queued with no provider input until the lead ends, then runs
-   once in a separate turn.
+   send `MODE_STEER` with `--mode steer` → until it reaches the lead's turn
+   the header shows `[pending]`. Once it joins, that badge clears. While the
+   lead is still active, send `MODE_QUEUE` with `--mode queue` → the header
+   shows `[queued]`, the request stays queued with no provider input until
+   the lead ends, then runs once in a separate turn. After each settles, its
+   badge is gone. History shows a developer reply, or a named reason
+   (`shared_reply` when the body is already on an earlier row,
+   `requester_reply` when an agent authored the prompt). It never shows
+   stage `ended` with a null reply and no reason.
 4. Reopen history, then save and reopen only the scratch session → the Enter
-   and Option+Enter rows still have no badge, Steer still shows `[pending]`,
-   and Queue still shows `[queued]`. Scan the exchange for any stop-outcome
+   and Option+Enter rows still have no badge. Settled Steer and Queue rows
+   have no `[pending]` or `[queued]`. Scan the exchange for any stop-outcome
    badge.
 
 **Evidence:** composer and help text showing no mode picker, each
@@ -184,7 +187,8 @@ group/status before and after settlement, and restored history. If step 3
 misses the active interval, report the missing observation.
 
 **Pass criteria:** the composer always interrupts and draws no mode badge.
-Orchestrator steer joins and queue waits, and history keeps only those badges.
+Orchestrator steer joins and queue waits. `[pending]` and `[queued]` mark
+only that wait, and settlement leaves a reply or a named reason.
 
 ### APP-27 — NEW: Explicit and captured developer answers render once
 
@@ -843,7 +847,7 @@ build missing a required product lane still fails the target assertion.
 | Area | Source at review | Check on the run head |
 | --- | --- | --- |
 | APP-25, agy portion of APP-30 | Master `f00cc3b3d` removes interrupt retirement. Interrupt delivery runs while the agent is Working (`delivery.rs` `interrupt_ready`, `allow_working: true`). Pane-time copy-send-restore is `terminal/runtime/submission/copy.rs`: readable plaintext is snapshotted, sent, then restored; unrestorable content logs `bus.draft.copy_loss` and still delivers. The same commit reconciles confirmed AGY turns. | On this head, APP-25 requires exact restoration of readable plaintext and no retirement or fence notice. Opaque or clipped content may log `bus.draft.copy_loss` and must still deliver. Keep rich-draft and genuine-blocker checks separate. |
-| APP-26 | Master `f00cc3b3d` has no composer mode picker. Enter and Option+Enter both interrupt (`drafts.rs` `request_queued_send`, `delivery_mode_test.rs`). Badges from `af8e243c6` remain in `history/exchange.rs`: interrupt has no marker, steer is `[pending]`, queue is `[queued]`. Developer steer/queue is refused; an orchestrator may pass `--mode` (`messages.rs` `send_delivery`). | Do not look for `Mode:` or F4. Composer sends are interrupt with no badge. Produce steer and queue with an orchestrator `--mode` send and check that those badges persist. |
+| APP-26 | Master `f00cc3b3d` has no composer mode picker. Enter and Option+Enter both interrupt (`drafts.rs` `request_queued_send`, `delivery_mode_test.rs`). Badges in `history/exchange.rs` use `Request::history_mode_marker`: `[pending]` only before a steer reaches the running turn, `[queued]` only while a queue-mode message waits for that boundary. Developer steer/queue is refused; an orchestrator may pass `--mode` (`messages.rs` `send_delivery`). | Do not look for `Mode:` or F4. Composer sends are interrupt with no badge. Produce steer and queue with an orchestrator `--mode` send. Badges clear at settlement. History shows the captured reply or reason `shared_reply` / `requester_reply`, never stage `ended` with a null reply and no reason. |
 | APP-27 | Master `af8e243c6` renders developer replies using the same projection as room history. | Check the still-open explicit acknowledgement and restored history independently. |
 | APP-28 | #472 `067ea8672` returns to the room on submit (`agent_creation.rs` `submit_agent_creation` calls `open_room`) and shows a `Launching` row (`render/sidebar.rs`). Inline missing-field text stays on the form (`input/forms.rs`). The room renders `Could not add {name}: {reason}` (`render/room.rs`). Hook consent opens later, only while that room is idle (`receive_agent_setup`). | Expect the immediate close, the provisional row, inline Name/Model/PWD errors, and the room-local failure line. Consent must not hold the Add form open across startup. |
 | APP-29 | Master `1ab9d1c5b` and `f83ba7013` use immediate keypress confirmation. | A separate confirmation prompt is not in the inspected restart contract. If a prompt is required, the restart lane must change before adding that expectation. |

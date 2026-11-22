@@ -140,6 +140,16 @@ impl Worker {
             .filter(|request| self.state.developer_history_reply(request).is_some())
             .map(|request| request.id.0)
             .collect();
+        let agent_authored: std::collections::BTreeSet<_> = requests
+            .iter()
+            .filter(|request| {
+                matches!(
+                    request.prompt.author,
+                    crate::messaging::model::Author::Agent(_)
+                )
+            })
+            .map(|request| request.id.0)
+            .collect();
         let mut delivery = self.control_message_from(message, now, requests).ok()?;
         for request in delivery.get_mut("requests")?.as_array_mut()? {
             let Some(object) = request.as_object_mut() else {
@@ -150,14 +160,30 @@ impl Worker {
                 .and_then(Value::as_u64)
                 .is_some_and(|id| visible_replies.contains(&id));
             if !visible {
+                let had_reply = object.get("stage").and_then(Value::as_str) == Some("replied");
                 object.insert("reply".into(), Value::Null);
+                // Name the omission. shared_reply: the body is on an earlier
+                // developer row. requester_reply: an agent authored the prompt
+                // and the answer was delivered to that agent.
+                if had_reply {
+                    object.insert("stage".into(), json!("ended"));
+                    let named = object
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .is_some_and(|reason| !reason.is_empty());
+                    if !named {
+                        let request_id = object.get("request_id").and_then(Value::as_u64);
+                        let reason = request_id
+                            .is_some_and(|id| agent_authored.contains(&id))
+                            .then_some("requester_reply")
+                            .unwrap_or("shared_reply");
+                        object.insert("reason".into(), json!(reason));
+                    }
+                }
             }
             object.insert("group".into(), Value::Null);
             object.remove("answered_with_message");
             object.insert("reply_ack".into(), Value::Bool(false));
-            if !visible && object.get("stage").and_then(Value::as_str) == Some("replied") {
-                object.insert("stage".into(), json!("ended"));
-            }
         }
         Some(delivery)
     }
