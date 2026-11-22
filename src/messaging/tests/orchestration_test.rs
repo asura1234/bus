@@ -535,7 +535,7 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     let communication =
         flat(&std::fs::read_to_string(root.join("bus-communication-guide.md")).unwrap());
     for phrase in [
-        "**Send a message only when it changes what the receiver does next.**",
+        "**Send once when the receiver has a new next action, decision, or result they can use.**",
         "## Peer to peer first",
         "## To the orchestrator",
         "## To you (the developer)",
@@ -587,7 +587,7 @@ fn embedded_guides_require_new_information_one_copy_and_no_stalled_state() {
         flat(&std::fs::read_to_string(root.join("bus-communication-guide.md")).unwrap());
     for phrase in [
         "No message without new information.",
-        "One copy of each result.",
+        "One copy of each result or grant.",
         "No \"still working\" posts.",
         "A reply is just another message: Bus never posts it on your behalf.",
         "The final text the turn recorded is stored as the request's reply",
@@ -602,7 +602,7 @@ fn embedded_guides_require_new_information_one_copy_and_no_stalled_state() {
         "a new verdict, finding, blocker, or question is still sent once",
         "`[waiting-on-you]` is for a new hard blocker",
         "Do not reply Ready merely to acknowledge that prompt.",
-        "One explicit send to the intended recipient is the delivery.",
+        "A send, an explicit reply, or a turn final can deliver it once.",
     ] {
         assert!(communication.contains(phrase), "missing {phrase}");
     }

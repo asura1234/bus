@@ -172,8 +172,65 @@ async fn focused_idle_claude_submits_a_shell_escaped_screenshot_only_after_its_c
         "[Image #9]keep the green background",
     );
     assert_eq!(step(&mut writes, &response, "submit").await.as_ref(), b"\r");
+    redraw(&app, AgentKind::Claude, "");
     let reply = tokio::task::spawn_blocking(move || response.recv_timeout(WAIT).unwrap())
         .await
         .unwrap();
     assert!(reply.contains("agent_prompted"), "{reply}");
+}
+
+#[tokio::test]
+async fn focused_working_claude_defers_without_touching_the_developer_draft() {
+    let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(
+            concat!(
+                "\x1b[2J\x1b[H✻ Coalescing… (7s · ↓ 301 tokens)\r\n",
+                "────────────────────────\r\n",
+                "❯ developer draft\r\n",
+                "────────────────────────\r\n"
+            )
+            .as_bytes(),
+        );
+    if let Method::AgentPromptIfIdle(params) = &mut method {
+        params.steer = true;
+        params.text = "from bus\n\"/tmp/large.png\"".into();
+    }
+    let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+    assert!(response.contains("agent_claude_turn_busy"), "{response}");
+    assert!(writes.try_recv().is_err(), "must neither stash nor paste");
+    assert!(app
+        .lookup_runtime_sender(0, pane)
+        .unwrap()
+        .visible_text()
+        .contains("developer draft"));
+}
+
+#[tokio::test]
+async fn focused_claude_image_waits_for_the_native_queue_to_empty() {
+    let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    if let Method::AgentPromptIfIdle(params) = &mut method {
+        params.text = "from bus\n\"/tmp/large.png\"".into();
+    }
+    let response = start(&mut app, method);
+    step(&mut writes, &response, "paste").await;
+    redraw(&app, AgentKind::Claude, "[Image #7]from bus");
+    assert_eq!(step(&mut writes, &response, "submit").await.as_ref(), b"\r");
+    clock(&app).wait_for_enters(1);
+    redraw(
+        &app,
+        AgentKind::Claude,
+        "\x1b[2mPress up to edit queued messages\x1b[22m",
+    );
+    let generation = clock(&app).advance(Duration::from_millis(300));
+    clock(&app).wait_for_submission_check(generation);
+    assert!(response.try_recv().is_err(), "queue is still unconsumed");
+    redraw(&app, AgentKind::Claude, "");
+    assert!(response
+        .recv_timeout(WAIT)
+        .unwrap()
+        .contains("agent_prompted"));
+    assert!(writes.try_recv().is_err(), "no second Enter for an image");
 }

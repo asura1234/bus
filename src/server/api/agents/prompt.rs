@@ -484,7 +484,7 @@ fn queue_prompt_submission(
     ),
     String,
 > {
-    let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
+    let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent), target_status = ?agent.agent_status);
     let _entered = span.enter();
 
     #[cfg(unix)]
@@ -709,8 +709,31 @@ fn complete_agent_prompt_with_timestamps(
             },
         )
     };
+    use crate::terminal::runtime::PromptNotShown;
     match completed {
         Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent, timestamps }),
+        Ok(Err(err))
+            if matches!(
+                PromptNotShown::classified(&err),
+                Some(PromptNotShown::ClaudeTurnBusy)
+            ) =>
+        {
+            fail(
+                crate::protocol::api::AGENT_CLAUDE_TURN_BUSY,
+                err.to_string(),
+            )
+        }
+        Ok(Err(err))
+            if matches!(
+                PromptNotShown::classified(&err),
+                Some(PromptNotShown::QueuedInputWithdrawn)
+            ) =>
+        {
+            fail(
+                crate::protocol::api::QUEUED_IN_TARGET_INPUT,
+                err.to_string(),
+            )
+        }
         Ok(Err(err)) if crate::terminal::runtime::PromptNotShown::composer_busy(&err) => {
             fail(crate::protocol::api::AGENT_COMPOSER_BUSY, err.to_string())
         }

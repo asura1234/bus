@@ -58,7 +58,7 @@ impl ObservedSubmission {
         }
         self.reset_confirmation(delay);
         let result = self.run_for_copy_delivery(text, delay, lease, cleared);
-        if result.is_ok() && !self.inspect.retry_owned_enter() {
+        if result.is_ok() && !self.inspect.waits_for_idle() {
             let saved_deadline = self.deadline.get();
             self.deadline
                 .set((self.clock.now() + Duration::from_secs(2)).min(self.hard_deadline));
@@ -136,9 +136,8 @@ impl ObservedSubmission {
         lease: &crate::terminal::runtime::draft_input::DraftInputLease,
         cleared: bool,
     ) -> io::Result<()> {
-        let withdrawal_lease = (self.inspect.confirm_consumption()
-            || self.inspect.retry_owned_enter())
-        .then_some(lease);
+        let withdrawal_lease =
+            (self.inspect.confirm_consumption() || self.inspect.waits_for_idle()).then_some(lease);
         if cleared {
             return self.confirm_legacy_submission(self.run(text, delay, withdrawal_lease), lease);
         }
@@ -169,8 +168,8 @@ impl ObservedSubmission {
         let entered_at = self.clock.now();
         #[cfg(test)]
         self.clock.entered();
-        if self.inspect.retry_owned_enter() {
-            return self.confirm_plain_submission(withdrawal_lease, entered_at);
+        if self.inspect.waits_for_idle() {
+            return self.confirm_claude_submission(withdrawal_lease, entered_at);
         }
         self.confirm_legacy_submission(Ok(()), lease)
     }

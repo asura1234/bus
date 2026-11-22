@@ -37,13 +37,14 @@ pub(crate) enum InputObservation {
 #[path = "tests/submission_test.rs"]
 pub(crate) mod tests;
 
-/// No Enter was sent for this delivery. Input was refused before pasting or
-/// the paste was withdrawn, so this is a definite non-delivery, safe to retry.
+/// Definite non-delivery. Input was refused or the unsent paste was withdrawn.
 #[derive(Debug)]
 pub(crate) enum PromptNotShown {
     NotSubmitted,
     InputOccupied,
     ComposerBusy,
+    ClaudeTurnBusy,
+    QueuedInputWithdrawn,
 }
 
 impl std::fmt::Display for PromptNotShown {
@@ -51,6 +52,12 @@ impl std::fmt::Display for PromptNotShown {
         if matches!(self, Self::ComposerBusy) {
             return formatter
                 .write_str("Waiting for the agent's composer; existing input is preserved");
+        }
+        if matches!(self, Self::ClaudeTurnBusy) {
+            return formatter.write_str("Claude is still running a turn; prompt was not sent");
+        }
+        if matches!(self, Self::QueuedInputWithdrawn) {
+            return formatter.write_str("Claude left the prompt in its input; Bus withdrew it");
         }
         formatter.write_str(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE)?;
         if matches!(self, Self::InputOccupied) {
@@ -63,16 +70,15 @@ impl std::fmt::Display for PromptNotShown {
 impl std::error::Error for PromptNotShown {}
 
 impl PromptNotShown {
+    pub(crate) fn classified(error: &io::Error) -> Option<&Self> {
+        error.get_ref().and_then(|inner| inner.downcast_ref())
+    }
+
     pub(crate) fn composer_busy(error: &io::Error) -> bool {
-        error
-            .get_ref()
-            .and_then(|inner| inner.downcast_ref::<Self>())
-            .is_some_and(|error| matches!(error, Self::ComposerBusy))
+        matches!(Self::classified(error), Some(Self::ComposerBusy))
     }
     pub(crate) fn is(error: &io::Error) -> bool {
-        error
-            .get_ref()
-            .is_some_and(|inner| inner.downcast_ref::<Self>().is_some())
+        Self::classified(error).is_some()
     }
 }
 
@@ -101,6 +107,16 @@ pub(crate) trait SubmissionInspector: Send {
     /// and of the developer draft already saved by the input lease.
     fn paste_ready(&self, _screen: &str) -> bool {
         true
+    }
+    /// This provider queues Enter during a live turn instead of starting work.
+    fn waits_for_idle(&self) -> bool {
+        false
+    }
+    fn provider_queues_input(&self, _screen: &str, _osc_title: &str, _osc_progress: &str) -> bool {
+        false
+    }
+    fn native_queue_visible(&self, _screen: &str) -> bool {
+        false
     }
     /// Claude plain pastes need owned render and consumption evidence; a
     /// still-owned draft may receive one extra Enter after a dropped key.
@@ -392,6 +408,15 @@ impl SubmissionHandle {
 }
 
 impl ObservedSubmission {
+    fn provider_queues_input(&self, screen: &str) -> bool {
+        self.inspect.waits_for_idle()
+            && self.inspect.provider_queues_input(
+                screen,
+                &self.terminal.agent_osc_title(),
+                &self.terminal.agent_osc_progress(),
+            )
+    }
+
     fn observe(&self, phase: &'static str) -> InputObservation {
         self.observe_frame(phase)
             .unwrap_or(InputObservation::Unavailable)
@@ -476,6 +501,13 @@ impl ObservedSubmission {
             .map_err(|_| io::Error::other(PromptNotShown::NotSubmitted))?;
         // Rendering and paste enqueue share this lock, just like clear keys
         // and Enter. A chooser can have replaced the initially empty composer.
+        if self
+            .terminal
+            .active_ansi_if_complete()
+            .is_some_and(|screen| self.provider_queues_input(&screen))
+        {
+            return Err(io::Error::other(PromptNotShown::ClaudeTurnBusy));
+        }
         if self.observe("paste_preflight") != InputObservation::Empty {
             return Err(io::Error::other(PromptNotShown::NotSubmitted));
         }
@@ -534,7 +566,14 @@ impl ObservedSubmission {
         self.diagnostics.cleared(&cleared, self.clock.now());
         match cleared {
             Ok(ClearOutcome::AlreadyEmpty | ClearOutcome::Cleared) => {
-                Err(io::Error::other(PromptNotShown::NotSubmitted))
+                if matches!(
+                    PromptNotShown::classified(&timeout),
+                    Some(PromptNotShown::ClaudeTurnBusy)
+                ) {
+                    Err(timeout)
+                } else {
+                    Err(io::Error::other(PromptNotShown::NotSubmitted))
+                }
             }
             Ok(ClearOutcome::Accepted) => Err(Self::before_enter_failure(
                 timeout,
@@ -584,15 +623,15 @@ impl ObservedSubmission {
                     .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
                 match self.terminal.active_ansi_if_complete() {
                     Some(screen) if self.inspect.submission_available(&screen) => {
-                        if !self.inspect.paste_ready(&screen) {
+                        if self.provider_queues_input(&screen) {
+                            return Err(io::Error::other(PromptNotShown::ClaudeTurnBusy));
+                        } else if !self.inspect.paste_ready(&screen) {
                             self.observe("paste_processing");
                             None
                         } else {
                             self.check_deadline()?;
                             let key = self.inspect.editor_submit_key(&screen, &self.enter);
-                            if self.inspect.confirm_consumption()
-                                || self.inspect.retry_owned_enter()
-                            {
+                            if self.inspect.confirm_consumption() || self.inspect.waits_for_idle() {
                                 self.observe("enter_ownership");
                             }
                             self.enter_content_seq
@@ -664,8 +703,8 @@ impl ObservedSubmission {
         let entered_at = self.clock.now();
         #[cfg(test)]
         self.clock.entered();
-        if self.inspect.retry_owned_enter() {
-            return self.confirm_plain_submission(lease, entered_at);
+        if self.inspect.waits_for_idle() {
+            return self.confirm_claude_submission(lease, entered_at);
         }
         // Native Started/Steered callbacks settle delivery asynchronously.
         // An unchanged empty frame here is not proof of provider acceptance.

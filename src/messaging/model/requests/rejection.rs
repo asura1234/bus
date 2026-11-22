@@ -6,6 +6,33 @@ use super::{
 };
 
 impl BusState {
+    pub(crate) fn defer_claude_delivery_until_idle(&mut self, agent: super::super::AgentId) {
+        if let Some(agent) = self.agents.get_mut(&agent) {
+            agent.delivery_rejection = Some("agent_working".into());
+        }
+    }
+
+    pub(crate) fn close_withdrawn_claude_input(
+        &mut self,
+        id: RequestId,
+        steered: bool,
+        now_ms: u64,
+    ) -> Result<(), super::ModelError> {
+        let reason = crate::protocol::api::QUEUED_IN_TARGET_INPUT;
+        if steered {
+            // Undo its provisional group membership without closing the lead.
+            self.record_steering(id, SubmissionOutcome::ComposerBusy)?;
+            self.recover_idle_request(id, now_ms)?;
+            self.requests
+                .get_mut(&id)
+                .ok_or(super::ModelError::UnknownRequest(id))?
+                .failure_reason = Some(reason.into());
+        } else {
+            self.close_turn_with_reason(id, now_ms, reason.into())?;
+        }
+        Ok(())
+    }
+
     pub(super) fn record_queue_rejection(&mut self, id: RequestId, outcome: &SubmissionOutcome) {
         let SubmissionOutcome::DefinitelyRejected { message } = outcome else {
             return;

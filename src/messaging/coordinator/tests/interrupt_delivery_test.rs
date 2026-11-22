@@ -141,6 +141,77 @@ fn setup_busy_agent(provider: Provider, case: StopOutcomeCase) -> (Fixture, Requ
     (fixture, lead)
 }
 
+struct PendingClaudeSteer {
+    inner: ScriptedStopTransport,
+    code: &'static str,
+}
+
+impl Transport for PendingClaudeSteer {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        self.inner.request(method)
+    }
+
+    fn submit(&mut self, method: Method) -> crate::messaging::native::NativeCall {
+        use crate::messaging::native::NativeCall;
+        if !matches!(&method, Method::AgentPromptIfIdleAtGeneration(params) if params.steer) {
+            return NativeCall::Complete(Box::new(self.request(method)));
+        }
+        self.inner.native.lock().unwrap().push(method);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(Err(TransportError {
+                code: Some(self.code.into()),
+                message: "Claude still held the prompt".into(),
+                definitely_rejected: false,
+                timestamps: Default::default(),
+            }))
+            .unwrap();
+        NativeCall::Pending(receiver)
+    }
+}
+
+#[test]
+fn interrupt_send_settles_the_pending_claude_receipt_before_stopping_the_lead() {
+    use crate::protocol::api::{AGENT_CLAUDE_TURN_BUSY, QUEUED_IN_TARGET_INPUT};
+    for code in [AGENT_CLAUDE_TURN_BUSY, QUEUED_IN_TARGET_INPUT] {
+        let mut fixture = Fixture::new(Provider::ClaudeDs);
+        let lead = running(&mut fixture, "old work", "turn-1");
+        let next = fixture.send("hold for the next turn", false);
+        fixture.worker.transport = Box::new(PendingClaudeSteer {
+            inner: ScriptedStopTransport::new(
+                fixture.native.clone(),
+                [Ok(ResponseResult::Ok {})],
+                std::iter::empty(),
+            ),
+            code,
+        });
+        fixture.deliver();
+        assert_eq!(fixture.request(next).phase, RequestPhase::Submitting);
+        let params = json!({
+            "room": fixture.room.0.to_string(),
+            "to": ["builder"],
+            "text": "new work",
+        });
+        let response = send_msg(&mut fixture, params);
+        assert!(response.ok, "{response:?}");
+        assert_eq!(
+            fixture.request(lead).failure_reason.as_deref(),
+            Some("interrupted")
+        );
+        assert_eq!(fixture.request(next).group, None);
+        if code == AGENT_CLAUDE_TURN_BUSY {
+            assert_eq!(fixture.request(next).phase, RequestPhase::Queued);
+            assert!(fixture.request(next).failure_reason.is_none());
+        } else {
+            assert_eq!(fixture.request(next).phase, RequestPhase::Abandoned);
+            assert_eq!(
+                fixture.request(next).failure_reason.as_deref(),
+                Some(QUEUED_IN_TARGET_INPUT)
+            );
+        }
+    }
+}
+
 #[test]
 fn busy_claude_codex_and_agy_interrupt_deliver_without_waiting_for_turn_end() {
     for provider in [

@@ -116,6 +116,16 @@ mod tests;
 mod claude_rich_draft_tests;
 
 impl SubmissionInspector for PreservingComposer {
+    fn waits_for_idle(&self) -> bool {
+        self.owned.waits_for_idle()
+    }
+    fn provider_queues_input(&self, screen: &str, osc_title: &str, osc_progress: &str) -> bool {
+        self.owned
+            .provider_queues_input(screen, osc_title, osc_progress)
+    }
+    fn native_queue_visible(&self, screen: &str) -> bool {
+        self.owned.native_queue_visible(screen)
+    }
     fn retry_owned_enter(&self) -> bool {
         self.owned.retry_owned_enter()
     }

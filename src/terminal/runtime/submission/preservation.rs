@@ -55,6 +55,10 @@ impl ObservedSubmission {
         let pristine = self
             .startup_suggestion_open
             .load(std::sync::atomic::Ordering::Acquire);
+        if self.provider_queues_input(&screen) {
+            lease.restored();
+            return Err(io::Error::other(PromptNotShown::ClaudeTurnBusy));
+        }
         // A Codex picker can coexist with a complete developer draft. Refuse
         // before reserving its durable editor exchange: no handoff can run
         // while that picker owns the keys.
@@ -74,9 +78,8 @@ impl ObservedSubmission {
         let preservation = self
             .inspect
             .draft_preservation_since_launch(&screen, cursor, pristine);
-        let withdrawal_lease = (self.inspect.confirm_consumption()
-            || self.inspect.retry_owned_enter())
-        .then_some(lease);
+        let withdrawal_lease =
+            (self.inspect.confirm_consumption() || self.inspect.waits_for_idle()).then_some(lease);
         match initial {
             InputObservation::Empty if preservation.is_none() => {
                 if self.inspect.always_use_editor() {
@@ -302,11 +305,7 @@ impl ObservedSubmission {
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
-        let result = self.run(
-            text,
-            delay,
-            self.inspect.retry_owned_enter().then_some(lease),
-        );
+        let result = self.run(text, delay, self.inspect.waits_for_idle().then_some(lease));
         if result.is_ok() {
             if let Err(error) = self.wait_transfer(|| {
                 Ok(self

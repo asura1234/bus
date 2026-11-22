@@ -191,6 +191,8 @@ impl Worker {
             || self.native_submissions.contains_key(&agent.id)
             || self.submission_rechecks.contains(&agent.id)
             || self.withdrawn_at.contains_key(&agent.id)
+            || agent.status == RuntimeStatus::Working
+                && agent.delivery_rejection.as_deref() == Some("agent_working")
             || agent.provider_retry.as_ref().is_some_and(|hold| {
                 !hold.queued || now_ms < hold.retry_at_ms || agent.status != RuntimeStatus::Idle
             })

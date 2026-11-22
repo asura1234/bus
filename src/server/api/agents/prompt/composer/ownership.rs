@@ -76,6 +76,39 @@ impl OwnedComposer {
 }
 
 impl SubmissionInspector for OwnedComposer {
+    fn waits_for_idle(&self) -> bool {
+        self.kind == AgentKind::Claude
+    }
+
+    fn provider_queues_input(&self, screen: &str, osc_title: &str, osc_progress: &str) -> bool {
+        self.native_queue_visible(screen)
+            || crate::agents::manifest::detect_with_osc(
+                self.kind,
+                crate::agents::manifest::DetectionInput {
+                    screen: &super::super::plain_screen(screen),
+                    osc_title,
+                    osc_progress,
+                },
+            )
+            .visible_working
+    }
+
+    fn native_queue_visible(&self, screen: &str) -> bool {
+        let plain = super::super::plain_screen(screen);
+        let lines: Vec<_> = plain.lines().map(str::to_owned).collect();
+        crate::terminal::driver::editable_composer_region(&lines).is_some_and(|region| {
+            lines[region.start]
+                .trim()
+                .strip_prefix('❯')
+                .is_some_and(|row| row.trim() == "Press up to edit queued messages")
+                && screen.lines().nth(region.start).is_some_and(|row| {
+                    super::styled_chars(row)
+                        .iter()
+                        .any(|cell| cell.faint && cell.character == 'P')
+                })
+        })
+    }
+
     fn retry_owned_enter(&self) -> bool {
         self.kind == AgentKind::Claude
             && crate::agents::providers::claude_code::hooks::claude_lifted_images(&self.expected).0
