@@ -722,6 +722,28 @@ fn entire_sidebar_scrolls_together_and_all_agents_remain_reachable() {
 }
 
 #[test]
+fn sidebar_shows_launching_for_an_agent_queued_to_resume() {
+    let (mut ui, _, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            crate::messaging::model::AgentRuntimeIdentity {
+                launch_id: Some("saved-launch".into()),
+                session_id: Some("saved-session".into()),
+                terminal_id: Some("restored-terminal".into()),
+                pane_id: Some("restored-pane".into()),
+            },
+        )
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    set_sidebar_agent_status(&mut ui, agent, RuntimeStatus::Launching);
+
+    let _ = rendered_agent_status_colors(&mut ui, agent, "Launching");
+}
+
+#[test]
 fn sidebar_calls_an_unconfirmed_idle_agent_unavailable() {
     let (mut ui, _, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
