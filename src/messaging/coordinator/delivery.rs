@@ -206,7 +206,16 @@ impl Worker {
         {
             return None;
         }
-        if let Some((request, lead)) = self.state.next_steering(agent.id) {
+        // Claude's Enter only queues while its turn is live. Keep ownership
+        // in Bus so a stop of that turn cannot settle the queued message.
+        if agent.provider.uses_claude_harness() && agent.status == RuntimeStatus::Working {
+            return None;
+        }
+        if let Some((request, lead)) = self
+            .state
+            .next_steering(agent.id)
+            .filter(|_| !agent.provider.uses_claude_harness())
+        {
             return (agent.hook_setup_confirmed && !agent.session_binding_invalidated)
                 .then_some(DeliveryRoute::Steer(request, lead));
         }
@@ -214,7 +223,7 @@ impl Worker {
             .own_turns
             .get(&agent.id)
             .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE);
-        let steer = self.steer_into_unbound_turn(agent, own_turn);
+        let steer = self.steer_into_unbound_turn(agent);
         let interrupt_ready = agent.current_request.is_none()
             && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
             && self.state.queued_requests(agent.id).iter().any(|id| {
@@ -238,17 +247,16 @@ impl Worker {
 
     /// Whether the queue head can be typed into a turn Bus does not own yet.
     ///
-    /// Claude accepts that follow-up while its idle status still lags a turn
-    /// it started itself. Any other provider that can take input does the same
-    /// once it is Working: the native `steer` flag, not an interrupt. Grok's
-    /// composer refuses a follow-up for the whole turn, and AGY folds input
+    /// Providers that can take input while Working use the native `steer`
+    /// flag. Claude stays queued even if Idle still lags a turn it started.
+    /// Grok's composer refuses a follow-up for the whole turn, and AGY folds input
     /// arriving during its unbound first-message onboarding turn into a
     /// continuation (`invocationNum >= 1`) that emits no `Started` proof, so
     /// both providers stay queued on unbound turns. Queue-only work, a restart,
     /// a dialog, and an explicit interrupt stay queued too. A closed composer
     /// is the native submission window (a few hundred milliseconds); a definite
     /// refusal returns the head to the queue. This tick does not sleep.
-    fn steer_into_unbound_turn(&self, agent: &RoomAgent, own_turn: bool) -> bool {
+    fn steer_into_unbound_turn(&self, agent: &RoomAgent) -> bool {
         if agent.interrupt_pending || agent.provider_retry.is_some() || agent.dialog {
             return false;
         }
@@ -265,12 +273,9 @@ impl Worker {
         if !joinable || agent.current_request.is_some() {
             return false;
         }
-        let claude_lag = agent.provider.uses_claude_harness()
-            && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
-            && (agent.status == RuntimeStatus::Working || own_turn);
-        let busy = agent.status == RuntimeStatus::Working
-            && !matches!(agent.provider, Provider::Grok | Provider::Agy);
-        claude_lag || busy
+        agent.status == RuntimeStatus::Working
+            && !agent.provider.uses_claude_harness()
+            && !matches!(agent.provider, Provider::Grok | Provider::Agy)
     }
 
     /// Whether the queued head already waited for this agent.

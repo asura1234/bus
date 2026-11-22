@@ -1132,3 +1132,15 @@ idle then deliver, and an approval card without `--yolo`.
   endpoint, standalone fallback, queued delivery, and a fresh runtime on the
   same pane. Native-wire fixtures are regression evidence, not real-model
   acceptance; repeat first-launch acceptance on the final head separately.
+
+- **2026-11-22 — Claude native queue is not a consumed prompt:** While a
+  foreground turn is running, Claude Code 2.1.310 can show the new prompt above
+  the editable box with `ctrl+enter to send now`. The box reads
+  `Press up to edit queued messages`, and a submit hook can still report the
+  preceding turn's identity. Keep new Bus messages in the Bus queue until the
+  turn boundary, including after an interrupt. For idle text and images,
+  require a fresh empty composer or verified restoration of the developer's
+  stash after Enter. Test with a real claude-ds worker and a foreground command
+  with a release marker. Capture the pending rows before natural completion and
+  before and after a separate interrupt-mode send, alongside request status and
+  native timestamps.

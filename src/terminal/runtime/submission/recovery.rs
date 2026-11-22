@@ -94,9 +94,7 @@ impl ObservedSubmission {
             )
         };
         let completion = match lease {
-            Some(lease)
-                if self.inspect.confirm_consumption() || self.inspect.retry_owned_enter() =>
-            {
+            Some(lease) if self.inspect.confirm_consumption() || self.inspect.waits_for_idle() => {
                 lease.with_unedited(queue)
             }
             Some(lease) => lease.with_uninvalidated(queue),

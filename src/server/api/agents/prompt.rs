@@ -484,7 +484,7 @@ fn queue_prompt_submission(
     ),
     String,
 > {
-    let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent));
+    let span = tracing::info_span!(target: "bus::terminal::submission", "native_submission", api_request_id = %id, pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, provider = crate::agents::agent_label(expected_agent), target_status = ?agent.agent_status);
     let _entered = span.enter();
 
     #[cfg(unix)]

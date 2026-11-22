@@ -143,7 +143,8 @@ fn log_request(
         provider = ?provider, phase = ?phase, launch_id = ?launch_id,
         terminal_id = ?terminal_id, pane_id = ?pane_id, session_id = ?session_id,
         turn_id = ?turn_id, boundary = ?boundary, completed_at_ms = ?completed_at_ms,
-        status = ?status, group = ?group, start_bound, steered, uncertain_outcome,
+        status = ?status, attachment_count = request.prompt.files.len(),
+        group = ?group, start_bound, steered, uncertain_outcome,
         turn_ended_at_ms = ?turn_ended_at_ms, progress_at_ms = ?progress_at_ms,
         pending_final_bytes = ?pending_final_bytes, elapsed_ms, lead_id,
         "Bus delivery"

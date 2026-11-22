@@ -143,7 +143,11 @@ impl Diagnostics {
                 .enter_sent_at_ms
                 .get_or_insert(crate::utils::time::now_ms());
         });
-        tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.enter", attempt = self.enter_attempts.get(), key = ?bytes, elapsed_ms = self.elapsed(now));
+        let paste_to_enter_ms = self
+            .paste_at
+            .get()
+            .map(|at| now.saturating_duration_since(at).as_millis() as u64);
+        tracing::debug!(target: "bus::terminal::submission", event = "bus.terminal.submission.enter", attempt = self.enter_attempts.get(), key = ?bytes, paste_to_enter_ms, elapsed_ms = self.elapsed(now));
     }
 
     pub(super) fn entered(&self, result: &io::Result<()>, now: Instant) {
