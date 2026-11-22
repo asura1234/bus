@@ -94,13 +94,18 @@ impl SubmissionInspector for OwnedComposer {
     }
 
     fn native_queue_visible(&self, screen: &str) -> bool {
-        let screen = super::super::plain_screen(screen);
-        let lines: Vec<_> = screen.lines().map(str::to_owned).collect();
+        let plain = super::super::plain_screen(screen);
+        let lines: Vec<_> = plain.lines().map(str::to_owned).collect();
         crate::terminal::driver::editable_composer_region(&lines).is_some_and(|region| {
             lines[region.start]
                 .trim()
                 .strip_prefix('❯')
                 .is_some_and(|row| row.trim() == "Press up to edit queued messages")
+                && screen.lines().nth(region.start).is_some_and(|row| {
+                    super::styled_chars(row)
+                        .iter()
+                        .any(|cell| cell.faint && cell.character == 'P')
+                })
         })
     }
 

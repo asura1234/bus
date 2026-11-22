@@ -58,7 +58,7 @@ impl ObservedSubmission {
                 if observation == InputObservation::Pending || queued {
                     self.diagnose_refusal("post_enter_retained");
                 }
-                if !queued && observation == InputObservation::Pending {
+                if fresh && !queued && observation == InputObservation::Pending {
                     if let Some(lease) = lease.filter(|lease| !lease.edited()) {
                         self.deadline
                             .set((self.clock.now() + self.withdraw_grace).min(self.hard_deadline));
@@ -68,10 +68,10 @@ impl ObservedSubmission {
                             tracing::info!(
                                 event = "bus.terminal.submission.deferred",
                                 reason = "queued_in_target_input",
-                                "Withdrew the unsent Claude draft so Bus can retry it"
+                                "Withdrew the unsent Claude draft before closing the request"
                             );
                             lease.restored();
-                            return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                            return Err(io::Error::other(PromptNotShown::QueuedInputWithdrawn));
                         }
                     }
                 }

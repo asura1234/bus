@@ -1,6 +1,6 @@
 //! Native writes are independent per recipient; all model mutations stay on the coordinator.
 use super::delivery::submission::{native_response_timestamps, record_native_timestamps};
-use super::{BusState, RequestId, RoomAgent, Worker};
+use super::{diagnostics, BusState, RequestId, RoomAgent, Worker};
 use crate::messaging::native::{NativeCall, NativeResult, TransportError};
 use crate::protocol::api::schema::Method;
 use std::{sync::mpsc, time::Instant};
@@ -66,6 +66,21 @@ impl Worker {
     /// sees every uncertain submission durably owned and must never replay it.
     pub(super) fn finish_native_submissions(&mut self, wait: bool) {
         self.finish_native_submissions_matching(wait, |_, _| true);
+    }
+
+    /// An interrupt must see the receipt before it closes a provisional
+    /// group member. Claude may have refused or withdrawn the input.
+    pub(in crate::messaging::coordinator) fn finish_claude_submissions_before_interrupt(
+        &mut self,
+        delivery: crate::messaging::model::SendMode,
+        recipients: &super::AgentRecipients,
+    ) {
+        if delivery == crate::messaging::model::SendMode::Interrupt {
+            self.finish_native_submissions_matching(true, |_, pending| {
+                pending.agent.provider.uses_claude_harness()
+                    && recipients.contains(&pending.agent.id)
+            });
+        }
     }
 
     /// A native write already admitted before deletion cannot be recalled.
@@ -162,7 +177,28 @@ impl Worker {
             return Ok(());
         }
         let timestamps = native_response_timestamps(&response);
+        let native_code = response
+            .as_ref()
+            .err()
+            .and_then(|error| error.code.as_deref());
+        if native_code == Some(crate::protocol::api::QUEUED_IN_TARGET_INPUT) {
+            let mut state = self.state.clone();
+            state
+                .close_withdrawn_claude_input(request, steered, super::io::now_ms())
+                .map_err(|error| error.to_string())?;
+            record_native_timestamps(&mut state, request, timestamps)?;
+            self.save(state)?;
+            diagnostics::request(
+                &self.state,
+                request,
+                "bus.delivery.result",
+                crate::protocol::api::QUEUED_IN_TARGET_INPUT,
+            );
+            return Ok(());
+        }
+        let claude_turn_busy = native_code == Some(crate::protocol::api::AGENT_CLAUDE_TURN_BUSY);
         let outcome = match response {
+            Err(_) if claude_turn_busy => super::SubmissionOutcome::ComposerBusy,
             Err(error)
                 if steered
                     && !error.definitely_rejected
@@ -185,6 +221,9 @@ impl Worker {
             state.record_submission(request, outcome.clone())
         }
         .map_err(|error| error.to_string())?;
+        if claude_turn_busy {
+            state.defer_claude_delivery_until_idle(agent.id);
+        }
         self.save(state)?;
         self.note_withdrawn(agent, request, &outcome);
         Ok(())

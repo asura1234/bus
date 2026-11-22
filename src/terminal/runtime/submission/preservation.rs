@@ -57,7 +57,7 @@ impl ObservedSubmission {
             .load(std::sync::atomic::Ordering::Acquire);
         if self.provider_queues_input(&screen) {
             lease.restored();
-            return Err(io::Error::other(PromptNotShown::ComposerBusy));
+            return Err(io::Error::other(PromptNotShown::ClaudeTurnBusy));
         }
         // A Codex picker can coexist with a complete developer draft. Refuse
         // before reserving its durable editor exchange: no handoff can run

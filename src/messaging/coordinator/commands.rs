@@ -150,6 +150,7 @@ impl Worker {
                 .map_err(|e| e.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
+        self.finish_claude_submissions_before_interrupt(delivery, &draft.recipient_ids);
         let now = crate::messaging::storage::io::now_ms();
         let mut state = self.state.clone();
         let queued = delivery.queue_only();

@@ -193,6 +193,7 @@ impl Worker {
                 return Err(error);
             }
         }
+        self.finish_claude_submissions_before_interrupt(delivery, &recipients);
         let mut state = self.state.clone();
         let now = crate::messaging::storage::io::now_ms();
         let ids = state

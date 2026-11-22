@@ -199,7 +199,7 @@ async fn focused_working_claude_defers_without_touching_the_developer_draft() {
         params.text = "from bus\n\"/tmp/large.png\"".into();
     }
     let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
-    assert!(response.contains("agent_composer_busy"), "{response}");
+    assert!(response.contains("agent_claude_turn_busy"), "{response}");
     assert!(writes.try_recv().is_err(), "must neither stash nor paste");
     assert!(app
         .lookup_runtime_sender(0, pane)
@@ -219,7 +219,11 @@ async fn focused_claude_image_waits_for_the_native_queue_to_empty() {
     redraw(&app, AgentKind::Claude, "[Image #7]from bus");
     assert_eq!(step(&mut writes, &response, "submit").await.as_ref(), b"\r");
     clock(&app).wait_for_enters(1);
-    redraw(&app, AgentKind::Claude, "Press up to edit queued messages");
+    redraw(
+        &app,
+        AgentKind::Claude,
+        "\x1b[2mPress up to edit queued messages\x1b[22m",
+    );
     let generation = clock(&app).advance(Duration::from_millis(300));
     clock(&app).wait_for_submission_check(generation);
     assert!(response.try_recv().is_err(), "queue is still unconsumed");

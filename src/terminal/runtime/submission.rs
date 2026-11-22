@@ -37,13 +37,14 @@ pub(crate) enum InputObservation {
 #[path = "tests/submission_test.rs"]
 pub(crate) mod tests;
 
-/// No Enter was sent for this delivery. Input was refused before pasting or
-/// the paste was withdrawn, so this is a definite non-delivery, safe to retry.
+/// Definite non-delivery. Input was refused or the unsent paste was withdrawn.
 #[derive(Debug)]
 pub(crate) enum PromptNotShown {
     NotSubmitted,
     InputOccupied,
     ComposerBusy,
+    ClaudeTurnBusy,
+    QueuedInputWithdrawn,
 }
 
 impl std::fmt::Display for PromptNotShown {
@@ -51,6 +52,12 @@ impl std::fmt::Display for PromptNotShown {
         if matches!(self, Self::ComposerBusy) {
             return formatter
                 .write_str("Waiting for the agent's composer; existing input is preserved");
+        }
+        if matches!(self, Self::ClaudeTurnBusy) {
+            return formatter.write_str("Claude is still running a turn; prompt was not sent");
+        }
+        if matches!(self, Self::QueuedInputWithdrawn) {
+            return formatter.write_str("Claude left the prompt in its input; Bus withdrew it");
         }
         formatter.write_str(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE)?;
         if matches!(self, Self::InputOccupied) {
@@ -63,16 +70,15 @@ impl std::fmt::Display for PromptNotShown {
 impl std::error::Error for PromptNotShown {}
 
 impl PromptNotShown {
+    pub(crate) fn classified(error: &io::Error) -> Option<&Self> {
+        error.get_ref().and_then(|inner| inner.downcast_ref())
+    }
+
     pub(crate) fn composer_busy(error: &io::Error) -> bool {
-        error
-            .get_ref()
-            .and_then(|inner| inner.downcast_ref::<Self>())
-            .is_some_and(|error| matches!(error, Self::ComposerBusy))
+        matches!(Self::classified(error), Some(Self::ComposerBusy))
     }
     pub(crate) fn is(error: &io::Error) -> bool {
-        error
-            .get_ref()
-            .is_some_and(|inner| inner.downcast_ref::<Self>().is_some())
+        Self::classified(error).is_some()
     }
 }
 
@@ -500,7 +506,7 @@ impl ObservedSubmission {
             .active_ansi_if_complete()
             .is_some_and(|screen| self.provider_queues_input(&screen))
         {
-            return Err(io::Error::other(PromptNotShown::ComposerBusy));
+            return Err(io::Error::other(PromptNotShown::ClaudeTurnBusy));
         }
         if self.observe("paste_preflight") != InputObservation::Empty {
             return Err(io::Error::other(PromptNotShown::NotSubmitted));
@@ -560,7 +566,10 @@ impl ObservedSubmission {
         self.diagnostics.cleared(&cleared, self.clock.now());
         match cleared {
             Ok(ClearOutcome::AlreadyEmpty | ClearOutcome::Cleared) => {
-                if PromptNotShown::composer_busy(&timeout) {
+                if matches!(
+                    PromptNotShown::classified(&timeout),
+                    Some(PromptNotShown::ClaudeTurnBusy)
+                ) {
                     Err(timeout)
                 } else {
                     Err(io::Error::other(PromptNotShown::NotSubmitted))
@@ -615,7 +624,7 @@ impl ObservedSubmission {
                 match self.terminal.active_ansi_if_complete() {
                     Some(screen) if self.inspect.submission_available(&screen) => {
                         if self.provider_queues_input(&screen) {
-                            return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                            return Err(io::Error::other(PromptNotShown::ClaudeTurnBusy));
                         } else if !self.inspect.paste_ready(&screen) {
                             self.observe("paste_processing");
                             None
