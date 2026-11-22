@@ -1,12 +1,19 @@
 //! Pin the visible draft and model only Bus's queued line-editing keys.
 use super::{input, AgentKind, InputObservation};
 use crate::terminal::runtime::SubmissionInspector;
-use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
+};
 
 pub(super) struct OwnedComposer {
     kind: AgentKind,
     expected: String,
     state: Mutex<Owned>,
+    submit_echoes: AtomicUsize,
 }
 
 struct Owned {
@@ -63,6 +70,7 @@ impl OwnedComposer {
         Self {
             kind,
             expected,
+            submit_echoes: AtomicUsize::new(0),
             state: Mutex::new(Owned {
                 cursor: text.len(),
                 text,
@@ -72,6 +80,32 @@ impl OwnedComposer {
                 progress: 0,
             }),
         }
+    }
+
+    fn prompt_echoes(&self, screen: &str) -> usize {
+        let plain = super::super::plain_screen(screen);
+        let rows: Vec<_> = plain.lines().map(str::to_owned).collect();
+        let end = crate::terminal::driver::editable_composer_region(&rows)
+            .map_or(rows.len(), |region| region.start);
+        let expected: Vec<_> = self.expected.lines().map(str::trim_end).collect();
+        if expected.is_empty() || expected[0].is_empty() {
+            return 0;
+        }
+        rows[..end]
+            .windows(expected.len())
+            .filter(|lines| {
+                let row = lines[0].trim_end();
+                let first = row.strip_prefix("> ").or_else(|| row.strip_prefix("❯ "));
+                first == Some(expected[0])
+                    && lines[1..]
+                        .iter()
+                        .zip(&expected[1..])
+                        .all(|(row, expected)| {
+                            let text = row.strip_prefix("  ").unwrap_or(row).trim_end();
+                            text == *expected
+                        })
+            })
+            .count()
     }
 }
 
@@ -107,6 +141,24 @@ impl SubmissionInspector for OwnedComposer {
                         .any(|cell| cell.faint && cell.character == 'P')
                 })
         })
+    }
+
+    fn record_submit_frame(&self, screen: &str) {
+        if self.kind == AgentKind::Claude {
+            self.submit_echoes
+                .store(self.prompt_echoes(screen), Ordering::Relaxed);
+        }
+    }
+
+    fn submitted_prompt_visible(&self, screen: &str) -> bool {
+        // A native queued prompt can echo above the composer like a transcript
+        // entry. The send-now hint marks that screen as unconsumed.
+        self.kind == AgentKind::Claude
+            && !super::super::plain_screen(screen).lines().any(|row| {
+                row.split('·')
+                    .any(|part| part.trim() == "ctrl+enter to send now")
+            })
+            && self.prompt_echoes(screen) > self.submit_echoes.load(Ordering::Relaxed)
     }
 
     fn retry_owned_enter(&self) -> bool {
