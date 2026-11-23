@@ -17,7 +17,7 @@ pub(crate) use shell_launch::LaunchTestBarrier;
 mod shutdown;
 mod submission;
 #[cfg(test)]
-pub(crate) use submission::copy_recovery_test_hooks;
+pub(crate) use submission::{copy_recovery_test_hooks, editor_fallback_hook};
 mod submission_clock;
 #[cfg(test)]
 pub(crate) use submission::tests::codex_clipped_composer;

@@ -4,6 +4,9 @@ mod copy;
 #[cfg(test)]
 pub(crate) use copy::test_hooks as copy_recovery_test_hooks;
 mod diagnostics;
+#[cfg(test)]
+#[path = "tests/editor_fallback_hook_test.rs"]
+pub(crate) mod editor_fallback_hook;
 mod plain;
 mod preservation;
 mod recovery;

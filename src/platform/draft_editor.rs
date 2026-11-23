@@ -18,6 +18,7 @@ const FALLBACK: &str = "BUS_DRAFT_EDITOR_FALLBACK";
 const REQUEST: &str = "request.json";
 const ACK: &str = "ack.json";
 const PRESERVED: &str = "preserved.json";
+const LOCK: &str = "exchange.lock";
 pub(crate) const MAX_BYTES: u64 = 2 * 1024 * 1024;
 // JSON may encode a single input byte as six bytes (for example, \u0000).
 const MAX_RECORD_BYTES: u64 = MAX_BYTES * 6 + 4096;
@@ -54,11 +55,18 @@ struct PreservedDraft {
     attempt: String,
 }
 
+pub(crate) enum SwapCancellation {
+    Contended,
+    Preserved,
+    Cancelled,
+}
+
 pub(crate) struct Exchange {
     dir: PathBuf,
     recovery: PathBuf,
     marker: String,
     request: Mutex<Request>,
+    defer_cleanup: bool,
 }
 
 pub(crate) fn directory(pane: &str) -> PathBuf {
@@ -190,6 +198,7 @@ impl Exchange {
             recovery,
             marker: marker(&saved.token),
             request: Mutex::new(request),
+            defer_cleanup: false,
         })
     }
 
@@ -267,6 +276,7 @@ impl Exchange {
             marker: marker(&token),
             dir,
             request: Mutex::new(request),
+            defer_cleanup: false,
         })
     }
 
@@ -336,6 +346,61 @@ impl Exchange {
         acknowledgement(&self.dir, &request)
     }
 
+    /// The callback holds this lock from reading the request through publishing
+    /// the backup and replacing the editor file. Only a cancelled swap permits
+    /// a screen snapshot: an installed swap can render Bus's payload as a draft.
+    pub(crate) fn try_cancel_swap(&mut self) -> io::Result<SwapCancellation> {
+        let _lock = match crate::platform::fs::lock_file(&self.dir.join(LOCK)) {
+            Ok(lock) => lock,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                return Ok(SwapCancellation::Contended)
+            }
+            Err(error) => return Err(error),
+        };
+        let current = self
+            .request
+            .get_mut()
+            .map_err(|_| io::Error::other("Draft exchange lock poisoned"))?;
+        if read_request(&self.dir)?.as_ref() != Some(current) {
+            return Err(io::Error::other("Draft exchange ownership changed"));
+        }
+        if self.dir.join(PRESERVED).try_exists()? {
+            return Ok(SwapCancellation::Preserved);
+        }
+        let cancelled = Request {
+            operation: Operation::Cancelled,
+            verify_text: None,
+            ..current.clone()
+        };
+        if has_ack(&self.dir, current) {
+            // A completed callback with no preserved record refused the swap.
+            fs::remove_file(self.dir.join(REQUEST))?;
+        } else {
+            write_json(&self.dir.join(REQUEST), &cancelled)?;
+        }
+        *current = cancelled;
+        Ok(SwapCancellation::Cancelled)
+    }
+
+    pub(crate) fn permits_copy_fallback(dir: &Path) -> bool {
+        let _lock = match crate::platform::fs::lock_file(&dir.join(LOCK)) {
+            Ok(lock) => lock,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return matches!(dir.try_exists(), Ok(false));
+            }
+            Err(_) => return false,
+        };
+        matches!(dir.join(PRESERVED).try_exists(), Ok(false))
+            && read_request(dir)
+                .is_ok_and(|request| request.is_none_or(|r| r.operation == Operation::Cancelled))
+    }
+
+    pub(crate) fn defer_cleanup(&mut self) {
+        // A callback can still own the file lock at the caller's deadline.
+        // Leave the expiring request and any recovery record for that callback.
+        self.defer_cleanup = true;
+    }
+
     pub(crate) fn save_recovery(&self, text: &str) -> io::Result<()> {
         let _lock = lock(&self.dir)?;
         let request = self
@@ -385,6 +450,14 @@ impl Exchange {
 
 impl Drop for Exchange {
     fn drop(&mut self) {
+        if self.defer_cleanup
+            || self
+                .request
+                .get_mut()
+                .is_ok_and(|current| current.operation == Operation::Cancelled)
+        {
+            return;
+        }
         let Ok(_lock) = lock(&self.dir) else { return };
         let Ok(current) = self.request.lock() else {
             return;
@@ -445,7 +518,7 @@ fn private_dir(path: &Path) -> io::Result<()> {
 }
 
 fn lock(dir: &Path) -> io::Result<File> {
-    let path = dir.join("exchange.lock");
+    let path = dir.join(LOCK);
     let file = match crate::platform::create_private_state_file(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {

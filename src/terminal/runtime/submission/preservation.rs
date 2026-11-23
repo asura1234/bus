@@ -1,6 +1,6 @@
 //! Transfer a developer draft only while pane input is exclusively reserved.
 use super::{InputObservation, ObservedSubmission, PromptNotShown};
-use crate::platform::draft_editor::Exchange;
+use crate::platform::draft_editor::{Exchange, SwapCancellation};
 use crate::protocol::api::submission::{confirmation_budget, CLEAR_KEY_DELAY, WITHDRAW_GRACE};
 use bytes::Bytes;
 use std::{io, path::PathBuf, time::Duration};
@@ -634,27 +634,30 @@ impl ObservedSubmission {
             .inspect
             .editor_submission()
             .ok_or_else(|| io::Error::other("Native editor input is unavailable"))?;
-        let exchange = match Exchange::begin_preserving(
+        let optional_editor = !self.inspect.always_use_editor();
+        let mut exchange = match Exchange::begin_preserving(
             directory.clone(),
             self.clock.remaining(self.hard_deadline),
         ) {
             Ok(exchange) => exchange,
             Err(error) => {
-                if !self.inspect.always_use_editor() {
+                if optional_editor && Exchange::permits_copy_fallback(&directory) {
                     if let Some(fallback) =
                         self.fallback_copy_after_handoff_failure(text, delay, lease)
                     {
                         return fallback;
                     }
+                    lease.restored();
+                } else if !optional_editor {
+                    lease.restored();
                 }
-                lease.restored();
                 tracing::warn!(event = "bus.draft.exchange_wait", directory = %directory.display(), %error, "Draft transfer is unavailable; delivery remains queued");
                 return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
         };
         if let Err(error) = exchange.request_swap(&editor.text) {
             drop(exchange);
-            if !self.inspect.always_use_editor() {
+            if optional_editor && Exchange::permits_copy_fallback(&directory) {
                 if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease)
                 {
                     return fallback;
@@ -663,33 +666,50 @@ impl ObservedSubmission {
             lease.restored();
             return Err(error);
         }
-        let handoff_deadline = if self.inspect.always_use_editor() {
-            self.hard_deadline
-        } else {
+        let handoff_deadline = if optional_editor {
             self.clock.now() + FALLBACK_HANDOFF_BUDGET
+        } else {
+            self.hard_deadline
         };
+        let mut cancelled = false;
         let captured = self
             .swap_key(lease, key.clone(), false)
             .and_then(|()| self.wait_transfer_until(handoff_deadline, || exchange.acknowledged()))
-            .and_then(|()| self.remove_marker(&exchange, &backspace, lease));
-        if let Err(error) = captured {
-            let has_preserved = Exchange::has_preserved_draft(exchange.path());
-            if !self.inspect.always_use_editor() && !has_preserved {
-                let _ = exchange.remove_recovery();
-                let path = exchange.path().to_owned();
-                drop(exchange);
-                if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease)
-                {
-                    return fallback;
+            .or_else(|error| {
+                if !optional_editor {
+                    return Err(error);
                 }
-                lease.restored();
-                tracing::error!(event = "bus.draft.recovery_required", directory = %path.display(), %error, "Draft restoration was not proven; recoverable draft retained");
-                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                #[cfg(test)]
+                super::editor_fallback_hook::pause(exchange.path());
+                self.wait_transfer(|| match exchange.try_cancel_swap()? {
+                    SwapCancellation::Contended => Ok(false),
+                    SwapCancellation::Preserved => exchange.acknowledged(),
+                    SwapCancellation::Cancelled => {
+                        cancelled = true;
+                        Ok(true)
+                    }
+                })
+            });
+        if cancelled {
+            drop(exchange);
+            if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease) {
+                return fallback;
             }
-            if !has_preserved {
+            lease.restored();
+            return Err(io::Error::other(PromptNotShown::ComposerBusy));
+        }
+        if let Err(error) = captured.and_then(|()| self.remove_marker(&exchange, &backspace, lease))
+        {
+            if optional_editor {
+                exchange.defer_cleanup();
+            } else if !Exchange::has_preserved_draft(exchange.path()) {
                 lease.restored();
             }
-            self.recovery_log(&exchange, &error);
+            if exchange.recovery().exists() {
+                self.recovery_log(&exchange, &error);
+            } else {
+                tracing::warn!(event = "bus.draft.exchange_wait", directory = %directory.display(), %error, "Draft editor handoff is unresolved; delivery remains queued");
+            }
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.submit_editor_attempt(
