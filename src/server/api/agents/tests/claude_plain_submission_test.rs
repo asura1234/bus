@@ -301,8 +301,53 @@ async fn claude_plain_paste_releases_draft_keys_when_a_fresh_prompt_echo_hides_t
     assert!(writes.try_recv().is_err());
 }
 
+struct IsolatedDraftEnv {
+    _env: crate::utils::test_env::EnvLock,
+    root: std::path::PathBuf,
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+impl IsolatedDraftEnv {
+    fn new() -> Self {
+        let env = crate::utils::test_env::env_lock();
+        let root = crate::utils::test_temp::unique_temp_path("claude-plain-draft");
+        std::fs::create_dir_all(&root).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let mut previous = Vec::new();
+        for (key, value) in [
+            ("BUS_DATA_DIR", root.clone()),
+            ("CLAUDE_CONFIG_DIR", root.join("claude")),
+        ] {
+            previous.push((key, std::env::var_os(key)));
+            std::env::set_var(key, value);
+        }
+        Self {
+            _env: env,
+            root,
+            previous,
+        }
+    }
+}
+
+impl Drop for IsolatedDraftEnv {
+    fn drop(&mut self) {
+        for (key, value) in self.previous.drain(..) {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 #[tokio::test]
 async fn claude_interrupt_delivery_discards_returned_aborted_payload_without_stashing() {
+    let _env = IsolatedDraftEnv::new();
     let aborted =
         "[Bus message 6 from you (room 1)]\nWrite a detailed glossary directly. Do NOT use tools.";
     let (mut app, mut method, mut writes) = provider_fixture(
@@ -366,6 +411,7 @@ async fn claude_interrupt_delivery_discards_returned_aborted_payload_without_sta
 
 #[tokio::test]
 async fn claude_interrupt_delivery_still_preserves_unrelated_typed_draft() {
+    let _env = IsolatedDraftEnv::new();
     let aborted = "[Bus message 6 from you (room 1)]\nM2_STEER_MARKER_A report alpha";
     let draft = "aa  developer draft";
     let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, draft);
@@ -413,10 +459,20 @@ async fn claude_interrupt_delivery_still_preserves_unrelated_typed_draft() {
         reply["result"].get("discarded_aborted_payload").is_none(),
         "real draft was preserved, not discarded: {reply}"
     );
+    assert!(
+        writes.try_recv().is_err(),
+        "native stash restore needs no extra writes after Enter"
+    );
+    let final_screen = app.lookup_runtime_sender(0, pane).unwrap().visible_text();
+    assert!(
+        final_screen.contains(draft),
+        "unrelated developer draft must remain restored in the composer: {final_screen:?}"
+    );
 }
 
 #[tokio::test]
 async fn claude_working_steer_still_refuses_with_turn_busy_and_leaves_composer_empty() {
+    let _env = IsolatedDraftEnv::new();
     let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     app.lookup_runtime_sender(0, pane)
