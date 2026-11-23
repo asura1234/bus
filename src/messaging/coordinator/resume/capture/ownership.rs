@@ -6,10 +6,39 @@ use crate::agents::providers::{
     hook_json::{read_resume_json, HookContext},
     spool::Manifest,
 };
-use crate::messaging::{identity, model::RoomAgent};
+use crate::messaging::{
+    identity,
+    model::{AgentId, BusState, RoomAgent},
+};
+
+pub(crate) const RETIRED_OWNER: &str = "Bus resume owner was deleted";
+
+fn missing_owner_reason(
+    state: &BusState,
+    facts: &NativeResumeFacts,
+    fallback: &'static str,
+) -> &'static str {
+    let retired_provider = || {
+        let name = facts.agent_name.as_deref()?;
+        let (_, id) = name.strip_prefix("bus-r")?.split_once("-a")?;
+        let id = AgentId(id.parse().ok()?);
+        let retired = state.retired_agent(id)?;
+        (state.agent(id).is_none() && name == identity::managed_name(retired.room, id))
+            .then_some(retired.provider?)
+    };
+    if retired_provider()
+        .zip(facts.managed_agent.as_deref())
+        .is_some_and(|(provider, managed)| {
+            crate::agents::same_detected_agent(identity::provider_kind(provider).label(), managed)
+        })
+    {
+        return RETIRED_OWNER;
+    }
+    fallback
+}
 
 pub(super) fn unstarted_owner<'a>(
-    state: &'a crate::messaging::model::BusState,
+    state: &'a BusState,
     facts: &NativeResumeFacts,
 ) -> Result<&'a RoomAgent, String> {
     let mut owners = state.agents().filter(|agent| {
@@ -19,9 +48,13 @@ pub(super) fn unstarted_owner<'a>(
                 == Some(identity::provider_kind(agent.provider).label())
             && super::super::is_unstarted(state, agent)
     });
-    let agent = owners
-        .next()
-        .ok_or("Bus resume has no matching unstarted provider owner")?;
+    let agent = owners.next().ok_or_else(|| {
+        missing_owner_reason(
+            state,
+            facts,
+            "Bus resume has no matching unstarted provider owner",
+        )
+    })?;
     if owners.next().is_some() {
         return Err("Bus resume unstarted ownership is ambiguous".into());
     }
@@ -72,7 +105,7 @@ pub(super) fn verified_capture(
 }
 
 pub(super) fn resume_owner<'a>(
-    state: &'a crate::messaging::model::BusState,
+    state: &'a BusState,
     facts: &NativeResumeFacts,
     session: &crate::agents::resume::catalog::PersistedAgentSession,
 ) -> Result<
@@ -110,9 +143,9 @@ pub(super) fn resume_owner<'a>(
                     && facts.agent_name.as_deref()
                         == Some(identity::managed_name(agent.room_id, agent.id).as_str())
             });
-            let agent = named
-                .next()
-                .ok_or("Bus resume has no matching saved owner")?;
+            let agent = named.next().ok_or_else(|| {
+                missing_owner_reason(state, facts, "Bus resume has no matching saved owner")
+            })?;
             let bound = agent
                 .runtime_identity
                 .session_id

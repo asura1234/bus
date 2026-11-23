@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct RetiredAgent {
-    pub(super) room: RoomId,
+    pub(crate) room: RoomId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) orchestrates: Option<RoomId>,
     pub(crate) name: String,

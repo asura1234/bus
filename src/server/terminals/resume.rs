@@ -526,8 +526,13 @@ impl App {
         terminal_id: &crate::utils::ids::TerminalId,
         reason: &str,
     ) -> bool {
-        tracing::warn!(event = "bus.resume.suspended", pane = pane_id.raw(), terminal = %terminal_id, %reason,
-            "Bus conversation was kept; resume requires inspection before restarting");
+        if reason == resume::RETIRED_OWNER {
+            tracing::info!(event = "bus.resume.retired_owner", pane = pane_id.raw(), terminal = %terminal_id,
+                "Bus conversation was kept after its agent was deleted");
+        } else {
+            tracing::warn!(event = "bus.resume.suspended", pane = pane_id.raw(), terminal = %terminal_id, %reason,
+                "Bus conversation was kept; resume requires inspection before restarting");
+        }
         if let Some(terminal) = self.state.terminals.get_mut(terminal_id) {
             // Keep durable name/session metadata for recovery on a later
             // restart, but do not retry disk reads on every layout tick.
@@ -775,6 +780,14 @@ fn native_resume_is_empty_for_test(
         }
         None => Ok(true),
     }
+}
+
+#[cfg(all(test, unix))]
+fn kept_resume_fixture_for_test(
+    root: &std::path::Path,
+    deleted: bool,
+) -> (String, NativeResumeContext) {
+    resume::kept_owner_fixture::save(root, deleted)
 }
 
 #[cfg(test)]
