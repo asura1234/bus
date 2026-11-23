@@ -2474,17 +2474,21 @@ fn composer_mode_dropdown_keeps_controls_separate_at_narrow_width() {
     assert_eq!(recipients[0]["text"], "@", "{frame}");
     assert_eq!(mode["row"], recipients[0]["row"], "{frame}");
     let row = mode["row"].to_string();
-    let col = mode["col"].to_string();
-    let toolbar = session.ok(&["cells", &row, &col, "7", "1"]);
+    let border_col = find("composer")["col"].as_u64().unwrap() - 1;
+    let toolbar = session.ok(&["cells", &row, &border_col.to_string(), "12", "1"]);
     let cells = toolbar["cells"].as_array().unwrap();
     let symbols: String = cells
         .iter()
         .map(|cell| cell["symbol"].as_str().unwrap())
         .collect();
-    assert_eq!(symbols, "▼  +  @", "{toolbar}");
+    assert_eq!(symbols, "│ ▼  +  @  │", "{toolbar}");
+    assert_eq!(mode["col"], cells[2]["col"], "{frame}");
+    assert_eq!(files["col"], cells[5]["col"], "{frame}");
+    assert_eq!(recipients[0]["col"], cells[8]["col"], "{frame}");
+    assert_eq!(recipients[1]["col"], cells[11]["col"], "{frame}");
     for field in ["fg", "bg", "attrs"] {
-        assert_eq!(cells[0][field], cells[3][field], "{toolbar}");
-        assert_eq!(cells[0][field], cells[6][field], "{toolbar}");
+        assert_eq!(cells[2][field], cells[5][field], "{toolbar}");
+        assert_eq!(cells[2][field], cells[8][field], "{toolbar}");
     }
     assert_eq!(right(recipients[0]), recipients[1]["col"], "{frame}");
     assert!(

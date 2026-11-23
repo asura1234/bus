@@ -24,6 +24,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 const SEARCH_MATCH: Color = Color::Rgb(150, 125, 60);
 const SEARCH_CURRENT: Color = Color::Rgb(240, 190, 70);
 
+/// One blank cell between the composer border and the toolbar controls.
+const TOOLBAR_LEFT_MARGIN: u16 = 1;
+
 /// Geometry reserved before painting the room's history and draft.
 #[derive(Clone, Copy)]
 struct RoomLayout {
@@ -52,7 +55,7 @@ impl BusUi {
         };
         let width = main.width.saturating_sub(4);
         let title = self.composer_title(room.id);
-        let recipients = self.recipient_layout(local, width);
+        let recipients = self.recipient_layout(local, width.saturating_sub(TOOLBAR_LEFT_MARGIN));
         let layout = self.composer_layout(view, main, local, &recipients);
         self.recipient_scroll = self.recipient_scroll.min(view.recipient_max_scroll);
         let filters = self.effective_history_filters(room.id).unwrap_or_default();
@@ -245,7 +248,13 @@ impl BusUi {
             1,
         )
         .intersection(main);
-        view.recipient_bar = Rect::new(x, composer_y, width, bar_height);
+        let toolbar_margin = TOOLBAR_LEFT_MARGIN.min(width);
+        view.recipient_bar = Rect::new(
+            x + toolbar_margin,
+            composer_y,
+            width - toolbar_margin,
+            bar_height,
+        );
         RoomLayout {
             x,
             width,
