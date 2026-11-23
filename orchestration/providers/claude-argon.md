@@ -15,13 +15,21 @@ composer, permissions, callbacks, and resume.
 
 ## Gateway and wrapper
 
-Claude Code speaks the Anthropic Messages API to Magpie, which sends OpenAI Chat
-Completions requests to the approved TGW upstream. Set up the `tgw-argon` entry
-in `~/.config/magpie/providers.json` with the TGW chat base URL, required
-`gateway_context`, and `gemini-4-argon` as the sole model. Keep the file mode
-0600. Build the upstream header as `Authorization: AK <access_key>:<secret_key_once>`
-using the two fields from the local credential file. Keep all credential values
-out of source, launch arguments, and logs.
+Claude Code speaks the Anthropic Messages API to Magpie. Set up the
+`tgw-argon` entry in `~/.config/magpie/providers.json` with
+`http://gw-us.tokengateway.cloud/api/stream/v1` as the sole TGW base URL.
+Magpie appends `/chat/completions` and uses `gemini-4-argon` as the sole
+upstream model. Set `gateway_context.caller.app_name` to `ai-frontier-radar`
+and `gateway_context.audit.biz_no` to `magpie-${sessionId}` so Magpie supplies
+the session ID.
+
+Keep the providers file mode 0600. The upstream request uses the single static
+header `Authorization: AK <access_key>:<secret_key_once>`. Use one space
+after `AK` and join the two values from the local credential file with a
+colon. The header is sufficient for authentication. HMAC, timestamps, nonces,
+and mTLS certificates are unnecessary. The issuer uses the fingerprint
+internally to audit and revoke the key pair. Keep all credential values out
+of source, launch arguments, and logs.
 
 The wrapper selects `tgw-argon/gemini-4-argon`. Set `CLAUDE_ARGON_BASE_URL` for a
 different local Magpie listener. The wrapper forwards Claude Code arguments,
