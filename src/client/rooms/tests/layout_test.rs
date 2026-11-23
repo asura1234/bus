@@ -11,13 +11,26 @@ fn assert_composer_toolbar(ui: &BusUi, buffer: &ratatui::buffer::Buffer, x: u16,
     let files = control(render::Action::Files);
     let recipients = control(render::Action::Recipients);
     assert_eq!((mode.x, mode.y), (x, y));
-    assert_eq!(mode.right() + 1, files.x);
     assert_eq!((files.y, recipients.y), (y, y));
-    assert_eq!(files.x + 3, recipients.x);
     assert_eq!(mode.width, 1, "the delivery hit is only the arrow");
-    assert_eq!(buffer[(mode.x, y)].symbol(), "▼");
-    assert_eq!(buffer[(files.x, y)].symbol(), "+");
-    assert_eq!(buffer[(recipients.x, y)].symbol(), "@");
+    let arrow = &buffer[(mode.x, y)];
+    let plus = &buffer[(files.x, y)];
+    let at = &buffer[(recipients.x, y)];
+    assert_eq!(arrow.symbol(), "▼");
+    assert_eq!(plus.symbol(), "+");
+    assert_eq!(at.symbol(), "@");
+    assert_eq!(arrow.style(), plus.style(), "delivery and files styles");
+    assert_eq!(arrow.style(), at.style(), "delivery and recipients styles");
+    assert_eq!(files.x - mode.x, recipients.x - files.x, "equal spacing");
+    assert_eq!(files.x - mode.x, 3, "two empty cells between symbols");
+    for mut gap in [mode.x + 1..files.x, files.x + 1..recipients.x] {
+        assert!(gap.all(|x| buffer[(x, y)].symbol() == " "));
+    }
+    let expected_hint = "@  Choose agents";
+    let hint: String = (recipients.x..recipients.x + expected_hint.len() as u16)
+        .map(|x| buffer[(x, y)].symbol())
+        .collect();
+    assert_eq!(hint, expected_hint);
 }
 
 #[test]
@@ -94,6 +107,19 @@ fn delivery_trigger_is_a_down_arrow_and_the_open_menu_marks_the_current_mode() {
     assert!(open.contains("Steer"), "{open}");
     assert!(open.contains("Queue"), "{open}");
     assert!(!open.contains("Mode:"), "{open}");
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let trigger = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::DeliveryMode)
+        .expect("open delivery trigger")
+        .rect;
+    let arrow = &buffer[(trigger.x, trigger.y)];
+    assert_eq!(arrow.symbol(), "▼");
+    assert_eq!(arrow.fg, render::ACCENT);
+    assert_eq!(arrow.bg, ratatui::style::Color::Rgb(48, 58, 55));
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     let navigating = room_screen(&mut ui, 100, 30);
     assert!(navigating.contains("● Interrupt"), "{navigating}");

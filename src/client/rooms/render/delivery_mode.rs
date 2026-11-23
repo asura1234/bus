@@ -11,25 +11,19 @@ const OPTIONS: [(SendMode, &str); 3] =
 /// The border, the selection marker and a space, and the longest label.
 const MENU_WIDTH: u16 = 2 + 2 + "Interrupt".len() as u16;
 
-/// ▼ plus the blank column the toolbar leaves before `+`.
-const TRIGGER_RESERVE: u16 = 2;
+/// ▼ plus two blank columns, matching the gap between `+` and `@`.
+const TRIGGER_RESERVE: u16 = 3;
 const TRIGGER: &str = "▼";
 
 pub(super) fn delivery_pill_width(width: u16) -> u16 {
     TRIGGER_RESERVE.min(width)
 }
 
-pub(super) fn delivery_pill(view: &mut View, rect: Rect, _mode: SendMode, open: bool) {
-    // The current mode is labeled only in the open menu. The closed hit is the arrow.
-    view.overlay_row(rect, TRIGGER.to_owned(), Some(Action::DeliveryMode), open);
-    view.style_last_row(
-        rect,
-        Style::default().fg(ACCENT).bg(if open {
-            Color::Rgb(48, 58, 55)
-        } else {
-            Color::Rgb(36, 43, 42)
-        }),
-    );
+pub(super) fn delivery_pill(view: &mut View, rect: Rect, open: bool) {
+    view.row(rect, TRIGGER, Some(Action::DeliveryMode), open, false);
+    if open {
+        view.style_last_row(rect, Style::default().fg(ACCENT).bg(Color::Rgb(48, 58, 55)));
+    }
 }
 
 impl View {
