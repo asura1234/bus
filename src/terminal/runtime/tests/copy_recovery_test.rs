@@ -1,5 +1,11 @@
+use super::storage::records;
 use super::*;
-use std::{sync::Arc, time::Duration};
+use std::{
+    fs::{self, File},
+    io::{self, Write},
+    sync::Arc,
+    time::Duration,
+};
 
 fn key(directory: &Path, snapshot: &str) -> Key {
     Key {
@@ -90,9 +96,10 @@ fn copy_recovery_round3_retirement_rechecks_after_a_new_attempt_registers() {
     let dir = crate::utils::test_temp::unique_temp_path("copy-recheck-retire");
     let snapshot = key(&dir, "original draft");
     let path = make_record(&snapshot, "original draft");
-    let (service, _receiver) = service();
+    let (service, receiver) = service();
     let old = begin(service, &snapshot, "original draft");
     old.send(Outcome::Restored);
+    service.step(receiver.recv().unwrap());
     let (waiting, resume) = pause_effect(&path);
     let worker_key = snapshot.clone();
     let retiring = thread::spawn(move || service.settle(&worker_key));
@@ -123,7 +130,7 @@ fn copy_recovery_round3_notice_rechecks_after_a_newer_restore() {
     let dir = crate::utils::test_temp::unique_temp_path("copy-recheck-notice");
     let snapshot = key(&dir, "original draft");
     let path = make_record(&snapshot, "original draft");
-    let (service, _receiver) = service();
+    let (service, receiver) = service();
     let (waiting, resume) = pause_effect(&path);
     let worker_key = snapshot.clone();
     let buffer = Arc::new(Mutex::new(Vec::new()));
@@ -140,6 +147,7 @@ fn copy_recovery_round3_notice_rechecks_after_a_newer_restore() {
             error: String::new(),
         });
     });
+    service.step(receiver.recv().unwrap());
     let notifying = thread::spawn(move || service.settle(&worker_key));
     waiting.recv_timeout(Duration::from_secs(5)).unwrap();
     let later = begin(service, &snapshot, "original draft");
@@ -148,7 +156,7 @@ fn copy_recovery_round3_notice_rechecks_after_a_newer_restore() {
     notifying.join().unwrap();
     let log = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
     assert!(!log.contains("bus.draft.recovery_required"), "{log}");
-    service.settle(&snapshot);
+    drain(service, &receiver);
     assert!(!path.exists());
     fs::remove_dir_all(dir).unwrap();
 }
@@ -197,7 +205,7 @@ fn copy_recovery_round3_stalled_worker_bounds_distinct_and_repeated_controls() {
     let entries = service.registry().entries.len();
     let queued = receiver.try_iter().count();
     assert!(
-        entries <= 256 && queued <= 273,
+        entries <= MAX_TRACKED && queued <= MAX_TRACKED + MAX_OVERFLOW + QUEUED_BACKUPS + 1,
         "entries={entries} enqueued={queued}"
     );
 }
@@ -231,4 +239,295 @@ fn copy_recovery_round3_worker_exit_releases_abandoned_saves() {
         assert!(registry.entries.is_empty());
     }
     drop((first, queued));
+}
+
+fn dispatch_for(buffer: &Arc<Mutex<Vec<u8>>>) -> tracing::Dispatch {
+    let sink = NoticeSink(buffer.clone());
+    tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || sink.clone())
+            .finish(),
+    )
+}
+
+fn output(buffer: &Mutex<Vec<u8>>) -> String {
+    String::from_utf8(buffer.lock().unwrap().clone()).unwrap()
+}
+
+fn retain() -> Outcome {
+    Outcome::Retain {
+        reason: "test_retention",
+        error: String::new(),
+    }
+}
+
+fn drain(service: &Service, receiver: &mpsc::Receiver<Work>) {
+    while let Ok(work) = receiver.try_recv() {
+        service.step(work);
+    }
+}
+
+type NoticeBarrier = (mpsc::Sender<()>, mpsc::Receiver<()>);
+
+#[derive(Clone)]
+struct BlockingNotice {
+    output: NoticeSink,
+    barrier: Arc<Mutex<Option<NoticeBarrier>>>,
+}
+
+impl Write for BlockingNotice {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if String::from_utf8_lossy(bytes).contains("bus.draft.recovery_required") {
+            let block = self.barrier.lock().unwrap().take();
+            if let Some((started, resume)) = block {
+                started.send(()).unwrap();
+                resume.recv_timeout(Duration::from_secs(8)).unwrap();
+            }
+        }
+        self.output.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn copy_recovery_round4_blocked_notice_leaves_second_pane_free_to_settle() {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-blocked-notice");
+    let first = key(&dir.join("first"), "first draft");
+    let second = key(&dir.join("second"), "second draft");
+    make_record(&first, "first draft");
+    let (service, receiver) = service();
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let (started, waiting) = mpsc::channel();
+    let (resume, released) = mpsc::channel();
+    let sink = BlockingNotice {
+        output: NoticeSink(buffer.clone()),
+        barrier: Arc::new(Mutex::new(Some((started, released)))),
+    };
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || sink.clone())
+            .finish(),
+    );
+    tracing::dispatcher::with_default(&dispatch, || {
+        begin(service, &first, "first draft").send(retain());
+    });
+    service.step(receiver.recv().unwrap());
+    let worker = thread::spawn(move || service.settle(&first));
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (done, delivered) = mpsc::channel();
+    let foreground = thread::spawn(move || {
+        begin(service, &second, "second draft").send(Outcome::Restored);
+        done.send(()).unwrap();
+    });
+
+    let finished_before_unblock = delivered.recv_timeout(Duration::from_millis(500)).is_ok();
+    resume.send(()).unwrap();
+    worker.join().unwrap();
+    foreground.join().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+    assert!(
+        finished_before_unblock,
+        "second pane could not register and settle while the sink was blocked"
+    );
+    assert_eq!(
+        output(&buffer)
+            .matches("bus.draft.recovery_required")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn copy_recovery_round4_newer_retain_waits_for_its_admitted_save() {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-settle-before-save");
+    let snapshot = key(&dir, "draft A and B");
+    let (service, receiver) = service();
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let dispatch = dispatch_for(&buffer);
+    test_hooks::install(dir.clone(), || Err(io::Error::other("first save failed")));
+    tracing::dispatcher::with_default(&dispatch, || {
+        begin(service, &snapshot, "draft A and B").send(retain());
+    });
+    // A's failed save queues its control. Register the newer admitted save
+    // behind that control, so settlement must defer the newer resolution.
+    service.step(receiver.recv().unwrap());
+    tracing::dispatcher::with_default(&dispatch, || {
+        begin(service, &snapshot, "draft A and B").send(retain());
+    });
+    drain(service, &receiver);
+    let notices = output(&buffer);
+    let path = verified_records(&snapshot).unwrap().pop().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+    assert!(!notices.contains("bus.draft.copy_loss"), "{notices}");
+    assert_eq!(
+        notices.matches("bus.draft.recovery_required").count(),
+        1,
+        "{notices}"
+    );
+    assert!(notices.contains(&*path.to_string_lossy()), "{notices}");
+}
+
+fn fill_tracking(service: &'static Service, directory: &Path) -> Vec<Attempt> {
+    (0..MAX_TRACKED)
+        .map(|i| {
+            let text = format!("held {i}");
+            begin(service, &key(directory, &text), &text)
+        })
+        .collect()
+}
+
+#[test]
+fn copy_recovery_round4_overflow_retain_pins_its_verified_file() {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-overflow-pin");
+    let (service, receiver) = service();
+    let held = fill_tracking(service, &dir.join("held"));
+    // Remove the held payloads from the test channel without running them.
+    // Their owners remain registered so the next distinct digest overflows.
+    assert_eq!(receiver.try_iter().count(), 16);
+    let pane = dir.join("pane");
+    let snapshot = key(&pane, "overflow draft");
+    let path = make_record(&snapshot, "overflow draft");
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH)
+        .unwrap();
+    for i in 0..15 {
+        let body = format!("older {i}");
+        make_record(&key(&pane, &body), &body);
+    }
+    let current = key(&pane, "durable replacement");
+    let replacement = make_record(&current, "durable replacement");
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let dispatch = dispatch_for(&buffer);
+    let overflow = tracing::dispatcher::with_default(&dispatch, || {
+        begin(service, &snapshot, "overflow draft")
+    });
+    // Another attempt beyond the metadata limit blocks cap enforcement.
+    // The first pass that can actually prune must still honor this pin.
+    let overflow_held: Vec<_> = (0..MAX_OVERFLOW - 1)
+        .map(|i| {
+            let text = format!("reserved overflow {i}");
+            begin(service, &key(&dir.join("held"), &text), &text)
+        })
+        .collect();
+    let untracked = begin(
+        service,
+        &key(&dir.join("held"), "beyond both limits"),
+        "beyond both limits",
+    );
+    service.enforce_retention(&current, &replacement);
+    overflow.send(retain());
+    drain(service, &receiver);
+    assert_eq!(records(&pane).unwrap().len(), 17);
+    untracked.send(Outcome::Restored);
+    drain(service, &receiver);
+
+    let contents = fs::read_to_string(&path);
+    let log = output(&buffer);
+    let count = records(&pane).unwrap().len();
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(contents.unwrap(), "overflow draft");
+    assert_eq!(count, 16);
+    assert!(
+        log.contains("bus.draft.recovery_required") && log.contains(&*path.to_string_lossy()),
+        "{log}"
+    );
+    drop((held, overflow_held));
+}
+
+#[test]
+fn copy_recovery_round4_overflow_restored_retires_verified_file() {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-overflow-retire");
+    let (service, receiver) = service();
+    let held = fill_tracking(service, &dir.join("held"));
+    assert_eq!(receiver.try_iter().count(), 16);
+    let snapshot = key(&dir.join("pane"), "overflow restored");
+    let path = make_record(&snapshot, "overflow restored");
+    begin(service, &snapshot, "overflow restored").send(Outcome::Restored);
+    drain(service, &receiver);
+    let remains = path.exists();
+    fs::remove_dir_all(dir).unwrap();
+    assert!(!remains, "overflow restore left a stale verified file");
+    drop(held);
+}
+
+#[test]
+fn copy_recovery_round4_deferred_directories_are_bounded_with_overlapping_overflow() {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-deferred-bound");
+    let (service, _receiver) = service();
+    let held = fill_tracking(service, &dir.join("held"));
+    let overflow_held: Vec<_> = (0..MAX_OVERFLOW)
+        .map(|i| {
+            let text = format!("overflow held {i}");
+            begin(service, &key(&dir.join("held"), &text), &text)
+        })
+        .collect();
+    let mut overflow = begin(service, &key(&dir, "always active"), "always active");
+    for index in 0..72 {
+        let next = begin(service, &key(&dir, "overlapping"), "overlapping");
+        overflow.send(Outcome::Restored);
+        overflow = next;
+        let pane = dir.join(index.to_string());
+        for i in 0..17 {
+            let body = format!("record {i}");
+            make_record(&key(&pane, &body), &body);
+        }
+        let current = key(&pane, "record 16");
+        let path = verified_records(&current).unwrap().pop().unwrap();
+        service.enforce_retention(&current, &path);
+    }
+    let deferred = service.registry().deferred.len();
+    fs::remove_dir_all(dir).unwrap();
+    assert!(deferred <= 64, "deferred directories={deferred}");
+    drop((overflow, overflow_held, held));
+}
+
+#[test]
+fn copy_recovery_round4_disconnect_reports_abandoned_outcomes_once() {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-disconnect-log");
+    let (service, receiver) = service();
+    let snapshot = key(&dir, "restored; private content");
+    make_record(&snapshot, "restored; private content");
+    for i in 0..16 {
+        let body = format!("pending {i}");
+        make_record(&key(&dir, &body), &body);
+    }
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let dispatch = dispatch_for(&buffer);
+    tracing::dispatcher::with_default(&dispatch, || {
+        begin(service, &snapshot, "restored; private content").send(Outcome::Restored);
+        service.registry().deferred.push_back((
+            dir.clone(),
+            verified_records(&snapshot).unwrap().pop().unwrap(),
+        ));
+        let last = begin(service, &key(&dir, "last pending"), "last pending");
+        drop(receiver);
+        last.send(retain());
+        begin(service, &key(&dir, "dead service"), "dead service").send(retain());
+    });
+    assert!(service.registry().entries.is_empty());
+    assert!(service.registry().deferred.is_empty());
+    let log = output(&buffer);
+    let (later, _receiver) = self::service();
+    let path = verified_records(&snapshot).unwrap().pop().unwrap();
+    later.enforce_retention(&snapshot, &path);
+    assert_eq!(records(&dir).unwrap().len(), 16);
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        log.matches("bus.draft.copy_recovery_disconnected").count(),
+        1,
+        "{log}"
+    );
+    assert!(
+        log.contains("resolutions=2") && log.contains("deferrals=1"),
+        "{log}"
+    );
+    assert!(!log.contains("private content"), "{log}");
 }

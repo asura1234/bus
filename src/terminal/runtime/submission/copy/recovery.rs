@@ -1,17 +1,18 @@
 //! Persist copied drafts without holding the pane input lease across storage I/O.
 use std::{
-    collections::HashMap,
-    fs::{self, File, Metadata, OpenOptions},
-    io::{self, Read, Write},
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{mpsc, Mutex, MutexGuard, OnceLock},
     thread,
 };
 
-const MAX_RECORDS: usize = 16;
-const MAX_BYTES: u64 = 8 * 1024 * 1024;
+mod storage;
+use storage::{discard_if, prune, save, verified_records};
+
 const QUEUED_BACKUPS: usize = 16;
 const MAX_TRACKED: usize = 256;
+const MAX_OVERFLOW: usize = 64;
+const MAX_DEFERRED: usize = 64;
 
 pub(super) enum Outcome {
     Restored,
@@ -32,7 +33,7 @@ struct Context {
 }
 
 enum Work {
-    Save(Context, String),
+    Save(Context, String, u64),
     Settle(Key),
     Revisit,
 }
@@ -44,55 +45,164 @@ struct Resolution {
 }
 
 #[derive(Default)]
-struct Entry {
+struct Terminal {
     generation: u64,
     active: usize,
-    saving: usize,
     control_queued: bool,
     settling: bool,
     restored: bool,
     resolution: Option<Resolution>,
 }
 
-impl Entry {
-    fn protected(&self) -> bool {
-        self.active != 0 || self.saving != 0 || self.control_queued || self.settling
+impl Terminal {
+    fn begin(&mut self, generation: u64) {
+        self.generation = generation;
+        self.active += 1;
+        self.restored = false;
+        self.resolution = None;
     }
+
+    fn protected(&self) -> bool {
+        self.active != 0 || self.control_queued || self.settling || self.resolution.is_some()
+    }
+
+    fn queue_if_ready(&mut self, key: Key, save_pending: bool) -> Option<Work> {
+        if self.active != 0 || save_pending || self.control_queued || self.resolution.is_none() {
+            return None;
+        }
+        self.control_queued = true;
+        Some(Work::Settle(key))
+    }
+}
+
+#[derive(Default)]
+struct Entry {
+    terminal: Terminal,
+    saving: usize,
+    latest_save_pending: bool,
+}
+
+#[derive(Default)]
+struct OverflowEntry {
+    terminal: Terminal,
+    pin_next_prune: bool,
 }
 
 #[derive(Default)]
 struct Registry {
     entries: HashMap<Key, Entry>,
-    deferred: HashMap<PathBuf, PathBuf>,
+    overflow: HashMap<Key, OverflowEntry>,
+    deferred: VecDeque<(PathBuf, PathBuf)>,
     next_generation: u64,
     queued: usize,
-    overflow: usize,
+    untracked: usize,
     revisit_queued: bool,
     disconnected: bool,
 }
 
 impl Registry {
+    fn terminal(&self, key: &Key) -> Option<&Terminal> {
+        self.entries
+            .get(key)
+            .map(|entry| &entry.terminal)
+            .or_else(|| self.overflow.get(key).map(|entry| &entry.terminal))
+    }
+
+    fn terminal_mut(&mut self, key: &Key) -> Option<&mut Terminal> {
+        self.entries
+            .get_mut(key)
+            .map(|entry| &mut entry.terminal)
+            .or_else(|| self.overflow.get_mut(key).map(|entry| &mut entry.terminal))
+    }
+
     fn discard_idle(&mut self, key: &Key) {
         if self
             .entries
             .get(key)
-            .is_some_and(|state| !state.protected())
+            .is_some_and(|entry| entry.saving == 0 && !entry.terminal.protected())
         {
             self.entries.remove(key);
+        }
+        if self
+            .overflow
+            .get(key)
+            .is_some_and(|entry| !entry.pin_next_prune && !entry.terminal.protected())
+        {
+            self.overflow.remove(key);
         }
     }
 
     fn current(&self, key: &Key, generation: u64) -> bool {
-        self.entries
-            .get(key)
+        self.terminal(key)
             .is_some_and(|state| state.active == 0 && state.generation == generation)
     }
 
-    fn disconnect(&mut self) {
+    fn protected(&self, key: &Key) -> bool {
+        self.untracked != 0
+            || self
+                .entries
+                .get(key)
+                .is_some_and(|entry| entry.saving != 0 || entry.terminal.protected())
+            || self
+                .overflow
+                .get(key)
+                .is_some_and(|entry| entry.pin_next_prune || entry.terminal.protected())
+    }
+
+    fn disconnect(&mut self) -> Option<Abandoned> {
+        if self.disconnected {
+            return None;
+        }
+        let terminals = self
+            .entries
+            .values()
+            .map(|entry| &entry.terminal)
+            .chain(self.overflow.values().map(|entry| &entry.terminal));
+        let mut resolutions = 0;
+        let mut active = self.untracked;
+        for terminal in terminals {
+            resolutions +=
+                usize::from(terminal.resolution.is_some()) + usize::from(terminal.settling);
+            active += terminal.active;
+        }
+        let abandoned = Abandoned {
+            resolutions,
+            active,
+            saves: self.entries.values().map(|entry| entry.saving).sum(),
+            deferrals: self.deferred.len(),
+        };
         *self = Self {
             disconnected: true,
             ..Self::default()
         };
+        Some(abandoned)
+    }
+}
+
+struct Abandoned {
+    resolutions: usize,
+    active: usize,
+    saves: usize,
+    deferrals: usize,
+}
+
+fn report_disconnect(reason: &'static str, abandoned: Option<Abandoned>) {
+    if let Some(Abandoned {
+        resolutions,
+        active,
+        saves,
+        deferrals,
+    }) = abandoned
+    {
+        tracing::warn!(
+            event = "bus.draft.copy_recovery_disconnected",
+            reason,
+            resolutions,
+            active,
+            saves,
+            deferrals,
+            "Copied draft worker disconnected; durable records remain available for a later scan"
+        );
     }
 }
 
@@ -106,7 +216,8 @@ struct WorkerLifetime<'a>(&'a Service);
 
 impl Drop for WorkerLifetime<'_> {
     fn drop(&mut self) {
-        self.0.registry().disconnect();
+        let abandoned = self.0.registry().disconnect();
+        report_disconnect("worker_exit", abandoned);
     }
 }
 
@@ -120,35 +231,42 @@ impl Service {
     fn run(&self, receive: mpsc::Receiver<Work>) {
         let _lifetime = WorkerLifetime(self);
         for work in receive {
-            match work {
-                Work::Save(context, snapshot) => {
-                    tracing::dispatcher::with_default(&context.dispatch, || {
-                        let _span = context.span.enter();
-                        self.persist(&context.key, snapshot);
-                    });
-                }
-                Work::Settle(key) => self.settle(&key),
-                Work::Revisit => {
-                    let directories = {
-                        let mut registry = self.registry();
-                        registry.revisit_queued = false;
-                        registry.deferred.keys().cloned().collect::<Vec<_>>()
-                    };
-                    for directory in directories {
-                        self.revisit_retention(&directory);
-                    }
+            self.step(work);
+        }
+    }
+
+    fn step(&self, work: Work) {
+        match work {
+            Work::Save(context, snapshot, generation) => {
+                tracing::dispatcher::with_default(&context.dispatch, || {
+                    let _span = context.span.enter();
+                    self.persist(&context.key, snapshot, generation);
+                });
+            }
+            Work::Settle(key) => self.settle(&key),
+            Work::Revisit => {
+                let directories = {
+                    let mut registry = self.registry();
+                    registry.revisit_queued = false;
+                    registry
+                        .deferred
+                        .iter()
+                        .map(|(directory, _)| directory.clone())
+                        .collect::<Vec<_>>()
+                };
+                for directory in directories {
+                    self.revisit_retention(&directory);
                 }
             }
         }
     }
 
-    fn persist(&self, key: &Key, snapshot: String) {
+    fn persist(&self, key: &Key, snapshot: String, generation: u64) {
         let should_save = {
             let mut registry = self.registry();
             registry.queued -= 1;
             registry
-                .entries
-                .get(key)
+                .terminal(key)
                 .is_some_and(|state| state.active != 0 || !state.restored)
         };
         if should_save {
@@ -159,52 +277,83 @@ impl Service {
                 }
             }
         }
-        {
+        let abandoned = {
             let mut registry = self.registry();
-            if let Some(state) = registry.entries.get_mut(key) {
-                state.saving -= 1;
-            }
+            let work = registry.entries.get_mut(key).and_then(|entry| {
+                entry.saving -= 1;
+                if entry.terminal.generation == generation {
+                    entry.latest_save_pending = false;
+                }
+                entry
+                    .terminal
+                    .queue_if_ready(key.clone(), entry.latest_save_pending)
+            });
             registry.discard_idle(key);
-        }
+            self.send_control(&mut registry, work)
+        };
+        report_disconnect("control_send_failed", abandoned);
         self.revisit_retention(&key.directory);
+    }
+
+    fn send_control(&self, registry: &mut Registry, work: Option<Work>) -> Option<Abandoned> {
+        if work.is_some_and(|work| self.work.send(work).is_err()) {
+            registry.disconnect()
+        } else {
+            None
+        }
     }
 
     fn settle(&self, key: &Key) {
         let resolution = {
             let mut registry = self.registry();
-            let Some(state) = registry.entries.get_mut(key) else {
+            let save_pending = registry
+                .entries
+                .get(key)
+                .is_some_and(|entry| entry.latest_save_pending);
+            let Some(state) = registry.terminal_mut(key) else {
                 return;
             };
             state.control_queued = false;
-            state.settling = true;
-            if state.active == 0 {
+            // An older coalesced control can precede a newer Save in the
+            // channel. Save completion will wake the latest resolution.
+            if state.active == 0 && !save_pending {
+                state.settling = state.resolution.is_some();
                 state.resolution.take()
             } else {
                 None
             }
         };
         if let Some(resolution) = resolution {
-            tracing::dispatcher::with_default(&resolution.context.dispatch, || {
+            let generation = resolution.generation;
+            let pin = tracing::dispatcher::with_default(&resolution.context.dispatch, || {
                 let _span = resolution.context.span.enter();
                 let backups = verified_records(key).unwrap_or_else(|error| {
                     tracing::warn!(event = "bus.draft.copy_recovery_failed", reason = "snapshot_lookup_failed", %error, "Could not verify copied draft recovery records");
                     Vec::new()
                 });
-                self.apply_outcome(key, resolution.generation, resolution.outcome, backups);
+                self.apply_outcome(key, generation, resolution.outcome, backups)
             });
-        }
-        {
             let mut registry = self.registry();
-            if let Some(state) = registry.entries.get_mut(key) {
+            if let Some(entry) = registry.overflow.get_mut(key) {
+                if entry.terminal.generation == generation {
+                    entry.pin_next_prune = pin;
+                }
+            }
+            if let Some(state) = registry.terminal_mut(key) {
                 state.settling = false;
             }
             registry.discard_idle(key);
         }
-        // Protection can end even when this digest has no verified file.
         self.revisit_retention(&key.directory);
     }
 
-    fn apply_outcome(&self, key: &Key, generation: u64, outcome: Outcome, backups: Vec<PathBuf>) {
+    fn apply_outcome(
+        &self,
+        key: &Key,
+        generation: u64,
+        outcome: Outcome,
+        backups: Vec<PathBuf>,
+    ) -> bool {
         if let Some(path) = backups.first() {
             if self.registry().current(key, generation) {
                 self.enforce_retention(key, path);
@@ -212,42 +361,48 @@ impl Service {
         }
         match outcome {
             Outcome::Restored => {
-                for path in backups {
-                    match discard_if(&path, &key.digest, || {
-                        self.registry().current(key, generation)
-                    }) {
-                        Ok(true) => {}
-                        Ok(false) => return,
-                        Err(error) => {
-                            tracing::warn!(event = "bus.draft.copy_recovery_failed", reason = "snapshot_retirement_failed", %error, "Could not retire a restored copy");
-                            return;
-                        }
-                    }
-                }
-                if self.registry().current(key, generation) {
-                    tracing::debug!(
-                        event = "bus.draft.copy_recovery_retired",
-                        "Verified restore has no remaining recovery record"
-                    );
-                }
+                self.retire(key, generation, backups);
+                false
             }
             Outcome::Retain { reason, error } => {
                 #[cfg(test)]
                 if let Some(path) = backups.first() {
                     test_hooks::before_effect(path);
                 }
-                // Commit the structured notice and its generation check together.
-                // File reads, sync, staging and unlink all stay outside this guard.
-                let registry = self.registry();
-                if !registry.current(key, generation) {
+                let notice = {
+                    let registry = self.registry();
+                    // Commit the owned event under the generation lock. The
+                    // sink can do blocking I/O after this decision is final.
+                    registry.current(key, generation).then(|| Notice {
+                        path: backups.into_iter().next(),
+                        reason,
+                        error,
+                    })
+                };
+                notice.is_some_and(Notice::emit)
+            }
+        }
+    }
+
+    fn retire(&self, key: &Key, generation: u64, backups: Vec<PathBuf>) {
+        for path in backups {
+            match discard_if(&path, &key.digest, || {
+                self.registry().current(key, generation)
+            }) {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => {
+                    tracing::warn!(event = "bus.draft.copy_recovery_failed", reason = "snapshot_retirement_failed", %error, "Could not retire a restored copy");
                     return;
                 }
-                if let Some(path) = backups.first() {
-                    tracing::warn!(event = "bus.draft.recovery_required", reason, recovery = %path.display(), %error, "Copied composer snapshot retained for manual recovery");
-                } else {
-                    tracing::warn!(event = "bus.draft.copy_loss", reason = "snapshot_storage_unavailable", draft_outcome = reason, %error, "Copied draft restoration was not proven and no verified recovery record is available");
-                }
             }
+        }
+        let current = self.registry().current(key, generation);
+        if current {
+            tracing::debug!(
+                event = "bus.draft.copy_recovery_retired",
+                "Verified restore has no remaining recovery record"
+            );
         }
     }
 
@@ -256,50 +411,119 @@ impl Service {
     }
 
     fn revisit_retention(&self, directory: &Path) {
-        let current = self.registry().deferred.get(directory).cloned();
+        let current = self
+            .registry()
+            .deferred
+            .iter()
+            .find(|(dir, _)| dir == directory)
+            .map(|(_, path)| path.clone());
         if let Some(current) = current {
             self.prune_directory(directory, &current);
         }
     }
 
     fn prune_directory(&self, directory: &Path, current: &Path) {
+        let untracked_seen = std::cell::Cell::new(false);
         let result = prune(directory, current, |digest| {
             let candidate = Key {
                 directory: directory.to_owned(),
                 digest: digest.to_owned(),
             };
             let registry = self.registry();
-            registry.overflow == 0
-                && !registry
-                    .entries
-                    .get(&candidate)
-                    .is_some_and(Entry::protected)
+            if registry.untracked != 0 {
+                untracked_seen.set(true);
+            }
+            !registry.protected(&candidate)
         });
+        let (evicted, error) =
+            self.record_prune_result(directory, current, result, untracked_seen.get());
+        if evicted {
+            tracing::warn!(
+                event = "bus.draft.copy_recovery_failed",
+                reason = "snapshot_deferral_limit",
+                "Dropped oldest deferred scan; durable files remain for a later scan"
+            );
+        }
+        if let Some(error) = error {
+            tracing::warn!(event = "bus.draft.copy_recovery_failed", reason = "snapshot_prune_failed", %error, "Could not prune copied draft recovery records");
+        }
+    }
+
+    fn record_prune_result(
+        &self,
+        directory: &Path,
+        current: &Path,
+        result: std::io::Result<bool>,
+        untracked_seen: bool,
+    ) -> (bool, Option<std::io::Error>) {
+        let mut registry = self.registry();
+        if result.is_ok() && !untracked_seen {
+            // A conservatively blocked scan has not yet exercised its pins.
+            registry.overflow.retain(|key, entry| {
+                if key.directory == directory {
+                    entry.pin_next_prune = false;
+                }
+                entry.pin_next_prune || entry.terminal.protected()
+            });
+        }
         match result {
             Ok(true) => {
-                self.registry().deferred.remove(directory);
+                registry.deferred.retain(|(dir, _)| dir != directory);
+                (false, None)
             }
             Ok(false) => {
-                self.registry()
+                if let Some((_, path)) = registry
                     .deferred
-                    .insert(directory.to_owned(), current.to_owned());
+                    .iter_mut()
+                    .find(|(dir, _)| dir == directory)
+                {
+                    current.clone_into(path);
+                    return (false, None);
+                }
+                let evicted = registry.deferred.len() == MAX_DEFERRED;
+                if evicted {
+                    registry.deferred.pop_front();
+                }
+                registry
+                    .deferred
+                    .push_back((directory.to_owned(), current.to_owned()));
+                (evicted, None)
             }
             Err(error) => {
-                // An inaccessible directory with no remaining protections
-                // cannot be revisited by a later release. A future successful
-                // save will run retention afresh.
-                let mut registry = self.registry();
-                if registry.overflow == 0
+                if registry.untracked == 0
                     && !registry
                         .entries
                         .keys()
+                        .chain(registry.overflow.keys())
                         .any(|key| key.directory == directory)
                 {
-                    registry.deferred.remove(directory);
+                    registry.deferred.retain(|(dir, _)| dir != directory);
                 }
-                drop(registry);
-                tracing::warn!(event = "bus.draft.copy_recovery_failed", reason = "snapshot_prune_failed", %error, "Could not prune copied draft recovery records");
+                (false, Some(error))
             }
+        }
+    }
+}
+
+struct Notice {
+    path: Option<PathBuf>,
+    reason: &'static str,
+    error: String,
+}
+
+impl Notice {
+    fn emit(self) -> bool {
+        let Self {
+            path,
+            reason,
+            error,
+        } = self;
+        if let Some(path) = path {
+            tracing::warn!(event = "bus.draft.recovery_required", reason, recovery = %path.display(), %error, "Copied composer snapshot retained for manual recovery");
+            true
+        } else {
+            tracing::warn!(event = "bus.draft.copy_loss", reason = "snapshot_storage_unavailable", draft_outcome = reason, %error, "Copied draft restoration was not proven and no verified recovery record is available");
+            false
         }
     }
 }
@@ -307,7 +531,8 @@ impl Service {
 #[derive(Clone, Copy)]
 enum Registration {
     Tracked(u64),
-    Overflow,
+    Overflow(u64),
+    Untracked,
     Unavailable,
 }
 
@@ -326,29 +551,32 @@ impl Attempt {
         let Some(context) = self.context.take() else {
             return;
         };
-        let mut registry = self.service.registry();
-        if registry.disconnected {
-            return;
-        }
-        let work = match self.registration {
-            Registration::Tracked(generation) => {
-                finish_tracked(&mut registry, context, generation, outcome)
+        let untracked = matches!(self.registration, Registration::Untracked);
+        let abandoned = {
+            let mut registry = self.service.registry();
+            if registry.disconnected {
+                return;
             }
-            Registration::Overflow => {
-                registry.overflow -= 1;
-                let wake = registry.overflow == 0 && !registry.revisit_queued;
-                registry.revisit_queued |= wake;
-                wake.then_some(Work::Revisit)
-            }
-            Registration::Unavailable => None,
+            let work = match self.registration {
+                Registration::Tracked(generation) | Registration::Overflow(generation) => {
+                    finish_tracked(&mut registry, context, generation, outcome)
+                }
+                Registration::Untracked => {
+                    registry.untracked -= 1;
+                    let wake = registry.untracked == 0 && !registry.revisit_queued;
+                    registry.revisit_queued |= wake;
+                    wake.then_some(Work::Revisit)
+                }
+                Registration::Unavailable => None,
+            };
+            self.service.send_control(&mut registry, work)
         };
-        if work.is_some_and(|work| self.service.work.send(work).is_err()) {
-            registry.disconnect();
-            drop(registry);
+        report_disconnect("control_send_failed", abandoned);
+        if untracked {
             tracing::warn!(
                 event = "bus.draft.copy_recovery_failed",
-                reason = "snapshot_worker_unavailable",
-                "Could not settle copied draft recovery"
+                reason = "snapshot_overflow_outcome_dropped",
+                "Copied draft outcome could not be tracked beyond the overflow limit"
             );
         }
     }
@@ -370,21 +598,21 @@ fn finish_tracked(
     outcome: Outcome,
 ) -> Option<Work> {
     let key = context.key.clone();
-    let entry = registry.entries.get_mut(&key)?;
-    entry.active -= 1;
-    if entry.generation == generation {
-        entry.restored = matches!(outcome, Outcome::Restored);
-        entry.resolution = Some(Resolution {
+    let save_pending = registry
+        .entries
+        .get(&key)
+        .is_some_and(|entry| entry.latest_save_pending);
+    let terminal = registry.terminal_mut(&key)?;
+    terminal.active -= 1;
+    if terminal.generation == generation {
+        terminal.restored = matches!(outcome, Outcome::Restored);
+        terminal.resolution = Some(Resolution {
             context,
             generation,
             outcome,
         });
     }
-    if entry.active != 0 || entry.control_queued {
-        return None;
-    }
-    entry.control_queued = true;
-    Some(Work::Settle(key))
+    terminal.queue_if_ready(key, save_pending)
 }
 
 pub(super) fn start(directory: &Path, snapshot: &str) -> Option<Attempt> {
@@ -444,288 +672,57 @@ fn register(
     if registry.disconnected {
         return unavailable;
     }
-    if registry.entries.len() >= MAX_TRACKED && !registry.entries.contains_key(&context.key) {
-        registry.overflow += 1;
-        return (Registration::Overflow, Some("snapshot_control_busy"));
-    }
     registry.next_generation += 1;
     let generation = registry.next_generation;
+    if !registry.entries.contains_key(&context.key)
+        && (registry.entries.len() >= MAX_TRACKED || registry.overflow.contains_key(&context.key))
+    {
+        if registry.overflow.len() >= MAX_OVERFLOW && !registry.overflow.contains_key(&context.key)
+        {
+            registry.untracked += 1;
+            return (Registration::Untracked, Some("snapshot_control_busy"));
+        }
+        registry
+            .overflow
+            .entry(context.key.clone())
+            .or_default()
+            .terminal
+            .begin(generation);
+        return (
+            Registration::Overflow(generation),
+            Some("snapshot_overflow_control_only"),
+        );
+    }
     let full = registry.queued >= QUEUED_BACKUPS;
     let entry = registry.entries.entry(context.key.clone()).or_default();
-    entry.generation = generation;
-    entry.active += 1;
-    entry.restored = false;
-    entry.resolution = None;
+    entry.terminal.begin(generation);
+    entry.latest_save_pending = false;
     let reason = if snapshot.len() as u64 > crate::platform::draft_editor::MAX_BYTES {
         Some("snapshot_too_large")
     } else if full {
         Some("snapshot_worker_busy")
     } else if service
         .work
-        .send(Work::Save(context.clone(), snapshot.to_owned()))
+        .send(Work::Save(context.clone(), snapshot.to_owned(), generation))
         .is_err()
     {
-        registry.disconnect();
+        let abandoned = registry.disconnect();
+        drop(registry);
+        report_disconnect("snapshot_send_failed", abandoned);
         return unavailable;
     } else {
         // Enqueue while registering so completion cannot overtake its save.
         entry.saving += 1;
+        entry.latest_save_pending = true;
         registry.queued += 1;
         None
     };
     (Registration::Tracked(generation), reason)
 }
 
-fn save(key: &Key, snapshot: &[u8]) -> io::Result<PathBuf> {
-    let Key { directory, digest } = key;
-    crate::platform::fs::private_dir(directory)?;
-    let records = records(directory)?;
-    if let Some(record) = records
-        .iter()
-        .find(|record| record.digest == *digest && matches_snapshot(&record.path, snapshot))
-    {
-        return Ok(record.path.clone());
-    }
-
-    #[cfg(test)]
-    test_hooks::before_write(directory)?;
-    let primary = directory.join(format!("copied-{digest}.txt"));
-    let (path, mut file) = match crate::platform::create_private_state_file(&primary) {
-        Ok(file) => (primary, file),
-        Err(error)
-            if error.kind() == io::ErrorKind::AlreadyExists
-                || fs::symlink_metadata(&primary).is_ok() =>
-        {
-            let nonce = crate::utils::time::now_ns();
-            let alternate = directory.join(format!(
-                "copied-{digest}-{}-{nonce}.txt",
-                std::process::id()
-            ));
-            let file = crate::platform::create_private_state_file(&alternate)?;
-            (alternate, file)
-        }
-        Err(error) => return Err(error),
-    };
-    let written = file.write_all(snapshot).and_then(|()| file.sync_all());
-    drop(file);
-    let published = written
-        .and_then(|()| crate::platform::sync_parent_directory(directory))
-        .and_then(|()| {
-            matches_snapshot(&path, snapshot)
-                .then_some(())
-                .ok_or_else(|| io::Error::other("Copied draft could not be read back"))
-        });
-    if let Err(error) = published {
-        let _ = fs::remove_file(&path);
-        return Err(error);
-    }
-    Ok(path)
-}
-
-fn matches_snapshot(path: &Path, snapshot: &[u8]) -> bool {
-    read_private(path).is_some_and(|bytes| bytes == snapshot)
-}
-
-fn verified_records(key: &Key) -> io::Result<Vec<PathBuf>> {
-    let records = match records(&key.directory) {
-        Ok(records) => records,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    };
-    Ok(records
-        .into_iter()
-        .filter(|record| {
-            record.digest == key.digest
-                && read_private(&record.path)
-                    .is_some_and(|bytes| crate::utils::time::digest(&bytes) == key.digest)
-        })
-        .map(|record| record.path)
-        .collect())
-}
-
-fn read_private(path: &Path) -> Option<Vec<u8>> {
-    fn open(path: &Path) -> io::Result<File> {
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-        }
-        options.open(path)
-    }
-    let file = fs::symlink_metadata(path)
-        .ok()
-        .filter(private_file)
-        .and_then(|_| open(path).ok())?;
-    let metadata = file.metadata().ok().filter(private_file)?;
-    let size = metadata.len();
-    if size > crate::platform::draft_editor::MAX_BYTES {
-        return None;
-    }
-    let mut contents = Vec::with_capacity(size as usize);
-    file.take(size + 1).read_to_end(&mut contents).ok()?;
-    (contents.len() as u64 == size).then_some(contents)
-}
-
-fn private_file(metadata: &Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o777 != 0o600 {
-            return false;
-        }
-    }
-    metadata.file_type().is_file()
-}
-
-struct Record {
-    path: PathBuf,
-    digest: String,
-    metadata: Metadata,
-}
-
-fn records(directory: &Path) -> io::Result<Vec<Record>> {
-    let mut records = Vec::new();
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let Some((digest, suffix)) = name
-            .to_str()
-            .and_then(|name| name.strip_prefix("copied-")?.strip_suffix(".txt"))
-            .map(|stem| stem.split_once('-').unwrap_or((stem, "")))
-        else {
-            continue;
-        };
-        if digest.len() != 64
-            || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-            || !suffix
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || byte == b'-')
-        {
-            continue;
-        }
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)?;
-        if private_file(&metadata) {
-            records.push(Record {
-                path,
-                digest: digest.to_owned(),
-                metadata,
-            });
-        }
-    }
-    Ok(records)
-}
-
-fn prune(directory: &Path, current: &Path, can_discard: impl Fn(&str) -> bool) -> io::Result<bool> {
-    let mut records = records(directory)?;
-    let mut count = records.len();
-    let mut bytes = records.iter().fold(0_u64, |sum, record| {
-        sum.saturating_add(record.metadata.len())
-    });
-    records.sort_unstable_by(|a, b| {
-        a.metadata
-            .modified()
-            .ok()
-            .cmp(&b.metadata.modified().ok())
-            .then_with(|| a.path.cmp(&b.path))
-    });
-    for record in records {
-        if count <= MAX_RECORDS && bytes <= MAX_BYTES {
-            break;
-        }
-        if record.path != current
-            && discard_if(&record.path, &record.digest, || can_discard(&record.digest))?
-        {
-            count -= 1;
-            bytes = bytes.saturating_sub(record.metadata.len());
-        }
-    }
-    Ok(count <= MAX_RECORDS && bytes <= MAX_BYTES)
-}
-
-// Stage the pathname change reversibly. The final authorization after
-// rename is the deletion's linearization point. A registration arriving
-// during rename wins and the worker puts the original name back. If Bus
-// exits during staging, the alternate name is still a managed record.
-fn discard_if(path: &Path, digest: &str, allowed: impl Fn() -> bool) -> io::Result<bool> {
-    if !allowed() {
-        return Ok(false);
-    }
-    let sequence = crate::utils::time::now_ns();
-    let staged = path.with_file_name(format!(
-        "copied-{digest}-{}-{sequence}.txt",
-        std::process::id()
-    ));
-    fs::rename(path, &staged)?;
-    #[cfg(test)]
-    test_hooks::before_effect(path);
-    if !allowed() {
-        fs::rename(staged, path)?;
-        return Ok(false);
-    }
-    fs::remove_file(staged)?;
-    Ok(true)
-}
-
 #[cfg(test)]
-pub(crate) mod test_hooks {
-    use super::*;
-    use std::{collections::HashMap, sync::Mutex};
-
-    type Action = Box<dyn FnOnce() -> io::Result<()> + Send>;
-    static WRITES: OnceLock<Mutex<HashMap<PathBuf, Action>>> = OnceLock::new();
-
-    type Effect = Box<dyn FnOnce() + Send>;
-    static EFFECTS: OnceLock<Mutex<HashMap<PathBuf, Effect>>> = OnceLock::new();
-
-    pub(super) fn install_effect(path: PathBuf, effect: impl FnOnce() + Send + 'static) {
-        let mut effects = EFFECTS.get_or_init(Default::default).lock().unwrap();
-        assert!(effects.insert(path, Box::new(effect)).is_none());
-    }
-
-    pub(super) fn before_effect(path: &Path) {
-        let effect = EFFECTS
-            .get_or_init(Default::default)
-            .lock()
-            .unwrap()
-            .remove(path);
-        if let Some(effect) = effect {
-            effect();
-        }
-    }
-
-    pub(crate) fn install(
-        directory: PathBuf,
-        action: impl FnOnce() -> io::Result<()> + Send + 'static,
-    ) {
-        let previous = WRITES
-            .get_or_init(Default::default)
-            .lock()
-            .unwrap()
-            .insert(directory, Box::new(action));
-        assert!(previous.is_none());
-    }
-
-    pub(super) fn before_write(directory: &Path) -> io::Result<()> {
-        let action = WRITES
-            .get_or_init(Default::default)
-            .lock()
-            .unwrap()
-            .remove(directory);
-        action.map_or(Ok(()), |action| action())
-    }
-
-    pub(crate) fn retain(directory: &Path, text: &str) {
-        if let Some(attempt) = start(directory, text) {
-            attempt.send(Outcome::Retain {
-                reason: "test_retain",
-                error: String::new(),
-            });
-        }
-    }
-}
+#[path = "recovery/test_hooks_test.rs"]
+pub(crate) mod test_hooks;
 
 #[cfg(test)]
 #[path = "../../tests/copy_recovery_test.rs"]

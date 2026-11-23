@@ -1029,3 +1029,90 @@ async fn claude_copy_fallback_replacement_protects_in_flight_oldest() {
     assert!(!oldest.exists());
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+struct BlockedCopyLog {
+    writer: CopyLogWriter,
+    gate: SharedCopyLogGate,
+}
+
+type SharedCopyLogGate = std::sync::Arc<
+    std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+>;
+
+impl std::io::Write for BlockedCopyLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.writer.write(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl Drop for BlockedCopyLog {
+    fn drop(&mut self) {
+        if String::from_utf8_lossy(&self.writer.line).contains("bus.draft.recovery_required") {
+            let gate = self.gate.lock().unwrap().take();
+            if let Some((started, release)) = gate {
+                started.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(8)).unwrap();
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_blocked_recovery_notice_does_not_delay_other_pane_delivery() {
+    let scratch = crate::utils::test_temp::unique_temp_path("copy-blocked-sink-pty");
+    let (messages, events) = std::sync::mpsc::channel();
+    let (started, waiting) = std::sync::mpsc::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    let gate = std::sync::Arc::new(std::sync::Mutex::new(Some((started, resume))));
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || BlockedCopyLog {
+                writer: CopyLogWriter {
+                    messages: messages.clone(),
+                    line: Vec::new(),
+                },
+                gate: gate.clone(),
+            })
+            .finish(),
+    );
+    let (first, mut first_keys) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    first.test_submission_clock().unwrap().pause();
+    let first_result = tracing::dispatcher::with_default(&dispatch, || {
+        queue_claude_copy(&first, scratch.join("first"), COPIED_DRAFT)
+    });
+    accept_copy_message(&first, &mut first_keys).await;
+    first.invalidate_submission_ownership();
+    paint(&first, "", false, "");
+    first_result
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let (second, mut second_keys) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    second.test_submission_clock().unwrap().pause();
+    let (second_result, second_events) = captured_copy(&second, scratch.join("second"));
+    let delivery = tokio::time::timeout(Duration::from_secs(2), async {
+        restore_copy_message(&second, &mut second_keys).await;
+        tokio::task::spawn_blocking(move || second_result.recv_timeout(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    })
+    .await;
+    release.send(()).unwrap();
+    copy_event(&events, "bus.draft.recovery_required");
+    assert!(
+        delivery.is_ok(),
+        "a blocked recovery notice delayed the other pane"
+    );
+    copy_event(&second_events, "bus.draft.copy_recovery_retired");
+    assert!(second_keys.try_recv().is_err());
+    std::fs::remove_dir_all(scratch).unwrap();
+}
