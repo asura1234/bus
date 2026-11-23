@@ -3,7 +3,10 @@ use super::{InputObservation, ObservedSubmission, PromptNotShown};
 use crate::protocol::api::submission::{withdrawal_budget, CLEAR_KEY_DELAY};
 use crate::terminal::runtime::draft_input::DraftInputLease;
 use bytes::Bytes;
-use std::{io, path::PathBuf, sync::atomic::Ordering, time::Duration};
+use std::{io, sync::atomic::Ordering, time::Duration};
+
+mod recovery;
+use recovery::Outcome;
 
 const RESTORE_BUDGET: Duration = Duration::from_secs(1);
 
@@ -35,17 +38,16 @@ impl ObservedSubmission {
         delay: Duration,
         lease: &DraftInputLease,
     ) -> io::Result<()> {
-        let backup = match self.save_copy_snapshot(&snapshot) {
-            Ok(backup) => backup,
-            Err(error) => {
-                tracing::error!(event = "bus.draft.copy_recovery_failed", %error, "Cannot back up the composer; its contents were left intact");
-                lease.restored();
-                return Err(io::Error::other(PromptNotShown::NotSubmitted));
-            }
-        };
+        let backup = self
+            .inspect
+            .copy_recovery_directory()
+            .and_then(|directory| recovery::start(directory, &snapshot));
         if let Err(error) = self.clear_for_copy(&snapshot, lease) {
-            if let Some((path, _)) = backup {
-                tracing::warn!(event = "bus.draft.recovery_required", reason = "clear_incomplete", recovery = %path.display(), %error, "Composer clear could not be confirmed; delivery remains queued and the snapshot is recoverable");
+            if let Some(backup) = backup {
+                let _ = backup.send(Outcome::Retain {
+                    reason: "clear_incomplete",
+                    error: error.to_string(),
+                });
             }
             return Err(error);
         }
@@ -63,43 +65,31 @@ impl ObservedSubmission {
                 "Native draft cannot be reconstructed from its visible snapshot",
             )),
         };
-        match (restored, backup) {
-            (Ok(()), Some((path, true))) => {
-                if let Err(error) = std::fs::remove_file(&path) {
-                    tracing::warn!(event = "bus.draft.recovery_required", recovery = %path.display(), %error, "Restored draft backup could not be retired");
-                }
+        match restored {
+            Ok(()) => {
                 lease.restored();
+                if let Some(backup) = backup {
+                    let _ = backup.send(Outcome::Restored);
+                }
             }
-            (Ok(()), _) => lease.restored(),
-            (Err(error), Some((path, _))) => {
+            Err(error) => {
                 lease.restoration_unproven();
-                tracing::warn!(event = "bus.draft.recovery_required", reason = "copy_restore_failed", recovery = %path.display(), %error, "Copied composer snapshot retained for manual recovery");
-            }
-            (Err(error), None) => {
-                tracing::warn!(event = "bus.draft.copy_loss", reason = "unreadable_composer_content", %error, "No visible composer text was available to save");
+                if let Some(backup) = backup {
+                    let _ = backup.send(Outcome::Retain {
+                        reason: "copy_restore_failed",
+                        error: error.to_string(),
+                    });
+                } else {
+                    let reason = if snapshot.is_empty() {
+                        "unreadable_composer_content"
+                    } else {
+                        "snapshot_storage_unavailable"
+                    };
+                    tracing::warn!(event = "bus.draft.copy_loss", reason, %error, "Copied draft restoration was not proven and no recovery record was scheduled");
+                }
             }
         }
         result
-    }
-
-    /// Keep a private copy outside the native editor exchange. The same
-    /// snapshot can be encountered again on a queued clear retry.
-    fn save_copy_snapshot(&self, snapshot: &str) -> io::Result<Option<(PathBuf, bool)>> {
-        if snapshot.is_empty() {
-            return Ok(None);
-        }
-        let directory = self
-            .inspect
-            .copy_recovery_directory()
-            .ok_or_else(|| io::Error::other("Draft recovery directory is unavailable"))?;
-        crate::platform::fs::private_dir(directory)?;
-        let digest = crate::utils::time::digest(snapshot.as_bytes());
-        let path = directory.join(format!("copied-{digest}.txt"));
-        let created = !path.try_exists()?;
-        if created {
-            crate::platform::atomic_write(&path, snapshot.as_bytes())?;
-        }
-        Ok(Some((path, created)))
     }
 
     fn clear_for_copy(&self, snapshot: &str, lease: &DraftInputLease) -> io::Result<()> {
@@ -212,7 +202,14 @@ impl ObservedSubmission {
                 Ok(self
                     .inspect
                     .composer_copy_fallback(&screen, cursor, false)
-                    .is_some_and(|(body, _)| body == snapshot))
+                    .is_some_and(|(body, _)| {
+                        body == snapshot
+                            // Some providers paint a multiline paste as one
+                            // line. Compare words without joining their boundaries.
+                            || snapshot.contains('\n')
+                                && !body.contains('\n')
+                                && body.split_whitespace().eq(snapshot.split_whitespace())
+                    }))
             })
         })
     }
