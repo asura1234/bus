@@ -658,3 +658,102 @@ fn copy_recovery_round5_pin_releases_without_an_unrelated_save() {
     assert!(pin_released, "an idle pane still occupied an overflow slot");
     drop(held);
 }
+
+fn check_idle_overflow_pin_after_scan_fault(
+    failures: usize,
+    delete_directory: bool,
+    scans: usize,
+    release_reason: Option<&str>,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let dir = crate::utils::test_temp::unique_temp_path("copy-idle-pin-scan-fault");
+    let pane = dir.join("pane");
+    let moved = dir.join("removed-pane");
+    let (service, receiver) = service();
+    let held = fill_tracking(service, &dir.join("held"));
+    assert_eq!(receiver.try_iter().count(), QUEUED_BACKUPS);
+    let text = "verified overflow backup";
+    let snapshot = key(&pane, text);
+    let path = make_record(&snapshot, text);
+    let reads = Arc::new(AtomicUsize::new(0));
+    let (hook_dir, hook_moved, hook_reads) = (pane.clone(), moved.clone(), reads.clone());
+    // This callback runs after the file was verified and the first cap
+    // check passed. Fault only the idle pin's cap check and any retries.
+    test_hooks::install_effect(path.clone(), move || {
+        if delete_directory {
+            fs::rename(&hook_dir, hook_moved).unwrap();
+        }
+        test_hooks::install_read(hook_dir, move || {
+            if hook_reads.fetch_add(1, Ordering::SeqCst) < failures {
+                Err(io::Error::other("injected cap read failure"))
+            } else {
+                Ok(())
+            }
+        });
+    });
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let dispatch = dispatch_for(&buffer);
+    tracing::dispatcher::with_default(&dispatch, || {
+        begin(service, &snapshot, text).send(retain());
+        drain(service, &receiver);
+    });
+    let pin_released = !service.registry().overflow.contains_key(&snapshot);
+    let log = output(&buffer);
+    let backup = if delete_directory {
+        assert!(!pane.exists());
+        moved.join(path.file_name().unwrap())
+    } else {
+        path
+    };
+    assert_eq!(fs::read_to_string(backup).unwrap(), text);
+    test_hooks::remove_read(&pane);
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        log.matches("bus.draft.recovery_required").count(),
+        1,
+        "{log}"
+    );
+    assert!(
+        pin_released,
+        "an idle overflow slot remained occupied after the scan fault: {log}"
+    );
+    assert_eq!(reads.load(Ordering::SeqCst), scans, "{log}");
+    if let Some(reason) = release_reason {
+        assert_eq!(log.matches(reason).count(), 1, "{log}");
+    } else {
+        assert!(!log.contains("snapshot_prune_failed"), "{log}");
+    }
+    drop(held);
+}
+
+#[test]
+fn copy_recovery_round6_idle_pin_recovers_from_one_failed_scan() {
+    check_idle_overflow_pin_after_scan_fault(1, false, 2, None);
+}
+
+#[test]
+fn copy_recovery_round6_idle_pin_recovers_from_two_failed_scans() {
+    check_idle_overflow_pin_after_scan_fault(2, false, 3, None);
+}
+
+#[test]
+fn copy_recovery_round6_idle_pin_releases_after_retries_are_exhausted() {
+    check_idle_overflow_pin_after_scan_fault(
+        usize::MAX,
+        false,
+        3,
+        Some("snapshot_prune_pin_retries_exhausted"),
+    );
+}
+
+#[test]
+fn copy_recovery_round6_idle_pin_releases_when_directory_disappears() {
+    check_idle_overflow_pin_after_scan_fault(
+        0,
+        true,
+        1,
+        Some("snapshot_prune_pin_directory_missing"),
+    );
+}

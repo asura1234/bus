@@ -54,3 +54,31 @@ pub(crate) fn retain(directory: &Path, text: &str) {
     }
     diagnostics.emit();
 }
+
+type ReadAction = Box<dyn FnMut() -> io::Result<()> + Send>;
+static READS: OnceLock<Mutex<HashMap<PathBuf, ReadAction>>> = OnceLock::new();
+
+pub(super) fn install_read(
+    directory: PathBuf,
+    action: impl FnMut() -> io::Result<()> + Send + 'static,
+) {
+    let old = READS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(directory, Box::new(action));
+    assert!(old.is_none());
+}
+
+pub(super) fn before_read(directory: &Path) -> io::Result<()> {
+    let mut reads = READS.get_or_init(Default::default).lock().unwrap();
+    reads.get_mut(directory).map_or(Ok(()), |action| action())
+}
+
+pub(super) fn remove_read(directory: &Path) {
+    READS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .remove(directory);
+}

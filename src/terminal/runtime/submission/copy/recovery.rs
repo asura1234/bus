@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{mpsc, Mutex, MutexGuard, OnceLock},
     thread,
+    time::Duration,
 };
 
 mod caller;
@@ -15,6 +16,8 @@ const QUEUED_BACKUPS: usize = 16;
 const MAX_TRACKED: usize = 256;
 const MAX_OVERFLOW: usize = 64;
 const MAX_DEFERRED: usize = 64;
+const PIN_SCAN_RETRIES: usize = 2;
+const PIN_SCAN_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 pub(super) enum Outcome {
     Restored,
@@ -429,14 +432,41 @@ impl Service {
     }
 
     fn prune_directory(&self, directory: &Path, current: &Path) {
-        let result = prune(directory, current, |digest| {
-            let candidate = Key {
-                directory: directory.to_owned(),
-                digest: digest.to_owned(),
+        let mut retries = 0;
+        let (result, pin_failure) = loop {
+            let result = prune(directory, current, |digest| {
+                let candidate = Key {
+                    directory: directory.to_owned(),
+                    digest: digest.to_owned(),
+                };
+                self.registry().prune_decision(&candidate)
+            });
+            let Err(error) = &result else {
+                break (result, None);
             };
-            self.registry().prune_decision(&candidate)
-        });
-        let (evicted, error) = self.record_prune_result(directory, current, result);
+            let pinned = self
+                .registry()
+                .overflow
+                .iter()
+                .any(|(key, entry)| key.directory == directory && entry.pin_next_prune);
+            if !pinned {
+                break (result, None);
+            }
+            // A missing record can also yield NotFound. Check the
+            // directory itself before deciding there is nothing to retry.
+            if error.kind() == std::io::ErrorKind::NotFound
+                && matches!(directory.try_exists(), Ok(false))
+            {
+                break (result, Some("snapshot_prune_pin_directory_missing"));
+            }
+            if retries == PIN_SCAN_RETRIES {
+                break (result, Some("snapshot_prune_pin_retries_exhausted"));
+            }
+            retries += 1;
+            thread::sleep(PIN_SCAN_RETRY_DELAY);
+        };
+        let (evicted, error) =
+            self.record_prune_result(directory, current, result, pin_failure.is_some());
         if evicted {
             tracing::warn!(
                 event = "bus.draft.copy_recovery_failed",
@@ -445,7 +475,8 @@ impl Service {
             );
         }
         if let Some(error) = error {
-            tracing::warn!(event = "bus.draft.copy_recovery_failed", reason = "snapshot_prune_failed", %error, "Could not prune copied draft recovery records");
+            let reason = pin_failure.unwrap_or("snapshot_prune_failed");
+            tracing::warn!(event = "bus.draft.copy_recovery_failed", reason, directory = %directory.display(), %error, "Could not prune copied draft recovery records");
         }
     }
 
@@ -454,12 +485,19 @@ impl Service {
         directory: &Path,
         current: &Path,
         result: std::io::Result<PruneResult>,
+        release_failed_pins: bool,
     ) -> (bool, Option<std::io::Error>) {
         let mut registry = self.registry();
-        if let Ok(pass) = &result {
+        if release_failed_pins || result.is_ok() {
+            // Once retries are exhausted or the directory has gone, keeping
+            // a pin would tie up a slot with no scan guaranteed to revisit it.
+            // Drop only the pin; active owners and surviving files remain.
             registry.overflow.retain(|key, entry| {
                 if key.directory == directory
-                    && (pass.within_cap || pass.honored_pins.contains(&key.digest))
+                    && (release_failed_pins
+                        || result.as_ref().is_ok_and(|pass| {
+                            pass.within_cap || pass.honored_pins.contains(&key.digest)
+                        }))
                 {
                     entry.pin_next_prune = false;
                 }

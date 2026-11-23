@@ -130,6 +130,8 @@ pub(super) struct Record {
 }
 
 pub(super) fn records(directory: &Path) -> io::Result<Vec<Record>> {
+    #[cfg(test)]
+    test_hooks::before_read(directory)?;
     let mut records = Vec::new();
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
