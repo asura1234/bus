@@ -587,3 +587,7 @@ mod codex_legacy_restoration_tests;
 #[cfg(test)]
 #[path = "../tests/editor_fallback_race_test.rs"]
 mod editor_fallback_race_tests;
+
+#[cfg(test)]
+#[path = "../tests/editor_reentry_test.rs"]
+mod editor_reentry_tests;

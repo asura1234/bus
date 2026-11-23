@@ -663,6 +663,9 @@ impl ObservedSubmission {
                     return fallback;
                 }
             }
+            if error.kind() == io::ErrorKind::WouldBlock {
+                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+            }
             lease.restored();
             return Err(error);
         }
