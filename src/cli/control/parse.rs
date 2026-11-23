@@ -333,6 +333,7 @@ fn agent_cli() -> Command {
                 .arg(option("provider").value_parser([
                     "claude",
                     "claude-ds",
+                    "claude-gpt",
                     "codex",
                     "cursor",
                     "grok",

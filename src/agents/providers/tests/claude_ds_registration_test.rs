@@ -160,3 +160,29 @@ fn claude_ds_resume_uses_resume_and_the_wrapper_command() {
     .unwrap();
     assert_eq!(plan.argv, argv(&["claude-ds", "--resume", session]));
 }
+
+#[test]
+fn claude_gpt_registers_a_distinct_claude_wrapper() {
+    let provider = ProviderKind::ClaudeGpt;
+    let label = "claude-gpt";
+    assert_eq!(provider.label(), label);
+    assert_eq!(provider.executable(), label);
+    assert_eq!(launch::native_provider(label), Some(provider));
+    assert_eq!(
+        launch::selected_executable(provider, &Default::default()).unwrap(),
+        Some(label.into())
+    );
+    assert!(provider.uses_claude_harness());
+    assert!(provider.observes_label("claude"));
+    assert_eq!(identify_agent(label), Some(AgentKind::Claude));
+    assert_eq!(
+        HookContract::for_provider(provider),
+        HookContract::for_provider(ProviderKind::ClaudeCode)
+    );
+
+    let session =
+        catalog::session_ref_from_report("herdr:claude-gpt", label, Some("session".into()), None)
+            .expect("the wrapper retains its own session namespace");
+    let plan = catalog::plan("herdr:claude-gpt", label, &session).unwrap();
+    assert_eq!(plan.argv, argv(&[label, "--resume", "session"]));
+}

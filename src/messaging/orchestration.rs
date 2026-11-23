@@ -314,7 +314,7 @@ pub(crate) fn prompt_args(
             crate::agents::providers::kimi::system_prompt::prompt_args(path, adopted)?
         }
         Provider::Agy => crate::agents::providers::agy::system_prompt::prompt_args(path, adopted)?,
-        Provider::ClaudeCode | Provider::ClaudeDs => {
+        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => {
             Some(crate::agents::providers::claude_code::system_prompt::prompt_args(path, adopted))
         }
         Provider::Codex => {

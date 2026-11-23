@@ -580,9 +580,10 @@ fn settings_idle_alert_minutes_is_visible_and_stops_at_one_and_sixty() {
     assert_eq!(ui.settings_field, ui.idle_alert_minutes_field());
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert_eq!(ui.settings.idle_alert_minutes, 6);
-    assert!(ui.pending.iter().any(|pending| {
-        matches!(pending.command, BusCommand::SetIdleAlertMinutes(6))
-    }));
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| { matches!(pending.command, BusCommand::SetIdleAlertMinutes(6)) }));
     ui.settings.idle_alert_minutes = 60;
     let before = ui.pending.len();
     ui.action(render::Action::AdjustIdleAlertMinutes(true));
@@ -1379,6 +1380,7 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         Provider::Codex,
         Provider::ClaudeCode,
         Provider::ClaudeDs,
+        Provider::ClaudeGpt,
         Provider::Cursor,
         Provider::Grok,
         Provider::Kimi,
@@ -1507,12 +1509,18 @@ fn failed_native_launch_stays_bound_to_its_saved_agent() {
             None,
         )
         .unwrap();
-    snapshot.state.set_agent_error(agent, Some(error.into())).unwrap();
+    snapshot
+        .state
+        .set_agent_error(agent, Some(error.into()))
+        .unwrap();
     ui.receive_snapshot(Arc::new(snapshot.clone()));
     ui.settle_agent_creation(command_id, &Err(error.into()));
     assert!(room_screen(&mut ui, 100, 40).contains(error));
 
-    snapshot.state.rename_agent(agent, "renamed-worker").unwrap();
+    snapshot
+        .state
+        .rename_agent(agent, "renamed-worker")
+        .unwrap();
     ui.receive_snapshot(Arc::new(snapshot.clone()));
     assert_eq!(ui.provisional_agents().count(), 0);
     snapshot.state.delete_agent(agent, 0).unwrap();

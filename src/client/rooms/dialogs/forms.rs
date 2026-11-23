@@ -78,6 +78,7 @@ pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
         &[
             Provider::ClaudeCode,
             Provider::ClaudeDs,
+            Provider::ClaudeGpt,
             Provider::Codex,
             Provider::Cursor,
             Provider::Grok,
@@ -88,6 +89,7 @@ pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
             Provider::Codex,
             Provider::ClaudeCode,
             Provider::ClaudeDs,
+            Provider::ClaudeGpt,
             Provider::Cursor,
             Provider::Grok,
             Provider::Kimi,
