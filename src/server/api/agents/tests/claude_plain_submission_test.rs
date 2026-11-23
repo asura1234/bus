@@ -410,6 +410,56 @@ async fn claude_interrupt_delivery_discards_returned_aborted_payload_without_sta
 }
 
 #[tokio::test]
+async fn claude_interrupt_delivery_discards_returned_collapsed_payload() {
+    let _env = IsolatedDraftEnv::new();
+    let aborted = [
+        "[Bus message 6 from peer]",
+        "",
+        "Read the assignment and report the result.",
+        "",
+        "Include evidence with the report.",
+    ]
+    .join("\n");
+    let collapsed = "[Pasted text #12 +4 lines]";
+    let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, collapsed);
+    let Method::AgentPromptIfIdle(params) = &mut method else {
+        unreachable!();
+    };
+    params.discard_aborted_payload = Some(aborted);
+    let response = start(&mut app, method);
+
+    let first_key = tokio::time::timeout(WAIT, writes.recv())
+        .await
+        .expect("expected a clear key for the returned paste chip")
+        .expect("terminal writer closed");
+    assert_eq!(
+        first_key.as_ref(),
+        b"\x01",
+        "discard must not stash the chip"
+    );
+    redraw(&app, AgentKind::Claude, collapsed);
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x0b");
+    redraw(&app, AgentKind::Claude, "");
+
+    assert_eq!(
+        next_write(&mut writes).await.as_ref(),
+        b"\x1b[200~from bus\x1b[201~"
+    );
+    redraw(&app, AgentKind::Claude, "from bus");
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    redraw(&app, AgentKind::Claude, "");
+
+    let reply: serde_json::Value =
+        serde_json::from_str(&response.recv_timeout(WAIT).unwrap()).unwrap();
+    assert_eq!(reply["result"]["type"], "agent_prompted", "{reply}");
+    assert_eq!(
+        reply["result"]["discarded_aborted_payload"], true,
+        "{reply}"
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn claude_interrupt_delivery_still_preserves_unrelated_typed_draft() {
     let _env = IsolatedDraftEnv::new();
     let aborted = "[Bus message 6 from you (room 1)]\nM2_STEER_MARKER_A report alpha";

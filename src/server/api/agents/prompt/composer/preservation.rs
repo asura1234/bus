@@ -27,6 +27,7 @@ pub(super) struct PreservingComposer {
 struct AbortedMatcher {
     payload: String,
     normalized: String,
+    collapsed: Option<String>,
     started: bool,
     last_len: usize,
     progress: u64,
@@ -38,6 +39,7 @@ impl AbortedMatcher {
         Self {
             payload,
             normalized,
+            collapsed: None,
             started: false,
             last_len: usize::MAX,
             progress: 0,
@@ -68,9 +70,21 @@ impl AbortedMatcher {
                 self.started = true;
                 self.last_len = body.len();
                 self.progress = self.progress.wrapping_add(1);
+                if kind == AgentKind::Claude && super::pasted_text_count(&body).is_some() {
+                    self.collapsed = Some(body);
+                }
                 return InputObservation::Pending;
             }
             return InputObservation::Other;
+        }
+        // Claude renders a collapsed paste as one atom. A cursor move leaves
+        // its label unchanged, and a line kill removes it in one edit.
+        if let Some(collapsed) = &self.collapsed {
+            return if *collapsed == body {
+                InputObservation::Pending
+            } else {
+                InputObservation::Other
+            };
         }
         let norm: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         let mut hay = self.normalized.chars();
