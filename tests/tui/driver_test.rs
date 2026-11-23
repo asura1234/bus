@@ -2461,7 +2461,7 @@ fn composer_mode_dropdown_keeps_controls_separate_at_narrow_width() {
     let mode = find("delivery-mode");
     let files = find("files");
     assert_eq!(mode["row"], files["row"], "{frame}");
-    assert!(right(mode) <= files["col"].as_u64().unwrap(), "{frame}");
+    assert_eq!(mode["width"], 1, "{frame}");
     let recipients: Vec<_> = hits
         .iter()
         .filter(|hit| hit["name"] == "recipients")
@@ -2472,10 +2472,21 @@ fn composer_mode_dropdown_keeps_controls_separate_at_narrow_width() {
         "expected @ and a recipient chip: {frame}"
     );
     assert_eq!(recipients[0]["text"], "@", "{frame}");
-    assert!(
-        right(recipients[0]) <= recipients[1]["col"].as_u64().unwrap(),
-        "{frame}"
-    );
+    assert_eq!(mode["row"], recipients[0]["row"], "{frame}");
+    let row = mode["row"].to_string();
+    let col = mode["col"].to_string();
+    let toolbar = session.ok(&["cells", &row, &col, "7", "1"]);
+    let cells = toolbar["cells"].as_array().unwrap();
+    let symbols: String = cells
+        .iter()
+        .map(|cell| cell["symbol"].as_str().unwrap())
+        .collect();
+    assert_eq!(symbols, "▼  +  @", "{toolbar}");
+    for field in ["fg", "bg", "attrs"] {
+        assert_eq!(cells[0][field], cells[3][field], "{toolbar}");
+        assert_eq!(cells[0][field], cells[6][field], "{toolbar}");
+    }
+    assert_eq!(right(recipients[0]), recipients[1]["col"], "{frame}");
     assert!(
         recipients[1]["text"].as_str().unwrap().contains("rec"),
         "{frame}"

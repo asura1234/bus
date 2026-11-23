@@ -22,13 +22,8 @@ impl BusUi {
         } = view.recipient_bar;
         let controls_y = composer_y + u16::from(bar_height > 1);
         let pill_width = delivery_pill_width(width);
-        let pill = Rect::new(
-            x,
-            controls_y,
-            pill_width.saturating_sub(1).max(1).min(pill_width),
-            1,
-        );
-        delivery_pill(view, pill, local.delivery, self.delivery_menu.is_some());
+        let pill = Rect::new(x, controls_y, pill_width.min(1), 1);
+        delivery_pill(view, pill, self.delivery_menu.is_some());
         let x = x + pill_width;
         let width = width.saturating_sub(pill_width);
         view.row(
@@ -38,26 +33,20 @@ impl BusUi {
             false,
             false,
         );
-        view.row(
-            Rect::new(
-                x + 3,
-                controls_y,
-                if local.recipients.is_empty() {
-                    width.saturating_sub(3)
-                } else {
-                    width.saturating_sub(3).min(3)
-                },
-                1,
-            ),
-            if local.recipients.is_empty() {
-                "@  Choose agents"
-            } else {
-                "@"
-            },
-            Some(Action::Recipients),
-            false,
-            true,
+        let at_x = x + 3;
+        let at_width = width.saturating_sub(3);
+        let empty = local.recipients.is_empty();
+        let at = Rect::new(
+            at_x,
+            controls_y,
+            if empty { at_width } else { at_width.min(3) },
+            1,
         );
+        view.row(at, "@", Some(Action::Recipients), false, false);
+        if empty && at_width > 3 {
+            let hint = Rect::new(at_x + 3, controls_y, at_width - 3, 1);
+            view.row(hint, "Choose agents", None, false, true);
+        }
         for chip in &recipients.chips {
             if chip.rect.y < self.recipient_scroll
                 || chip.rect.bottom() > self.recipient_scroll + bar_height
