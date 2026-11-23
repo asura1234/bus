@@ -70,7 +70,16 @@ pub(super) fn preserving_observer(
     directory: std::path::PathBuf,
     keys: Vec<bytes::Bytes>,
 ) -> impl crate::terminal::runtime::SubmissionInspector {
-    preserving_observer_for_submission(kind, expected, directory, keys, false, true)
+    preserving_observer_for_submission(
+        kind,
+        expected,
+        directory,
+        keys,
+        false,
+        true,
+        None,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
 }
 
 pub(super) fn preserving_observer_for_submission(
@@ -80,6 +89,8 @@ pub(super) fn preserving_observer_for_submission(
     keys: Vec<bytes::Bytes>,
     steer: bool,
     bracketed_paste: bool,
+    discard_aborted_payload: Option<String>,
+    discarded_aborted_payload: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> impl crate::terminal::runtime::SubmissionInspector {
     let keys = if kind == AgentKind::Claude && !preservation::default_claude_stash_binding() {
         Vec::new()
@@ -89,6 +100,7 @@ pub(super) fn preserving_observer_for_submission(
     preservation::PreservingComposer::new(kind, expected, directory, keys)
         .with_steering(steer)
         .with_bracketed_paste(bracketed_paste)
+        .with_aborted_payload(discard_aborted_payload, discarded_aborted_payload)
 }
 
 pub(super) fn observer(

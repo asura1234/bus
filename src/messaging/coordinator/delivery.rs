@@ -442,6 +442,7 @@ impl Worker {
             false,
             false,
             self.serving_generation,
+            None,
         ));
         match result {
             Ok(ResponseResult::AgentPrompted { .. }) => {
@@ -683,6 +684,11 @@ impl Worker {
             "Bus payload metadata"
         );
         self.mark_live_dispatch(request, DispatchMark::Diagnostics);
+        let discard_aborted_payload = agent
+            .autonomous_stop
+            .aborted_payload
+            .as_ref()
+            .map(|aborted| aborted.payload.clone());
         let method = submission_method(
             agent,
             text,
@@ -691,6 +697,7 @@ impl Worker {
             steer,
             allow_working,
             self.serving_generation,
+            discard_aborted_payload,
         );
         self.mark_live_dispatch(request, DispatchMark::Method);
         self.start_native_submission(agent, request, method, false, started)

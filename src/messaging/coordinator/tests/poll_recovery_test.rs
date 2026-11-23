@@ -308,6 +308,7 @@ fn long_stall_recovery_delivers_queued_work_once() {
         Ok(ResponseResult::AgentPrompted {
             agent: native_info("pane", "claude", "session"),
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         }),
     ]);
     let (mut worker, agent, room, dir, calls) = fixture(Provider::ClaudeCode, replies);

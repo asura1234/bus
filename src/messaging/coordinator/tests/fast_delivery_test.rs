@@ -26,6 +26,7 @@ impl Transport for WakeNative {
                 Ok(ResponseResult::AgentPrompted {
                     agent: self.info.clone(),
                     timestamps: Default::default(),
+                    discarded_aborted_payload: false,
                 })
             }
             other => panic!("unexpected native operation: {other:?}"),
@@ -93,6 +94,7 @@ impl Transport for TimestampNative {
         Ok(ResponseResult::AgentPrompted {
             agent: native_info("pane", "codex", "session"),
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         })
     }
 }
@@ -129,6 +131,7 @@ fn confirmed() -> Result<ResponseResult, TransportError> {
     Ok(ResponseResult::AgentPrompted {
         agent: native_info("pane", "codex", "session"),
         timestamps: Default::default(),
+        discarded_aborted_payload: false,
     })
 }
 
@@ -508,6 +511,7 @@ fn a_pending_write_does_not_hold_another_recipients_readiness_refresh() {
         .send(Ok(ResponseResult::AgentPrompted {
             agent: second,
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         }))
         .unwrap();
     commands.send((1, BusCommand::Shutdown)).unwrap();
@@ -542,6 +546,7 @@ fn a_pending_write_is_reconciled_before_generation_settlement() {
         .send(Ok(ResponseResult::AgentPrompted {
             agent: info,
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         }))
         .unwrap();
     worker.finish_native_submissions(false);
@@ -810,6 +815,7 @@ fn fast_callback_refresh_defers_a_recipient_until_its_native_receipt() {
         .send(Ok(ResponseResult::AgentPrompted {
             agent: native_info("pane", "claude", "session"),
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         }))
         .unwrap();
     worker.finish_native_submissions(false);

@@ -33,6 +33,7 @@ pub(super) fn submission_method(
     steer: bool,
     allow_working: bool,
     generation: u64,
+    discard_aborted_payload: Option<String>,
 ) -> Method {
     if let Some(session) = &agent.runtime_identity.session_id {
         Method::AgentPromptIfIdleAtGeneration(schema::AgentPromptIfIdleParams {
@@ -46,6 +47,7 @@ pub(super) fn submission_method(
             allow_working,
             expected_generation: Some(generation),
             expected_turn_id: None,
+            discard_aborted_payload,
         })
     } else {
         Method::AgentPromptIfUnboundAtGeneration(schema::AgentPromptIfUnboundParams {
@@ -108,6 +110,7 @@ impl Worker {
             true,
             false,
             self.serving_generation,
+            None,
         );
         if let Method::AgentPromptIfIdleAtGeneration(params) = &mut method {
             params.expected_turn_id = self

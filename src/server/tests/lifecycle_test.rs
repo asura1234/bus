@@ -262,6 +262,7 @@ async fn rejected_post_restart_prompt_does_not_reset_native_resume_deadline() {
                             allow_working: false,
                             expected_generation: None,
                             expected_turn_id: None,
+                            discard_aborted_payload: None,
                         },
                     ),
                 },

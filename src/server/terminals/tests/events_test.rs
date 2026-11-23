@@ -271,6 +271,7 @@ mod grok_captured_composer_prompt {
                     allow_working: false,
                     expected_generation: None,
                     expected_turn_id: None,
+                    discard_aborted_payload: None,
                 }),
             },
             tx,

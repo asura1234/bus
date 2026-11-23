@@ -91,6 +91,7 @@ pub(super) fn provider_fixture(
             allow_working: false,
             expected_generation: None,
             expected_turn_id: None,
+            discard_aborted_payload: None,
         })
     } else {
         Method::AgentPromptIfUnbound(AgentPromptIfUnboundParams {

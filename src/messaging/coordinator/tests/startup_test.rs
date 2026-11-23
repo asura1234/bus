@@ -304,6 +304,7 @@ fn non_codex_sessionless_readiness_refreshes_idle_window_before_delivery() {
         vec![Ok(ResponseResult::AgentPrompted {
             agent: ready.clone(),
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         })],
     );
     let now = io::now_ms();
@@ -360,6 +361,7 @@ fn slow_sessionless_codex_delivers_once_after_owned_interactive_confirmation() {
         vec![Ok(ResponseResult::AgentPrompted {
             agent: ready.clone(),
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         })],
     );
     let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
@@ -2401,6 +2403,7 @@ fn native_startup_wait_preserves_the_queue_through_blocked_and_ready_retry() {
         Ok(ResponseResult::AgentPrompted {
             agent: ready,
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         }),
     ];
     let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, replies);

@@ -39,6 +39,7 @@ impl Transport for Accepting {
             }))
             .unwrap(),
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         })
     }
 }

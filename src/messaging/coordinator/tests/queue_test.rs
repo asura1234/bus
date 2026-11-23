@@ -371,6 +371,7 @@ fn grok_login_keeps_work_queued_until_authenticated_idle() {
             vec![Ok(ResponseResult::AgentPrompted {
                 agent: native_info("pane", "grok", "session"),
                 timestamps: Default::default(),
+                discarded_aborted_payload: false,
             })],
         );
         let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();

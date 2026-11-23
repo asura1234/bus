@@ -557,6 +557,7 @@ fn agent_clear_types_each_providers_reset_command_outside_bus_messages() {
             Ok(ResponseResult::AgentPrompted {
                 agent,
                 timestamps: Default::default(),
+                discarded_aborted_payload: false,
             })
         }
     }
@@ -648,6 +649,7 @@ fn agent_clear_restores_reply_instructions_for_first_message_providers() {
             Ok(ResponseResult::AgentPrompted {
                 agent,
                 timestamps: Default::default(),
+                discarded_aborted_payload: false,
             })
         }
     }
@@ -728,6 +730,7 @@ fn agent_clear_restores_reply_instructions_for_an_adopted_codex_session() {
             Ok(ResponseResult::AgentPrompted {
                 agent,
                 timestamps: Default::default(),
+                discarded_aborted_payload: false,
             })
         }
     }
@@ -855,6 +858,7 @@ fn agent_clear_does_not_reset_provider_when_reset_intent_cannot_be_saved() {
             Ok(ResponseResult::AgentPrompted {
                 agent: owned_agent_info(&params.target, "bus-r1-a2", Some("old-session")),
                 timestamps: Default::default(),
+                discarded_aborted_payload: false,
             })
         }
     }

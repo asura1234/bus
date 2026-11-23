@@ -177,6 +177,24 @@ impl Worker {
             return Ok(());
         }
         let timestamps = native_response_timestamps(&response);
+        let discarded_aborted_payload = matches!(
+            &response,
+            Ok(
+                crate::protocol::api::schema::ResponseResult::AgentPrompted {
+                    discarded_aborted_payload: true,
+                    ..
+                }
+            )
+        );
+        let aborted_request = (!steered)
+            .then(|| {
+                agent
+                    .autonomous_stop
+                    .aborted_payload
+                    .as_ref()
+                    .map(|aborted| aborted.request_id)
+            })
+            .flatten();
         let native_code = response
             .as_ref()
             .err()
@@ -221,6 +239,18 @@ impl Worker {
             state.record_submission(request, outcome.clone())
         }
         .map_err(|error| error.to_string())?;
+        if discarded_aborted_payload {
+            if let Some(aborted_id) = aborted_request {
+                state.record_aborted_payload_discarded(agent.id, aborted_id);
+                tracing::info!(
+                    event = "bus.interrupt.aborted_payload_discarded",
+                    agent_id = agent.id.0,
+                    aborted_request_id = aborted_id.0,
+                    incoming_request_id = request.0,
+                    "Discarded interrupted request payload returned to composer"
+                );
+            }
+        }
         if claude_turn_busy {
             state.defer_claude_delivery_until_idle(agent.id);
         }

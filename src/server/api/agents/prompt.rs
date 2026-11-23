@@ -209,6 +209,7 @@ impl App {
                 false,
                 None,
                 false,
+                None,
             ),
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params)
             | crate::protocol::api::schema::Method::AgentPromptIfIdleAtGeneration(params) => {
@@ -300,6 +301,7 @@ impl App {
             false,
             None,
             native_only,
+            None,
         )
     }
 
@@ -341,6 +343,7 @@ impl App {
             params.steer,
             params.expected_turn_id,
             native_only,
+            params.discard_aborted_payload,
         )
     }
 
@@ -353,6 +356,7 @@ impl App {
         steer: bool,
         expected_turn_id: Option<String>,
         native_only: bool,
+        discard_aborted_payload: Option<String>,
     ) -> Result<
         (
             String,
@@ -452,6 +456,7 @@ impl App {
             NativePromptOptions {
                 expected_turn_id,
                 native_only,
+                discard_aborted_payload,
             },
             hard_deadline,
             id,
@@ -462,6 +467,7 @@ impl App {
 struct NativePromptOptions {
     expected_turn_id: Option<String>,
     native_only: bool,
+    discard_aborted_payload: Option<String>,
 }
 
 fn queue_prompt_submission(
@@ -507,6 +513,7 @@ fn queue_prompt_submission(
                 submit_deadline,
                 Some(crate::platform::draft_editor::directory(&agent.pane_id)),
                 steer,
+                native.discard_aborted_payload.clone(),
             )
         },
         submit_delay,
@@ -515,7 +522,7 @@ fn queue_prompt_submission(
     }
     #[cfg(not(unix))]
     let _ = (native.expected_turn_id, native.native_only);
-    let completion = queue_prompt_input(
+    let completion = prepare_prompt_input(
         runtime,
         expected_agent,
         params.text,
@@ -524,11 +531,14 @@ fn queue_prompt_submission(
         submit_deadline,
         Some(crate::platform::draft_editor::directory(&agent.pane_id)),
         steer,
+        native.discard_aborted_payload,
     )
+    .and_then(|prepared| prepared())
     .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
     Ok((id, agent, completion))
 }
 
+#[cfg(test)]
 fn queue_prompt_input(
     runtime: &crate::terminal::TerminalRuntime,
     kind: crate::agents::AgentKind,
@@ -548,6 +558,7 @@ fn queue_prompt_input(
         deadline,
         draft_directory,
         steer,
+        None,
     )?()
 }
 
@@ -562,6 +573,7 @@ fn prepare_prompt_input(
     deadline: Option<std::time::Instant>,
     draft_directory: Option<std::path::PathBuf>,
     steer: bool,
+    discard_aborted_payload: Option<String>,
 ) -> std::io::Result<PreparedPrompt> {
     use crate::agents::AgentKind;
     let (mut encoded, enter) =
@@ -600,6 +612,7 @@ fn prepare_prompt_input(
         &["ctrl+a".into(), "ctrl+k".into(), "ctrl+u".into()],
     )
     .map_err(|key| std::io::Error::other(format!("Invalid clear key: {key}")))?;
+    let discarded_aborted_payload = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let inspector: Box<dyn crate::terminal::runtime::SubmissionInspector> =
         if let Some(directory) = draft_directory {
             let keys = crate::server::api::input_encoding::encode_api_keys(
@@ -614,19 +627,23 @@ fn prepare_prompt_input(
                 keys.into_iter().map(Bytes::from).collect(),
                 steer,
                 runtime.bracketed_paste_enabled(),
+                discard_aborted_payload,
+                std::sync::Arc::clone(&discarded_aborted_payload),
             ))
         } else {
             Box::new(composer::observer(kind, text))
         };
     Ok(Box::new(move || {
-        submission.queue_observed_input_with_inspector(
-            Bytes::from(encoded),
-            Bytes::from(enter),
-            clear.into_iter().map(Bytes::from).collect(),
-            delay,
-            deadline,
-            inspector,
-        )
+        submission
+            .queue_observed_input_with_inspector(
+                Bytes::from(encoded),
+                Bytes::from(enter),
+                clear.into_iter().map(Bytes::from).collect(),
+                delay,
+                deadline,
+                inspector,
+            )
+            .map(|completion| completion.with_discarded_aborted_payload(discarded_aborted_payload))
     }))
 }
 
@@ -650,6 +667,7 @@ pub(super) fn complete_agent_prompt_submission(
         now,
         |timeout| Ok(completion.wait_for_api(map_timeout(timeout))),
         || completion.submission_timestamps(),
+        || completion.discarded_aborted_payload(),
     )
 }
 
@@ -671,6 +689,7 @@ pub(super) fn complete_agent_prompt(
         now,
         receive,
         Default::default,
+        || false,
     )
 }
 
@@ -682,10 +701,12 @@ fn complete_agent_prompt_with_timestamps(
     now: std::time::Instant,
     receive: impl FnOnce(Duration) -> Result<std::io::Result<()>, std::sync::mpsc::RecvTimeoutError>,
     timestamps: impl FnOnce() -> crate::protocol::api::schema::NativeSubmissionTimestamps,
+    discarded_aborted_payload: impl FnOnce() -> bool,
 ) -> String {
     let response_deadline = hard_deadline + crate::protocol::api::submission::RESPONSE_GRACE;
     let completed = receive(response_deadline.saturating_duration_since(now));
     let timestamps = timestamps();
+    let discarded_aborted_payload = discarded_aborted_payload();
     let not_shown = |err: &std::io::Error| crate::terminal::runtime::PromptNotShown::is(err);
     let outcome = match &completed {
         Ok(Ok(())) => "written",
@@ -711,7 +732,14 @@ fn complete_agent_prompt_with_timestamps(
     };
     use crate::terminal::runtime::PromptNotShown;
     match completed {
-        Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent, timestamps }),
+        Ok(Ok(())) => encode_success(
+            id,
+            ResponseResult::AgentPrompted {
+                agent,
+                timestamps,
+                discarded_aborted_payload,
+            },
+        ),
         Ok(Err(err))
             if matches!(
                 PromptNotShown::classified(&err),

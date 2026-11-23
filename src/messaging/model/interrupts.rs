@@ -26,6 +26,12 @@ pub(crate) struct SendInterrupt {
     pub(crate) provider_turn_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct AbortedPayload {
+    pub(crate) request_id: RequestId,
+    pub(crate) payload: String,
+}
+
 /// Durable autonomous activity and any stop that may already have been written.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct AutonomousStopState {
@@ -34,6 +40,8 @@ pub(crate) struct AutonomousStopState {
     #[serde(default)]
     pub(super) turn_activity: Option<(u64, u64)>,
     pub(super) claim: Option<SendInterrupt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) aborted_payload: Option<AbortedPayload>,
 }
 
 impl AutonomousStopState {
@@ -537,6 +545,19 @@ impl BusState {
             closed.push(queued);
         }
         self.release_settled_interrupt_queue(agent, &closed);
+        let aborted_id = current
+            .filter(|id| closed.contains(id))
+            .or_else(|| closed.last().copied());
+        let aborted_payload = aborted_id.and_then(|id| {
+            let payload = self.requests.get(&id)?.submitted_payload.clone()?;
+            Some(AbortedPayload {
+                request_id: id,
+                payload,
+            })
+        });
+        if let (Some(aborted), Some(agent_state)) = (aborted_payload, self.agents.get_mut(&agent)) {
+            agent_state.autonomous_stop.aborted_payload = Some(aborted);
+        }
         for request in &closed {
             tracing::info!(
                 event = "bus.message.recovered",
@@ -547,6 +568,28 @@ impl BusState {
             );
         }
         Ok(closed)
+    }
+
+    pub(crate) fn record_aborted_payload_discarded(
+        &mut self,
+        agent: AgentId,
+        request_id: RequestId,
+    ) {
+        if let Some(agent_state) = self.agents.get_mut(&agent) {
+            if agent_state
+                .autonomous_stop
+                .aborted_payload
+                .as_ref()
+                .is_some_and(|aborted| aborted.request_id == request_id)
+            {
+                agent_state.autonomous_stop.aborted_payload = None;
+            }
+        }
+        if let Some(request) = self.requests.get_mut(&request_id) {
+            if request.failure_reason.as_deref() == Some(INTERRUPTED) {
+                request.submission_error = Some("discarded_aborted_payload".into());
+            }
+        }
     }
 
     /// A queued request closes with the interrupted turn only when it belongs

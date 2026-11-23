@@ -1142,6 +1142,13 @@
               "description": "Allow delivering a new turn immediately after an interrupt even while\nthe pane still reports Working. A blocked agent is still refused.",
               "type": "boolean"
             },
+            "discard_aborted_payload": {
+              "description": "Exact rendered payload of a just-aborted request on this pane. If the\ncomposer still holds this payload after an interrupt, discard it instead\nof stashing and restoring it as a developer draft.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "expected_agent": {
               "type": "string"
             },
@@ -6553,6 +6560,9 @@
               "properties": {
                 "agent": {
                   "$ref": "#/schemas/success_response/$defs/AgentInfo"
+                },
+                "discarded_aborted_payload": {
+                  "type": "boolean"
                 },
                 "timestamps": {
                   "$ref": "#/schemas/success_response/$defs/NativeSubmissionTimestamps"

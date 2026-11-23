@@ -77,6 +77,7 @@ impl Transport for FreshLaunchNative {
                 Ok(ResponseResult::AgentPrompted {
                     agent: self.info.clone(),
                     timestamps: Default::default(),
+                    discarded_aborted_payload: false,
                 })
             }
             Method::PaneGet(params) if params.pane_id == "pane" => Ok(ResponseResult::Ok {}),
@@ -186,6 +187,7 @@ impl Transport for PollingNative {
                 Ok(ResponseResult::AgentPrompted {
                     agent: self.info.clone(),
                     timestamps: Default::default(),
+                    discarded_aborted_payload: false,
                 })
             }
             _ => panic!("unexpected terminal operation"),

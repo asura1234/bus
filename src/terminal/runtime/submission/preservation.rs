@@ -1,7 +1,7 @@
 //! Transfer a developer draft only while pane input is exclusively reserved.
 use super::{InputObservation, ObservedSubmission, PromptNotShown};
 use crate::platform::draft_editor::Exchange;
-use crate::protocol::api::submission::confirmation_budget;
+use crate::protocol::api::submission::{confirmation_budget, CLEAR_KEY_DELAY, WITHDRAW_GRACE};
 use bytes::Bytes;
 use std::{io, path::PathBuf, time::Duration};
 
@@ -74,6 +74,28 @@ impl ObservedSubmission {
             {
                 return self.finish_preserved_draft(editor, delay, lease);
             }
+        }
+        let mut initial = initial;
+        let mut screen = screen;
+        let mut cursor = cursor;
+        if matches!(initial, InputObservation::Other | InputObservation::Pending)
+            && self
+                .inspect
+                .observe_aborted_payload(&screen, cursor, pristine)
+                == InputObservation::Pending
+        {
+            if let Err(error) = self.discard_aborted_payload(pristine, lease) {
+                lease.restored();
+                return Err(error);
+            }
+            self.inspect.mark_aborted_payload_discarded();
+            self.reset_confirmation(delay);
+            initial = InputObservation::Empty;
+            screen = self.terminal.active_ansi();
+            cursor = self
+                .terminal
+                .cursor_state()
+                .map(|cursor| (cursor.x, cursor.y));
         }
         let preservation = self
             .inspect
@@ -244,6 +266,78 @@ impl ObservedSubmission {
             (self.clock.now() + confirmation_budget(delay))
                 .min(self.hard_deadline - self.withdraw_grace),
         );
+    }
+
+    /// Clear an interrupted Bus request's payload that the provider restored
+    /// into the composer, stopping immediately if a developer edit appears.
+    fn discard_aborted_payload(
+        &self,
+        pristine: bool,
+        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+    ) -> io::Result<()> {
+        if self.clear.is_empty() {
+            return Err(io::Error::other(PromptNotShown::ComposerBusy));
+        }
+        let mut progress_rev = self.inspect.aborted_cleanup_progress();
+        let mut expires = self.clock.now() + WITHDRAW_GRACE;
+        loop {
+            for (index, key) in self.clear.iter().enumerate() {
+                let generation = self.clock.generation();
+                let guard = self
+                    .content_lock
+                    .lock()
+                    .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
+                let Some(screen) = self.terminal.active_ansi_if_complete() else {
+                    drop(guard);
+                    if self.clock.now() >= expires || self.check_deadline().is_err() {
+                        return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                    }
+                    self.clock.sleep(CLEAR_KEY_DELAY, generation);
+                    break;
+                };
+                let cursor = self
+                    .terminal
+                    .cursor_state()
+                    .map(|cursor| (cursor.x, cursor.y));
+                match self
+                    .inspect
+                    .observe_aborted_payload(&screen, cursor, pristine)
+                {
+                    InputObservation::Empty => return Ok(()),
+                    InputObservation::Pending => {}
+                    _ => return Err(io::Error::other(PromptNotShown::ComposerBusy)),
+                }
+                let revision = self.inspect.aborted_cleanup_progress();
+                if progress_rev != revision {
+                    progress_rev = revision;
+                    expires = self.clock.now() + WITHDRAW_GRACE;
+                }
+                if self.clock.now() >= expires || self.check_deadline().is_err() {
+                    return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                }
+                let write_deadline = self.hard_deadline.min(expires);
+                tracing::debug!(
+                    target: "bus::terminal::submission",
+                    event = "bus.terminal.submission.discard_aborted",
+                    key = ?key,
+                );
+                let completion = lease.with_unedited(|| {
+                    self.io.queue_input_write_scoped(
+                        key.clone(),
+                        Bytes::new(),
+                        Duration::ZERO,
+                        Some(write_deadline),
+                        &self.scope,
+                    )
+                })?;
+                self.inspect.clearing_aborted(index);
+                drop(guard);
+                completion
+                    .recv_timeout(self.clock.remaining(write_deadline))
+                    .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
+                self.clock.sleep(CLEAR_KEY_DELAY, generation);
+            }
+        }
     }
 
     fn preserve_native(
