@@ -211,12 +211,12 @@ impl Worker {
                     return Err("Provider resume has no validated home".into());
                 }
                 (Some(executable), grok_home, kimi_home)
-            } else {
-                let executable = launch::selected_executable(
-                    identity::provider_kind(agent.provider),
-                    &Default::default(),
-                )?;
+            } else if agent.provider == Provider::ClaudeGpt {
+                let executable =
+                    launch::selected_executable(Provider::ClaudeGpt, &Default::default())?;
                 (executable, None, None)
+            } else {
+                (None, None, None)
             };
             Ok(binding)
         })();

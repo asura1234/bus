@@ -3,6 +3,7 @@ use super::*;
 use crate::agents::providers::{hook_json, launch};
 use crate::messaging::identity;
 use crate::messaging::model::{AgentStartup, LaunchOutcome, StartupRecovery};
+use std::sync::{Arc, Mutex};
 
 struct ResumeNative {
     state_path: PathBuf,
@@ -57,7 +58,9 @@ impl ResumeNative {
         let agent = s.agent(self.agent).unwrap();
         if agent.provider == Provider::ClaudeGpt {
             assert_eq!(start.kind, "claude-gpt");
-            assert_eq!(start.executable.as_deref(), Some("claude-gpt"));
+            let executable = Path::new(start.executable.as_deref().unwrap());
+            assert!(executable.is_absolute());
+            assert_eq!(executable.file_name().unwrap(), "claude-gpt");
             if !self.recovery {
                 assert_eq!(
                     start
@@ -117,6 +120,22 @@ impl Transport for ResumeNative {
 }
 const CLAUDE_GPT_SESSION: &str = "00000000-0000-4000-8000-000000000001";
 
+struct ClaudeGptResumeNative {
+    native: ResumeNative,
+    reports: Arc<Mutex<Vec<schema::PaneReportAgentSessionParams>>>,
+}
+
+impl Transport for ClaudeGptResumeNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if let Method::PaneReportAgentSession(report) = method {
+            self.reports.lock().unwrap().push(report);
+            Ok(ResponseResult::Ok {})
+        } else {
+            self.native.request(method)
+        }
+    }
+}
+
 #[test]
 fn claude_gpt_explicit_recovery_keeps_the_wrapper_and_saved_session() {
     let _providers = provider_binaries();
@@ -134,16 +153,30 @@ fn claude_gpt_explicit_recovery_keeps_the_wrapper_and_saved_session() {
             agent,
             recovery.then_some(StartupRecovery::Unsubmitted { args: vec![] }),
         );
-        worker.transport = Box::new(ResumeNative {
-            state_path: dir.join("state.json"),
-            agent,
-            terminal: if recovery { "terminal" } else { "new-terminal" },
-            pane: if recovery { "pane" } else { "new-pane" },
-            started: false,
-            recovery,
+        let pane = if recovery { "pane" } else { "new-pane" };
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        worker.transport = Box::new(ClaudeGptResumeNative {
+            native: ResumeNative {
+                state_path: dir.join("state.json"),
+                agent,
+                terminal: if recovery { "terminal" } else { "new-terminal" },
+                pane,
+                started: false,
+                recovery,
+            },
+            reports: Arc::clone(&reports),
         });
         let result = worker.resume_room(room).unwrap();
         assert_eq!(result["agents"][0]["outcome"], "resuming", "{result}");
+        let reports = reports.lock().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].pane_id, pane);
+        assert_eq!(reports[0].source, "herdr:claude-gpt");
+        assert_eq!(reports[0].agent, "claude-gpt");
+        assert_eq!(
+            reports[0].agent_session_id.as_deref(),
+            Some(CLAUDE_GPT_SESSION)
+        );
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();
     }

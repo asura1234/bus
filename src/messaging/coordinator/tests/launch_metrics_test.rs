@@ -212,7 +212,11 @@ fn launch_metrics_missing_executable_is_durable_without_a_saved_agent() {
     );
     let error = result.unwrap_err();
     assert!(
-        error.contains("'claude-gpt' is missing from PATH"),
+        error.contains("no executable 'claude-gpt' on PATH"),
+        "{error}"
+    );
+    assert!(
+        error.contains("orchestration/providers/claude-gpt.md"),
         "{error}"
     );
     assert!(error.contains("retry adding the agent"), "{error}");

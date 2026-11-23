@@ -1431,15 +1431,50 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
             ..
         })
     ));
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    state.create_room("work").unwrap();
+    let mut ui = BusUi::new(Arc::new(BusSnapshot {
+        state,
+        revision: 0,
+        last_command_id: 0,
+        error: None,
+    }));
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
     ui.action(render::Action::Field(1));
-    form_rows(&mut ui, 100, 23);
-    let wrapper_hit = ui
+    assert!(matches!(
+        ui.form,
+        Some(forms::Form::Agent { provider: None, .. })
+    ));
+    let short = form_rows(&mut ui, 100, 23);
+    for label in ["Claude GPT", "Cancel (Esc)", "Add (Enter)"] {
+        assert!(short.iter().any(|row| row.contains(label)), "{short:?}");
+    }
+    for action in [render::Action::Cancel, render::Action::Add] {
+        let rect = ui
+            .view
+            .hits
+            .iter()
+            .find(|hit| hit.action == action)
+            .unwrap()
+            .rect;
+        assert!(rect.y < 23);
+        assert_eq!(ui.view.hit_at(rect.x, rect.y), Some(&action));
+    }
+    let wrapper = ui
         .view
         .hits
         .iter()
         .find(|hit| hit.action == render::Action::Provider(Provider::ClaudeGpt))
-        .unwrap();
-    ui.action(wrapper_hit.action.clone());
+        .unwrap()
+        .rect;
+    mouse(
+        &mut ui,
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        wrapper.x,
+        wrapper.y,
+    );
     assert!(matches!(
         ui.form,
         Some(forms::Form::Agent {

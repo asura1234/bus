@@ -364,6 +364,13 @@ impl App {
                 AgentStartError::InputFailed(err.to_string())
             });
         }
+        if params.kind == "claude-gpt"
+            && std::path::Path::new(&argv[0])
+                .file_name()
+                .is_some_and(|name| name == "claude-gpt")
+        {
+            terminal.launch_argv = Some(argv.clone());
+        }
         runtime.bind_kimi_code_home(kimi_code_home);
         if let Some(session) = persisted_agent_session {
             terminal.set_managed_agent_launch_session(session);

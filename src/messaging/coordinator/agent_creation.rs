@@ -101,8 +101,7 @@ impl Worker {
                 if input.provider != Provider::ClaudeGpt {
                     return error;
                 }
-                let binary = launch::executable(input.provider);
-                format!("Provider executable '{binary}' is missing from PATH. Install it, then retry adding the agent.")
+                "Bus found no executable 'claude-gpt' on PATH. Follow the wrapper setup and execute-permission steps in orchestration/providers/claude-gpt.md, then retry adding the agent.".to_owned()
             });
         self.track_launch_result(attempt, "missing_executable", checked)?;
         let prepared = self.prepare_provider_launch(&input, id);

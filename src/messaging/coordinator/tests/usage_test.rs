@@ -48,10 +48,18 @@ fn claude_merge_uses_newest_observation_and_expires_without_claiming_unused_quot
     assert_eq!(usage.claude_json(now + STALE_AFTER_MS)["status"], "unknown");
     let mut gpt = observation(3, now - 100);
     gpt.manifest.provider = ProviderKind::ClaudeGpt;
-    gpt.windows = UsageWindows::default();
+    gpt.windows.five_hour.as_mut().unwrap().used_percent = 60.0;
     usage.merge_claude(gpt, AgentId(3));
     assert_eq!(usage.claude_json(now)["observed_by_agent"], 2);
     assert_eq!(usage.claude_json(now)["five_hour"]["used_percent"], 20.0);
+    let state = usage.state_json();
+    assert_eq!(state["claude-gpt"]["observed_by_agent"], 3);
+    assert_eq!(state["claude-gpt"]["five_hour"]["used_percent"], 60.0);
+    assert_eq!(state["claude"]["five_hour"]["used_percent"], 20.0);
+    assert_eq!(
+        statusline_json(&usage.claude_gpt, "Claude GPT", now + STALE_AFTER_MS)["status"],
+        "unknown"
+    );
     let mut missing = observation(2, now);
     missing.windows = UsageWindows::default();
     usage.merge_claude(missing, AgentId(2));
@@ -62,7 +70,7 @@ fn claude_merge_uses_newest_observation_and_expires_without_claiming_unused_quot
 fn state_reports_missing_usage_as_unknown_never_as_unused() {
     let usage = Usage::default();
     let value = usage.state_json();
-    for provider in ["claude", "codex", "cursor"] {
+    for provider in ["claude", "claude-gpt", "codex", "cursor"] {
         assert_eq!(value[provider]["status"], "unknown", "{provider}");
         assert!(value[provider].get("five_hour").is_none(), "{provider}");
     }

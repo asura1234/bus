@@ -68,15 +68,18 @@ pub(crate) const fn executable(provider: ProviderKind) -> &'static str {
     provider.executable()
 }
 
-/// Grok preparation validates and prepends the selected alias directory. Carry
-/// that exact absolute alias into the eventual shell command, rather than
-/// allowing shell startup PATH edits or functions to choose another `grok`.
+/// Carry a selected provider executable into the pane's shell command.
 pub(crate) fn selected_executable(
     provider: ProviderKind,
     env: &HashMap<String, String>,
 ) -> Result<Option<String>, String> {
-    if matches!(provider, ProviderKind::ClaudeDs | ProviderKind::ClaudeGpt) {
+    if provider == ProviderKind::ClaudeDs {
         return Ok(Some(provider.executable().to_owned()));
+    }
+    if provider == ProviderKind::ClaudeGpt {
+        let path = crate::utils::env::resolve_on_path(provider.executable())
+            .ok_or("No executable claude-gpt found on PATH")?;
+        return checked_executable(&path).map(Some);
     }
     if !matches!(
         provider,
@@ -92,14 +95,17 @@ pub(crate) fn selected_executable(
         .and_then(|path| std::env::split_paths(path).next())
         .filter(|path| path.is_absolute())
         .ok_or("Provider launch is missing its selected executable directory")?;
-    let path = directory.join(provider.executable());
+    checked_executable(&directory.join(provider.executable())).map(Some)
+}
+
+fn checked_executable(path: &Path) -> Result<String, String> {
     let path = path
         .to_str()
         .ok_or("Provider executable path is not UTF-8")?;
     if path.chars().any(char::is_control) {
         return Err("Provider executable path contains control characters".into());
     }
-    Ok(Some(path.to_owned()))
+    Ok(path.to_owned())
 }
 
 pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {

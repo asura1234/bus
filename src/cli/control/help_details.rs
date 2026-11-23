@@ -230,9 +230,10 @@ Result: {agent_id:NUMBER,stage:"launching"}; launch success is not task completi
 Errors: command_failed carries setup/provider/validation diagnostics. Inspect the
 reported project hook path before using --consent-hooks, or setup-confirm for an
 existing pending agent. If add is refused because the executable is missing,
-install it on PATH and retry add. If add already returned an agent ID and the
-launch failed, fix the installation and use agent resume --room ROOM for the
-saved agent.
+install it on PATH and retry add. If add already returned an agent ID, follow
+the recorded startup diagnostic. Use agent resume --room ROOM for a saved
+session or a retryable unsubmitted launch. Other sessionless failures can
+require recreating the agent.
 
 MASTER requires --orchestrates ROOM (one orchestrator per work room, binding for
 life); --orchestrates and custom system prompts are MASTER-only. Claude Code,

@@ -150,6 +150,7 @@ impl Usage {
         let now_ms = bus_io::now_ms();
         json!({
             "claude": self.claude_json(now_ms),
+            "claude-gpt": statusline_json(&self.claude_gpt, "Claude GPT", now_ms),
             "codex": match &self.codex {
                 None => unknown("No Codex turn has reported rate limits since Bus started"),
                 Some(snapshot) => json!({

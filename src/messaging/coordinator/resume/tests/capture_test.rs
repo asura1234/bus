@@ -274,7 +274,7 @@ impl Fixture {
         std::fs::create_dir_all(&project).unwrap();
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        for name in ["codex", "claude", "cursor-agent"] {
+        for name in ["codex", "claude", "claude-gpt", "cursor-agent"] {
             let path = bin.join(name);
             std::fs::write(&path, "fixture executable").unwrap();
             #[cfg(unix)]
@@ -1440,7 +1440,7 @@ fn codex_resume_environment_opts_into_the_native_runtime() {
 
 #[test]
 fn startup_timeout_sessionless_capture_retains_provider_ownership() {
-    for provider in [Provider::ClaudeCode, Provider::Cursor] {
+    for provider in [Provider::ClaudeCode, Provider::ClaudeGpt, Provider::Cursor] {
         let mut fixture = Fixture::new(provider);
         let mut identity = fixture
             .state

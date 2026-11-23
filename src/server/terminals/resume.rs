@@ -161,7 +161,14 @@ impl PreparedResume {
         let provider_argv = matches!(plan.agent.as_str(), "grok" | "kimi")
             .then(|| resume_argv(plan, &extras))
             .transpose()?;
-        let (argv, env) = resume_launch_inputs(plan, extras);
+        let (mut argv, env) = resume_launch_inputs(plan, extras);
+        if plan.agent == "claude-gpt" {
+            argv[0] = crate::agents::providers::launch::selected_executable(
+                crate::agents::providers::ProviderKind::ClaudeGpt,
+                &Default::default(),
+            )?
+            .ok_or("Claude GPT resume has no selected executable")?;
+        }
         Ok(Self {
             session,
             inputs: (provider_argv.unwrap_or(argv), env),
