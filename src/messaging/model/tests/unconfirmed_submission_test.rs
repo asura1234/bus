@@ -203,6 +203,42 @@ fn submission_agent_notice_ignores_a_late_uncertain_native_receipt_after_reply()
 }
 
 #[test]
+fn submission_agent_notice_removes_a_persisted_warning_only_for_the_answering_recipient() {
+    let (mut state, room, agent, other) = state_with_room_and_agents();
+    let requests = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "question".into(),
+                recipient_ids: [agent, other].into(),
+                files: Vec::new(),
+            },
+            Author::Developer,
+            1,
+        )
+        .unwrap();
+    let request = requests
+        .into_iter()
+        .find(|id| state.request(*id).unwrap().agent_id == agent)
+        .unwrap();
+    state.begin_submission(request, "launch-codex", 5).unwrap();
+    let message = state.request(request).unwrap().prompt.id;
+    state
+        .answer_message(message, agent, "stored answer".into(), 1001)
+        .unwrap();
+    state.release_unbound_request(agent, 1002).unwrap();
+    let error = BusState::unconfirmed_submission_message(message);
+    state.set_agent_error(agent, Some(error.clone())).unwrap();
+    state.set_agent_error(other, Some(error.clone())).unwrap();
+
+    let mut restored: BusState =
+        serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    restored.clear_answered_submission_errors();
+    assert_eq!(restored.agent(agent).unwrap().actionable_error, None);
+    assert_eq!(restored.agent(other).unwrap().actionable_error, Some(error));
+}
+
+#[test]
 fn coalesced_messages_failed_with_their_unconfirmed_lead_carry_its_reason() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state

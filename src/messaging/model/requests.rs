@@ -128,6 +128,9 @@ impl BusState {
         if request_state.phase != RequestPhase::Submitting {
             return Err(ModelError::InvalidTransition);
         }
+        if request_state.settled() {
+            return Ok(());
+        }
         let restart_continuation = request_state.restart_continuation;
         let error_report = request_state.is_error_report();
         if matches!(
@@ -383,15 +386,9 @@ impl BusState {
         now_ms: u64,
     ) -> Option<RequestId> {
         let request = self.unbound_request(agent)?.id;
-        let prompt = self.requests.get(&request)?.prompt.id;
         self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())
             .ok()?;
-        let message = self
-            .requests
-            .get(&request)
-            .and_then(Request::submission_notice)
-            .unwrap_or_else(|| Self::unconfirmed_submission_message(prompt));
-        if let Some(error) = self.unconfirmed_submission_error(request, message) {
+        if let Some(error) = self.unconfirmed_submission_error(request) {
             let _ = self.set_agent_error(agent, Some(error));
         }
         tracing::info!(
@@ -433,16 +430,11 @@ impl BusState {
             .filter(|request| {
                 self.recovery_reason(request, now_ms).as_deref() == Some("submission_unconfirmed")
             })
-            .map(|request| (request.id, request.agent_id, request.prompt.id))
+            .map(|request| (request.id, request.agent_id))
             .collect();
-        for (request, agent, prompt) in unconfirmed {
-            let message = self
-                .requests
-                .get(&request)
-                .and_then(Request::submission_notice)
-                .unwrap_or_else(|| Self::unconfirmed_submission_message(prompt));
+        for (request, agent) in unconfirmed {
             self.close_turn_with_reason(request, now_ms, "submission_unconfirmed".into())?;
-            if let Some(error) = self.unconfirmed_submission_error(request, message) {
+            if let Some(error) = self.unconfirmed_submission_error(request) {
                 self.set_agent_error(agent, Some(error))?;
             }
             // Canonical restart closures are reported only after durable save.
@@ -586,6 +578,9 @@ impl BusState {
             .ok_or(ModelError::UnknownRequest(request))?;
         if request_state.phase != RequestPhase::Submitting || !request_state.steered {
             return Err(ModelError::InvalidTransition);
+        }
+        if request_state.settled() {
+            return Ok(());
         }
         let agent_id = request_state.agent_id;
         self.record_queue_rejection(request, &outcome);
@@ -767,6 +762,9 @@ impl Request {
 
     /// Durable send outcome, never the agent's mutable latest error or a reply.
     pub(crate) fn submission_notice(&self) -> Option<String> {
+        if self.reply().is_some() {
+            return None;
+        }
         if self.failed_during_startup() {
             return self.submission_error.clone();
         }
