@@ -1048,6 +1048,7 @@ fn an_agent_waiting_on_a_dialog_reads_blocked_on_its_row_and_its_room() {
 
 #[test]
 fn master_and_work_room_forms_offer_codex_and_submit_its_role() {
+    let _path = crate::utils::env::PathOverride::set("");
     let (mut ui, master, _, other, _) = master_fixture();
     // The offered providers are the form's clickable provider rows.
     let choices = |ui: &mut BusUi| {

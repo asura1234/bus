@@ -290,7 +290,7 @@ fn saved_session<'a>(
         .session
         .as_ref()
         .ok_or("Bus resume has no saved provider session")?;
-    // The server labels a managed terminal by AgentKind, which folds claude-ds
+    // The server labels a managed terminal by AgentKind, which folds Claude wrappers
     // into Claude, while the saved session keeps the provider namespace. Compare
     // the parsed kind so one harness matches, and keep the official pair and
     // plan comparison below exact.
@@ -322,7 +322,7 @@ fn capture_args(
 ) -> Result<(PathBuf, Vec<String>, bool), String> {
     use crate::agents::providers::{agy, claude_code, codex, cursor, grok, kimi};
     match identity::provider_kind(provider) {
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => {
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeGpt => {
             claude_code::resume::capture_args(hooks, project)
         }
         ProviderKind::Codex => codex::resume::capture_args(hooks, project),

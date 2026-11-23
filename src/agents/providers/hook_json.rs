@@ -91,7 +91,7 @@ impl HookContract {
                 default_version: None,
                 reject_disabled_container: false,
             },
-            ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => Self {
+            ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeGpt => Self {
                 adapter: "claude-hook",
                 events: &["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"],
                 container_key: "hooks",

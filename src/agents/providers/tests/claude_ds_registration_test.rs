@@ -160,3 +160,53 @@ fn claude_ds_resume_uses_resume_and_the_wrapper_command() {
     .unwrap();
     assert_eq!(plan.argv, argv(&["claude-ds", "--resume", session]));
 }
+
+#[test]
+fn claude_gpt_registers_a_distinct_claude_wrapper() {
+    let provider = ProviderKind::ClaudeGpt;
+    let label = "claude-gpt";
+    assert_eq!(provider.label(), label);
+    assert_eq!(provider.executable(), label);
+    assert_eq!(launch::native_provider(label), Some(provider));
+    assert!(provider.uses_claude_harness());
+    assert!(provider.observes_label("claude"));
+    assert_eq!(identify_agent(label), Some(AgentKind::Claude));
+    assert_eq!(
+        HookContract::for_provider(provider),
+        HookContract::for_provider(ProviderKind::ClaudeCode)
+    );
+
+    let session =
+        catalog::session_ref_from_report("herdr:claude-gpt", label, Some("session".into()), None)
+            .expect("the wrapper retains its own session namespace");
+    let plan = catalog::plan("herdr:claude-gpt", label, &session).unwrap();
+    assert_eq!(plan.argv, argv(&[label, "--resume", "session"]));
+}
+
+#[test]
+fn claude_gpt_launch_keeps_the_wrapper_found_on_a_relative_path() {
+    let root = crate::utils::test_temp::unique_temp_path("bus-claude-gpt-relative-path");
+    let bin = root.join("bin");
+    let project = root.join("project");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    let wrapper = bin.join("claude-gpt");
+    std::fs::write(&wrapper, "#!/bin/sh\nprintf selected-wrapper\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let lookup_dir = std::env::current_dir().unwrap();
+    let relative = PathBuf::from("../".repeat(lookup_dir.components().count() - 1))
+        .join(bin.strip_prefix("/").unwrap());
+    let _path = crate::utils::env::PathOverride::set(&relative);
+
+    let selected = launch::selected_executable(ProviderKind::ClaudeGpt, &Default::default())
+        .unwrap()
+        .unwrap();
+    assert!(std::path::Path::new(&selected).is_absolute());
+    let output = std::process::Command::new(selected)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"selected-wrapper");
+    std::fs::remove_dir_all(root).unwrap();
+}
