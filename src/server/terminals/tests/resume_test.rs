@@ -992,42 +992,13 @@ async fn kept_resume_pane_for_live_mismatched_agent_still_reports_warning() {
 
 #[cfg(unix)]
 fn assert_kept_resume_pane_warning(deleted: bool, expected_events: &[&str]) {
-    use crate::messaging::{
-        identity,
-        model::{BusState, Provider},
-        storage::state_store::JsonStore,
-    };
+    use crate::agents::AgentKind;
     use crate::utils::error_pipe;
     use tracing_subscriber::prelude::*;
 
     let scratch = crate::utils::test_temp::unique_temp_path("bus-kept-resume-pane");
     let root = scratch.as_path();
-    std::fs::create_dir_all(root).unwrap();
-    let mut state = BusState::new();
-    let room = state.create_room("work").unwrap();
-    // The server saves Claude as the harness kind, including for claude-ds.
-    let provider = if deleted {
-        Provider::ClaudeDs
-    } else {
-        Provider::Codex
-    };
-    let agent = state
-        .create_agent(room, "saved-worker", provider, root.into(), None)
-        .unwrap();
-    if deleted {
-        state.prepare_delete_agent(agent).unwrap();
-        state.delete_agent(agent, 1).unwrap();
-    }
-    JsonStore::new(root.join("state.json"))
-        .save(&state)
-        .unwrap();
-    let context = super::NativeResumeContext {
-        root: Some(root.into()),
-        session_name: Some("bus".into()),
-        config_root: root.join("herdr-config"),
-        project: root.into(),
-        binary: std::env::current_exe().unwrap(),
-    };
+    let (agent_name, context) = super::kept_resume_fixture_for_test(root, deleted);
     let mut app = test_app();
     let workspace = crate::server::workspaces::Workspace::test_new("kept-resume-pane");
     let pane = workspace.tabs[0].root_pane;
@@ -1035,11 +1006,11 @@ fn assert_kept_resume_pane_warning(deleted: bool, expected_events: &[&str]) {
     app.state.workspaces = vec![workspace];
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
-    let agent_name = identity::managed_name(room, agent);
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
-    terminal.restore_managed_agent(agent_name.clone(), crate::agents::AgentKind::Claude);
+    terminal.restore_managed_agent(agent_name.clone(), AgentKind::Claude);
     let facts = super::terminal_resume_facts(terminal);
-    let plan = crate::messaging::coordinator::resume::unstarted_plan(&facts, None).unwrap();
+    let plan =
+        super::unstarted_restore_plan(Some(&agent_name), Some(AgentKind::Claude), None).unwrap();
     terminal.pending_agent_resume_plan = Some(plan.clone());
 
     let mut reporter = error_pipe::Runtime::default();

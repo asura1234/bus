@@ -782,6 +782,14 @@ fn native_resume_is_empty_for_test(
     }
 }
 
+#[cfg(all(test, unix))]
+fn kept_resume_fixture_for_test(
+    root: &std::path::Path,
+    deleted: bool,
+) -> (String, NativeResumeContext) {
+    resume::kept_owner_fixture::save(root, deleted)
+}
+
 #[cfg(test)]
 #[path = "tests/resume_test.rs"]
 mod tests;

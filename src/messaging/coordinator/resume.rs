@@ -3,6 +3,9 @@ use super::{schema, BusState, RoomAgent};
 use crate::messaging::identity;
 
 mod capture;
+#[cfg(all(test, unix))]
+#[path = "resume/tests/kept_owner_fixture_test.rs"]
+pub(crate) mod kept_owner_fixture;
 #[cfg(test)]
 pub(crate) use capture::load;
 pub(crate) use capture::{
