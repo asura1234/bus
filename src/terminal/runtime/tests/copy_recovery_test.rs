@@ -757,3 +757,105 @@ fn copy_recovery_round6_idle_pin_releases_when_directory_disappears() {
         Some("snapshot_prune_pin_directory_missing"),
     );
 }
+
+fn check_failed_revisit_reports_both_released_pins(directory_missing: bool, reason: &str) {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-two-pin-diagnostics");
+    let pane = dir.join("pane");
+    let (service, receiver) = service();
+    let held = fill_tracking(service, &dir.join("held"));
+    assert_eq!(receiver.try_iter().count(), QUEUED_BACKUPS);
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let dispatch = dispatch_for(&buffer);
+    let pins = ["first retained draft", "second retained draft"].map(|text| {
+        let snapshot = key(&pane, text);
+        let path = make_record(&snapshot, text);
+        let attempt =
+            tracing::dispatcher::with_default(&dispatch, || begin(service, &snapshot, text));
+        (snapshot, path, attempt)
+    });
+    for i in 0..15 {
+        let text = format!("older backup {i}");
+        make_record(&key(&pane, &text), &text);
+    }
+    let overflow_held: Vec<_> = (0..MAX_OVERFLOW - pins.len())
+        .map(|i| {
+            let text = format!("other overflow slot {i}");
+            begin(service, &key(&dir.join("held"), &text), &text)
+        })
+        .collect();
+    let text = "blocks all cap eviction";
+    let untracked = begin(service, &key(&dir.join("held"), text), text);
+
+    let [(first, first_path, first_attempt), (second, second_path, second_attempt)] = pins;
+    tracing::dispatcher::with_default(&dispatch, || {
+        first_attempt.send(retain());
+        second_attempt.send(retain());
+        drain(service, &receiver);
+    });
+    {
+        let registry = service.registry();
+        for snapshot in [&first, &second] {
+            assert!(registry.overflow[snapshot].pin_next_prune);
+        }
+        assert_eq!(registry.deferred.len(), 1);
+    }
+
+    let backups = if directory_missing {
+        let moved = dir.join("removed-pane");
+        fs::rename(&pane, &moved).unwrap();
+        [first_path, second_path].map(|path| moved.join(path.file_name().unwrap()))
+    } else {
+        test_hooks::install_read(pane.clone(), || Err(io::Error::other("failed revisit")));
+        [first_path, second_path]
+    };
+    tracing::dispatcher::with_default(&dispatch, || {
+        untracked.send(Outcome::Restored);
+        drain(service, &receiver);
+    });
+    if !directory_missing {
+        test_hooks::remove_read(&pane);
+    }
+    for (path, text) in backups
+        .into_iter()
+        .zip(["first retained draft", "second retained draft"])
+    {
+        assert_eq!(fs::read_to_string(path).unwrap(), text);
+    }
+    {
+        let registry = service.registry();
+        assert!(!registry.overflow.contains_key(&first));
+        assert!(!registry.overflow.contains_key(&second));
+        assert!(registry.deferred.is_empty());
+    }
+    fs::remove_dir_all(dir).unwrap();
+    let log = output(&buffer);
+    assert_eq!(
+        log.matches("bus.draft.recovery_required").count(),
+        2,
+        "{log}"
+    );
+    let releases: Vec<_> = log.lines().filter(|line| line.contains(reason)).collect();
+    assert_eq!(releases.len(), 2, "{log}");
+    for snapshot in [first, second] {
+        let digest_field = format!("digest={}", snapshot.digest);
+        assert_eq!(
+            releases
+                .iter()
+                .filter(|line| line.contains(&digest_field))
+                .count(),
+            1,
+            "{log}"
+        );
+    }
+    drop((held, overflow_held));
+}
+
+#[test]
+fn copy_recovery_round7_exhausted_revisit_records_both_released_pins() {
+    check_failed_revisit_reports_both_released_pins(false, "snapshot_prune_pin_retries_exhausted");
+}
+
+#[test]
+fn copy_recovery_round7_missing_directory_records_both_released_pins() {
+    check_failed_revisit_reports_both_released_pins(true, "snapshot_prune_pin_directory_missing");
+}

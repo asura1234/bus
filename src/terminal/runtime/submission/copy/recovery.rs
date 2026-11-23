@@ -474,9 +474,14 @@ impl Service {
                 "Dropped oldest deferred scan; durable files remain for a later scan"
             );
         }
-        if let Some(error) = error {
+        if let Some((error, released_pins)) = error {
             let reason = pin_failure.unwrap_or("snapshot_prune_failed");
-            tracing::warn!(event = "bus.draft.copy_recovery_failed", reason, directory = %directory.display(), %error, "Could not prune copied draft recovery records");
+            if released_pins.is_empty() {
+                tracing::warn!(event = "bus.draft.copy_recovery_failed", reason, directory = %directory.display(), %error, "Could not prune copied draft recovery records");
+            }
+            for digest in released_pins {
+                tracing::warn!(event = "bus.draft.copy_recovery_failed", reason, directory = %directory.display(), %digest, %error, "Released copied draft prune pin after a failed cap scan");
+            }
         }
     }
 
@@ -486,8 +491,9 @@ impl Service {
         current: &Path,
         result: std::io::Result<PruneResult>,
         release_failed_pins: bool,
-    ) -> (bool, Option<std::io::Error>) {
+    ) -> (bool, Option<(std::io::Error, Vec<String>)>) {
         let mut registry = self.registry();
+        let mut released_pins = Vec::new();
         if release_failed_pins || result.is_ok() {
             // Once retries are exhausted or the directory has gone, keeping
             // a pin would tie up a slot with no scan guaranteed to revisit it.
@@ -499,6 +505,9 @@ impl Service {
                             pass.within_cap || pass.honored_pins.contains(&key.digest)
                         }))
                 {
+                    if release_failed_pins && entry.pin_next_prune {
+                        released_pins.push(key.digest.clone());
+                    }
                     entry.pin_next_prune = false;
                 }
                 entry.pin_next_prune || entry.terminal.protected()
@@ -537,7 +546,7 @@ impl Service {
                 {
                     registry.deferred.retain(|(dir, _)| dir != directory);
                 }
-                (false, Some(error))
+                (false, Some((error, released_pins)))
             }
         }
     }
