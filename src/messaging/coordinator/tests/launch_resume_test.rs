@@ -1,5 +1,7 @@
 use super::launch_metrics_tests::{ledger, seed_launch};
 use super::*;
+use crate::agents::providers::{hook_json, launch};
+use crate::messaging::identity;
 use crate::messaging::model::{AgentStartup, LaunchOutcome, StartupRecovery};
 
 struct ResumeNative {
@@ -149,16 +151,24 @@ fn claude_argon_explicit_recovery_keeps_the_wrapper_and_saved_session() {
 fn prepare_resume(worker: &mut Worker, agent: AgentId, recovery: Option<StartupRecovery>) {
     seed_launch(worker, agent, u64::MAX);
     let mut state = worker.state.clone();
+    let saved = state.agent(agent).unwrap();
+    let provider = saved.provider;
     if recovery.is_none() {
-        let hooks = worker.data_dir.join(".codex/hooks.json");
-        let document = crate::agents::providers::hook_json::merge_hooks(
-            json!({}),
-            crate::agents::providers::hook_json::HookContract::for_provider(Provider::Codex),
+        let hooks = if provider.uses_claude_harness() {
+            worker
+                .data_dir
+                .join("callbacks")
+                .join(saved.runtime_identity.launch_id.as_deref().unwrap())
+                .join("claude-settings.json")
+        } else {
+            worker.data_dir.join(".codex/hooks.json")
+        };
+        hook_json::install_hooks(
+            &hooks,
+            hook_json::HookContract::for_provider(identity::provider_kind(provider)),
             &std::env::current_exe().unwrap(),
         )
         .unwrap();
-        std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
-        std::fs::write(hooks, serde_json::to_vec(&document).unwrap()).unwrap();
         super::super::launch_metrics::settle_current(
             &mut state,
             agent,
@@ -174,7 +184,7 @@ fn prepare_resume(worker: &mut Worker, agent: AgentId, recovery: Option<StartupR
             .set_agent_startup(
                 agent,
                 Some(AgentStartup {
-                    command: "codex".into(),
+                    command: launch::executable(provider).into(),
                     started_at_ms: 1,
                     reported: true,
                     process_observed: false,
