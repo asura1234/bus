@@ -52,6 +52,146 @@ fn failed(ui: &mut BusUi, request: RequestId) {
 }
 
 #[test]
+fn submission_agent_notice_does_not_warn_when_an_answered_unbound_turn_is_released() {
+    let (mut ui, _, agent, request) = submitting();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let message = snapshot.state.request(request).unwrap().prompt.id;
+    snapshot
+        .state
+        .answer_message(message, agent, "stored answer".into(), 1001)
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot.clone()));
+
+    assert_eq!(
+        snapshot.state.release_unbound_request(agent, 1002),
+        Some(request)
+    );
+    let settled = snapshot.state.request(request).unwrap();
+    assert_eq!(settled.reply().unwrap().text, "stored answer");
+    assert_eq!(settled.completed_at_ms, Some(1001));
+    assert!(settled.failure_reason.is_none());
+    assert!(snapshot
+        .state
+        .agent(agent)
+        .unwrap()
+        .current_request
+        .is_none());
+    snapshot.revision += 1;
+
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.receive_snapshot(Arc::new(snapshot)));
+    let logs = capture.text();
+    assert!(!logs.contains("bus.agent.notice"), "{logs}");
+    assert!(ui
+        .snapshot
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .is_none());
+}
+
+#[test]
+fn submission_agent_notice_clears_the_uncertain_write_when_a_reply_arrives() {
+    let (mut ui, _, agent, request) = submitting();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .record_submission(
+            request,
+            SubmissionOutcome::Uncertain {
+                message: DETAIL.into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .as_deref(),
+        Some(DETAIL),
+    );
+    let message = snapshot.state.request(request).unwrap().prompt.id;
+    snapshot
+        .state
+        .answer_message(message, agent, "stored answer".into(), 1001)
+        .unwrap();
+    assert_eq!(
+        snapshot.state.agent(agent).unwrap().current_request,
+        Some(request)
+    );
+    snapshot.revision += 1;
+
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.receive_snapshot(Arc::new(snapshot)));
+    let logs = capture.text();
+    assert!(!logs.contains("bus.agent.notice"), "{logs}");
+    assert!(ui
+        .snapshot
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .is_none());
+}
+
+#[test]
+fn submission_agent_notice_still_warns_once_for_an_unanswered_unbound_turn() {
+    let (mut ui, _, agent, request) = submitting();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .record_submission(
+            request,
+            SubmissionOutcome::Uncertain {
+                message: DETAIL.into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        snapshot.state.release_unbound_request(agent, 1002),
+        Some(request)
+    );
+    let closed = snapshot.state.request(request).unwrap();
+    let message = closed.prompt.id.0;
+    assert!(closed.reply().is_none());
+    assert_eq!(
+        closed.failure_reason.as_deref(),
+        Some("submission_unconfirmed")
+    );
+    snapshot.revision += 1;
+
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        ui.receive_snapshot(Arc::new(snapshot));
+        ui.sync_agent_notices();
+    });
+    let logs = capture.text();
+    assert_eq!(logs.matches("bus.agent.notice").count(), 1, "{logs}");
+    assert!(logs.contains("WARN"), "{logs}");
+    assert!(
+        logs.contains(&format!(
+            "The outcome of message {message} is unknown (submission_unconfirmed)"
+        )),
+        "{logs}"
+    );
+    assert!(logs.contains(DETAIL), "{logs}");
+}
+
+#[test]
 fn provider_flake_started_receipt_does_not_report_failed_submission_to_client() {
     use crate::messaging::model::{CallbackDisposition, CallbackEventKind, ProviderCallback};
     let (mut ui, room, _) = fixture();

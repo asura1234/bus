@@ -148,6 +148,61 @@ fn a_failed_unconfirmed_write_leaves_the_agent_an_actionable_error() {
 }
 
 #[test]
+fn submission_agent_notice_names_an_unanswered_member_after_the_lead_replies() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let lead = submit_text(&mut state, room, agent, "first");
+    let member = submit_text(&mut state, room, agent, "second");
+    assert!(state.coalesce_queue(lead).is_some());
+    state.begin_submission(lead, "launch-codex", 5).unwrap();
+    let lead_message = state.request(lead).unwrap().prompt.id;
+    let member_message = state.request(member).unwrap().prompt.id;
+    state
+        .answer_message(lead_message, agent, "first answer".into(), 1001)
+        .unwrap();
+    state.release_unbound_request(agent, 1002).unwrap();
+
+    assert_eq!(
+        state.request(lead).unwrap().reply().unwrap().text,
+        "first answer"
+    );
+    assert_eq!(
+        state.request(member).unwrap().failure_reason.as_deref(),
+        Some("submission_unconfirmed"),
+    );
+    assert_eq!(
+        state.agent(agent).unwrap().actionable_error,
+        Some(BusState::unconfirmed_submission_message(member_message)),
+    );
+}
+
+#[test]
+fn submission_agent_notice_ignores_a_late_uncertain_native_receipt_after_reply() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, agent, "first");
+    state.begin_submission(request, "launch-codex", 5).unwrap();
+    let message = state.request(request).unwrap().prompt.id;
+    state
+        .answer_message(message, agent, "first answer".into(), 1001)
+        .unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Uncertain {
+                message: "late native timeout".into(),
+            },
+        )
+        .unwrap();
+
+    assert!(state.request(request).unwrap().settled());
+    assert!(state
+        .request(request)
+        .unwrap()
+        .submission_notice()
+        .is_none());
+    assert_eq!(state.agent(agent).unwrap().actionable_error, None);
+}
+
+#[test]
 fn coalesced_messages_failed_with_their_unconfirmed_lead_carry_its_reason() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state
