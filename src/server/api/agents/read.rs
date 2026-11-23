@@ -129,9 +129,12 @@ impl App {
             {
                 return Err(agent_not_ready(id, &params.target));
             }
-            return agent_keys_job(runtime, id, params.keys, Some(agent));
+            return agent_keys_job(runtime, id, params.keys, Some(agent), false);
         }
-        agent_keys_job(runtime, id, params.keys, None)
+        let claude_stop = expected_agent == crate::agents::AgentKind::Claude
+            && params.expected_terminal_id.is_some()
+            && params.keys == ["esc"];
+        agent_keys_job(runtime, id, params.keys, None, claude_stop)
     }
 }
 
@@ -147,13 +150,14 @@ fn agent_keys_job(
     id: String,
     keys: Vec<String>,
     native: Option<crate::protocol::api::schema::AgentInfo>,
+    claude_stop: bool,
 ) -> Result<Box<dyn FnOnce() -> String + Send>, String> {
     let encoded = crate::server::api::input_encoding::encode_api_keys(runtime, &keys)
         .map_err(|key| encode_error(id.clone(), "invalid_key", format!("unsupported key {key}")))?;
     let bytes = Bytes::from(encoded.into_iter().flatten().collect::<Vec<u8>>());
     let sender = runtime.submission_handle(true);
     let submit: KeyJob =
-        Box::new(move || KeyCompletion::Typed(sender.try_send_developer_bytes(bytes)));
+        Box::new(move || KeyCompletion::Typed(sender.try_send_agent_keys(bytes, claude_stop)));
     let identity = native.as_ref().map(|agent| {
         (
             agent.terminal_id.clone(),

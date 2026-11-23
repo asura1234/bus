@@ -79,10 +79,12 @@ impl ObservedSubmission {
         let mut screen = screen;
         let mut cursor = cursor;
         if matches!(initial, InputObservation::Other | InputObservation::Pending)
-            && self
-                .inspect
-                .observe_aborted_payload(&screen, cursor, pristine)
-                == InputObservation::Pending
+            && self.inspect.observe_aborted_payload(
+                &screen,
+                cursor,
+                pristine,
+                lease.claude_stopped_without_edits(),
+            ) == InputObservation::Pending
         {
             if let Err(error) = self.discard_aborted_payload(pristine, lease) {
                 lease.restored();
@@ -128,6 +130,8 @@ impl ObservedSubmission {
                                 .inspect
                                 .native_draft_restored(&self.terminal.active_ansi()))
                         })?;
+                    } else if self.inspect.waits_for_idle() {
+                        lease.record_claude_submission();
                     }
                     lease.restored();
                 }
@@ -299,10 +303,12 @@ impl ObservedSubmission {
                     .terminal
                     .cursor_state()
                     .map(|cursor| (cursor.x, cursor.y));
-                match self
-                    .inspect
-                    .observe_aborted_payload(&screen, cursor, pristine)
-                {
+                match self.inspect.observe_aborted_payload(
+                    &screen,
+                    cursor,
+                    pristine,
+                    lease.claude_stopped_without_edits(),
+                ) {
                     InputObservation::Empty => return Ok(()),
                     InputObservation::Pending => {}
                     _ => return Err(io::Error::other(PromptNotShown::ComposerBusy)),

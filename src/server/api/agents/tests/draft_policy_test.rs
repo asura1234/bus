@@ -23,6 +23,22 @@ fn screen(kind: AgentKind, draft: &str) -> String {
 }
 
 #[test]
+fn claude_aborted_paste_cleanup_refuses_a_different_chip() {
+    let mut matcher = AbortedMatcher::new("Bus prompt\nline one\nline two".into());
+    let kind = AgentKind::Claude;
+    let returned = screen(kind, "[Pasted text #1 +2 lines]");
+    let replacement = screen(kind, "[Pasted text #2 +2 lines]");
+    assert_eq!(
+        matcher.observe(kind, &returned, None, false, true),
+        InputObservation::Pending
+    );
+    assert_eq!(
+        matcher.observe(kind, &replacement, None, false, true),
+        InputObservation::Other
+    );
+}
+
+#[test]
 fn each_supported_provider_selects_its_verified_draft_preservation_path() {
     for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Cursor] {
         let observer = inspector(kind);

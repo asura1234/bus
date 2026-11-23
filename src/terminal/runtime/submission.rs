@@ -212,6 +212,7 @@ pub(crate) trait SubmissionInspector: Send {
         _screen: &str,
         _cursor: Option<(u16, u16)>,
         _pristine: bool,
+        _unedited_stop: bool,
     ) -> InputObservation {
         InputObservation::Other
     }
@@ -315,8 +316,8 @@ impl TerminalRuntime {
 }
 
 impl SubmissionHandle {
-    pub(crate) fn try_send_developer_bytes(&self, bytes: Bytes) -> io::Result<()> {
-        super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
+    pub(crate) fn try_send_agent_keys(&self, bytes: Bytes, claude_stop: bool) -> io::Result<()> {
+        super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes, claude_stop)
             .map_err(io::Error::other)
     }
 
