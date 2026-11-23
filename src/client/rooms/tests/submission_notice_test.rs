@@ -1,6 +1,10 @@
 use super::*;
+use crate::messaging::model::{
+    CallbackDisposition, CallbackEventKind, ProviderCallback, QUEUED_STALL_MS,
+};
 
 const DETAIL: &str = "The draft was left because it was edited. Inspect the transcript and composer before resending.";
+const NO_ENTER: &str = crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE;
 
 fn submitting() -> (BusUi, RoomId, AgentId, RequestId) {
     let (mut ui, room, agent) = fixture();
@@ -49,6 +53,152 @@ fn failed(ui: &mut BusUi, request: RequestId) {
         .unwrap();
     snapshot.revision += 1;
     ui.receive_snapshot(Arc::new(snapshot));
+}
+
+fn confirm_and_bind(
+    state: &mut BusState,
+    request: RequestId,
+    agent: AgentId,
+    sequence: u64,
+    turn: &str,
+) {
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let payload = state.render_request_payload(request).unwrap();
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: format!("started-{turn}"),
+            sequence,
+            occurred_at_ms: 1000 + sequence,
+            agent_id: agent,
+            launch_id: "launch".into(),
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some(turn.into()),
+            provider_prompt_id: None,
+            prompt_payload: Some(payload),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+}
+
+#[test]
+fn submission_agent_notice_stays_silent_when_a_rejected_attempt_retries() {
+    let (mut ui, room, agent, prior) = submitting();
+    let mut snapshot = (*ui.snapshot).clone();
+    confirm_and_bind(&mut snapshot.state, prior, agent, 1, "prior");
+    snapshot
+        .state
+        .observe_status(agent, RuntimeStatus::Working, 1002)
+        .unwrap();
+    let payload = snapshot.state.render_request_payload(prior).unwrap();
+    assert_eq!(
+        snapshot
+            .state
+            .accept_callback(ProviderCallback::final_event(
+                "prior-final",
+                2,
+                agent,
+                "launch",
+                "session",
+                "prior",
+                &payload,
+                "done",
+            )),
+        CallbackDisposition::AcceptedCompleted
+    );
+    assert_eq!(snapshot.state.agent(agent).unwrap().current_request, None);
+    assert_eq!(
+        snapshot.state.agent(agent).unwrap().status,
+        RuntimeStatus::Working
+    );
+
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot.state.set_draft_text(room, "follow-up").unwrap();
+    let request = snapshot.state.submit_draft(room, 1010).unwrap()[0];
+    snapshot
+        .state
+        .begin_submission(request, "launch", 2)
+        .unwrap();
+    snapshot
+        .state
+        .record_submission(
+            request,
+            SubmissionOutcome::DefinitelyRejected {
+                message: NO_ENTER.into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(snapshot.state.queued_requests(agent), &[request]);
+    let queued_error = snapshot
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .clone();
+
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot.clone()));
+        snapshot
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 1011)
+            .unwrap();
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot.clone()));
+
+        snapshot
+            .state
+            .begin_submission(request, "launch", 2)
+            .unwrap();
+        confirm_and_bind(&mut snapshot.state, request, agent, 3, "retry");
+        snapshot.revision += 1;
+        ui.receive_snapshot(Arc::new(snapshot));
+    });
+    let request = ui.snapshot.state.request(request).unwrap();
+    assert_eq!(request.delivery_stage(), "delivered");
+    assert!(request.failure_reason.is_none());
+    let logs = capture.text();
+    assert!(!logs.contains("bus.agent.notice"), "{logs}");
+    assert!(queued_error.is_none(), "{queued_error:?}");
+    assert!(ui
+        .snapshot
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .is_none());
+}
+
+#[test]
+fn submission_agent_notice_stays_silent_on_normal_delivery() {
+    let (mut ui, _, agent, request) = submitting();
+    let mut snapshot = (*ui.snapshot).clone();
+    confirm_and_bind(&mut snapshot.state, request, agent, 1, "normal");
+    snapshot.revision += 1;
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.receive_snapshot(Arc::new(snapshot)));
+    assert_eq!(
+        ui.snapshot.state.request(request).unwrap().delivery_stage(),
+        "delivered"
+    );
+    assert!(ui
+        .snapshot
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .is_none());
+    let logs = capture.text();
+    assert!(!logs.contains("bus.agent.notice"), "{logs}");
 }
 
 #[test]
@@ -407,34 +557,50 @@ fn tui_error_text_binding_rejects_history_submission_errors() {
 }
 
 #[test]
-fn tui_error_text_definite_rejection_logs_not_renders() {
-    const CAUSE: &str = "Agent is not idle; prompt was not sent";
-    let (mut ui, _, _, request) = submitting();
-    let capture = crate::utils::logging::test_capture::Capture::default();
-    capture.run(|| {
-        let mut snapshot = (*ui.snapshot).clone();
+fn submission_agent_notice_warns_when_a_definite_rejection_expires() {
+    let (mut ui, _, agent, request) = submitting();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .record_submission(
+            request,
+            SubmissionOutcome::DefinitelyRejected {
+                message: NO_ENTER.into(),
+            },
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot.clone()));
+    assert_eq!(
         snapshot
             .state
-            .record_submission(
-                request,
-                SubmissionOutcome::DefinitelyRejected {
-                    message: CAUSE.into(),
-                },
-            )
-            .unwrap();
-        snapshot.revision += 1;
+            .expire_stalled_queued_requests(1000 + QUEUED_STALL_MS)
+            .unwrap(),
+        [request]
+    );
+    let closed = snapshot.state.request(request).unwrap();
+    assert_eq!(closed.phase, RequestPhase::Abandoned);
+    assert_eq!(closed.failure_reason.as_deref(), Some("prompt_not_shown"));
+    assert!(snapshot.state.queued_requests(agent).is_empty());
+    let error = snapshot
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .clone()
+        .unwrap();
+    snapshot.revision += 1;
+
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| {
         ui.receive_snapshot(Arc::new(snapshot));
+        ui.sync_agent_notices();
     });
+    let logs = capture.text();
+    assert_eq!(logs.matches("bus.agent.notice").count(), 1, "{logs}");
+    assert!(logs.contains(&error), "{logs}");
     let screen = tui_error_probe_screen(&mut ui);
-    assert!(
-        !screen.contains(CAUSE),
-        "definite native refusal must not render: {screen}"
-    );
-    assert!(
-        capture.text().contains(CAUSE),
-        "native refusal must reach client log: {}",
-        capture.text()
-    );
+    assert!(!screen.contains(&error), "{screen}");
 }
 
 fn orchestrate(state: &mut BusState, room: RoomId) -> AgentId {

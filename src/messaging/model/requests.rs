@@ -132,7 +132,6 @@ impl BusState {
             return Ok(());
         }
         let restart_continuation = request_state.restart_continuation;
-        let error_report = request_state.is_error_report();
         if matches!(
             &outcome,
             SubmissionOutcome::DefinitelyRejected { .. } | SubmissionOutcome::ComposerBusy
@@ -150,8 +149,8 @@ impl BusState {
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
         let rejection = match &outcome {
-            SubmissionOutcome::DefinitelyRejected { message } => Some(message.clone()),
-            _ => None,
+            SubmissionOutcome::DefinitelyRejected { message } => rejection_reason(message),
+            _ => "composer_busy",
         };
         match outcome {
             SubmissionOutcome::DefinitelyRejected { .. } | SubmissionOutcome::ComposerBusy => {
@@ -179,15 +178,9 @@ impl BusState {
                     .get_mut(&agent_id)
                     .ok_or(ModelError::UnknownAgent(agent_id))?;
                 agent.current_request = restart_continuation.then_some(request);
-                agent.delivery_rejection = Some(
-                    rejection
-                        .as_deref()
-                        .map_or("composer_busy", rejection_reason)
-                        .into(),
-                );
-                if !error_report {
-                    agent.actionable_error = rejection;
-                }
+                // The native result records the refusal. Queue expiry publishes
+                // an actionable error if the request ultimately cannot run.
+                agent.delivery_rejection = Some(rejection.into());
                 self.transfer_requeued_stop_claim(request);
                 self.retain_rejected_provider_retry(request);
             }

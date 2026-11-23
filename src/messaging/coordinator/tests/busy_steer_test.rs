@@ -88,6 +88,91 @@ fn a_busy_agent_with_no_bus_turn_is_steered_without_waiting_for_idle() {
 }
 
 #[test]
+fn codex_turn_end_rejection_retries_without_an_actionable_error() {
+    use crate::protocol::api::{AGENT_PROMPT_NOT_SHOWN, AGENT_PROMPT_NOT_SHOWN_MESSAGE};
+
+    struct RefusePrompt(Arc<Mutex<Vec<Method>>>);
+
+    impl Transport for RefusePrompt {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            if matches!(method, Method::AgentPromptIfIdleAtGeneration(_)) {
+                self.0.lock().unwrap().push(method);
+                return Err(TransportError {
+                    code: Some(AGENT_PROMPT_NOT_SHOWN.into()),
+                    message: AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
+                    definitely_rejected: true,
+                    timestamps: Default::default(),
+                });
+            }
+            Native(self.0.clone()).request(method)
+        }
+    }
+
+    let mut fixture = Fixture::new(Provider::Codex);
+    let prior = running(&mut fixture, "previous task", "prior");
+    fixture.stopped("prior", "done");
+    fixture.consume();
+    assert_eq!(fixture.request(prior).phase, RequestPhase::Completed);
+    let agent = fixture.worker.state.agent(fixture.agent).unwrap();
+    assert_eq!(agent.current_request, None);
+    assert_eq!(agent.status, RuntimeStatus::Working);
+
+    fixture.worker.transport = Box::new(RefusePrompt(fixture.native.clone()));
+    let request = fixture.send("follow-up", false);
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| fixture.deliver());
+    assert_eq!(
+        fixture.typed_content().last(),
+        Some(&("follow-up".into(), true))
+    );
+    assert_eq!(
+        fixture.worker.state.queued_requests(fixture.agent),
+        &[request]
+    );
+    let queued_error = fixture
+        .worker
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .actionable_error
+        .clone();
+    let logs = capture.text();
+    assert!(
+        logs.contains("bus.delivery.result") && logs.contains(AGENT_PROMPT_NOT_SHOWN_MESSAGE),
+        "{logs}"
+    );
+
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.transport = Box::new(Native(fixture.native.clone()));
+    fixture.deliver();
+    assert_eq!(fixture.typed().len(), 2, "retry must honor the cooldown");
+    for at in fixture.worker.withdrawn_at.values_mut() {
+        *at -= super::super::delivery::PROMPT_NOT_SHOWN_RETRY;
+    }
+    fixture.deliver();
+    assert_eq!(fixture.typed().len(), 3);
+    assert_eq!(
+        fixture.typed_content().last(),
+        Some(&("follow-up".into(), false))
+    );
+    let retry_error = fixture
+        .worker
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .actionable_error
+        .clone();
+    fixture.started("retry", "follow-up");
+    fixture.consume();
+    assert_eq!(fixture.request(request).delivery_stage(), "delivered");
+    assert!(!fixture.request(request).steered);
+    assert!(
+        queued_error.is_none() && retry_error.is_none(),
+        "{queued_error:?} / {retry_error:?}"
+    );
+}
+
+#[test]
 fn two_messages_to_a_busy_agent_steer_in_order_and_only_once() {
     let mut fixture = Fixture::new(Provider::Codex);
     let lead = busy_untrusted_turn(&mut fixture);
