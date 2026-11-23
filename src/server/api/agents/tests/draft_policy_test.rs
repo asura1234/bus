@@ -29,11 +29,11 @@ fn claude_aborted_paste_cleanup_refuses_a_different_chip() {
     let returned = screen(kind, "[Pasted text #1 +2 lines]");
     let replacement = screen(kind, "[Pasted text #2 +2 lines]");
     assert_eq!(
-        matcher.observe(kind, &returned, None, false),
+        matcher.observe(kind, &returned, None, false, true),
         InputObservation::Pending
     );
     assert_eq!(
-        matcher.observe(kind, &replacement, None, false),
+        matcher.observe(kind, &replacement, None, false, true),
         InputObservation::Other
     );
 }

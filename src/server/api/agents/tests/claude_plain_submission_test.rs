@@ -412,6 +412,16 @@ async fn claude_interrupt_delivery_discards_returned_aborted_payload_without_sta
 #[tokio::test]
 async fn claude_interrupt_delivery_discards_returned_collapsed_payload() {
     let _env = IsolatedDraftEnv::new();
+    claude_collapsed_interrupt(false).await;
+}
+
+#[tokio::test]
+async fn claude_interrupt_delivery_preserves_an_unrelated_collapsed_draft() {
+    let _env = IsolatedDraftEnv::new();
+    claude_collapsed_interrupt(true).await;
+}
+
+async fn claude_collapsed_interrupt(typed_draft: bool) {
     let aborted = [
         "[Bus message 6 from peer]",
         "",
@@ -421,41 +431,93 @@ async fn claude_interrupt_delivery_discards_returned_collapsed_payload() {
     ]
     .join("\n");
     let collapsed = "[Pasted text #12 +4 lines]";
-    let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, collapsed);
-    let Method::AgentPromptIfIdle(params) = &mut method else {
+    let kind = AgentKind::Claude;
+    let (mut app, mut lead_method, mut writes) = provider_fixture(kind, true, "");
+    let mut follow_method = lead_method.clone();
+    let Method::AgentPromptIfIdle(lead_params) = &mut lead_method else {
+        unreachable!();
+    };
+    lead_params.text = aborted.clone();
+    let lead_response = start(&mut app, lead_method);
+    assert_eq!(
+        next_write(&mut writes).await,
+        Bytes::from(format!("\x1b[200~{aborted}\x1b[201~"))
+    );
+    redraw(&app, kind, "[Pasted text #11 +4 lines]");
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    redraw(&app, kind, "");
+    assert!(lead_response
+        .recv_timeout(WAIT)
+        .unwrap()
+        .contains("agent_prompted"));
+
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime = app.lookup_runtime_sender(0, pane).unwrap();
+    if typed_draft {
+        let draft = Bytes::from_static(b"an unrelated developer input");
+        runtime.try_send_developer_bytes(draft.clone()).unwrap();
+        assert_eq!(next_write(&mut writes).await, draft);
+        redraw(&app, kind, collapsed);
+    }
+    let agent = app.agent_info(0, pane).unwrap();
+    let stop = Method::AgentSendKeys(crate::protocol::api::schema::AgentSendKeysParams {
+        target: agent.pane_id,
+        keys: vec!["esc".into()],
+        expected_terminal_id: Some(agent.terminal_id),
+        expected_activity: None,
+        native_interrupt: None,
+    });
+    let response = app.handle_api_request(Request {
+        id: "stop".into(),
+        method: stop,
+    });
+    assert!(response.contains("\"type\":\"ok\""), "{response}");
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x1b");
+    redraw(&app, kind, collapsed);
+
+    let Method::AgentPromptIfIdle(params) = &mut follow_method else {
         unreachable!();
     };
     params.discard_aborted_payload = Some(aborted);
-    let response = start(&mut app, method);
+    let response = start(&mut app, follow_method);
 
-    let first_key = tokio::time::timeout(WAIT, writes.recv())
-        .await
-        .expect("expected a clear key for the returned paste chip")
-        .expect("terminal writer closed");
-    assert_eq!(
-        first_key.as_ref(),
-        b"\x01",
-        "discard must not stash the chip"
-    );
-    redraw(&app, AgentKind::Claude, collapsed);
-    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x0b");
-    redraw(&app, AgentKind::Claude, "");
+    let first_key = next_write(&mut writes).await;
+    if typed_draft {
+        assert_eq!(first_key.as_ref(), b"\x13", "stash the developer's chip");
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(
+                "\x1b[2J\x1b[H› stashed\r\n────────────────────────\r\n❯ \r\n────────────────────────\r\n"
+                    .as_bytes(),
+            );
+    } else {
+        assert_eq!(first_key.as_ref(), b"\x01", "clear the returned chip");
+        redraw(&app, kind, collapsed);
+        assert_eq!(next_write(&mut writes).await.as_ref(), b"\x0b");
+        redraw(&app, kind, "");
+    }
 
     assert_eq!(
         next_write(&mut writes).await.as_ref(),
         b"\x1b[200~from bus\x1b[201~"
     );
-    redraw(&app, AgentKind::Claude, "from bus");
+    redraw(&app, kind, "from bus");
     assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
-    redraw(&app, AgentKind::Claude, "");
+    redraw(&app, kind, if typed_draft { collapsed } else { "" });
 
     let reply: serde_json::Value =
         serde_json::from_str(&response.recv_timeout(WAIT).unwrap()).unwrap();
     assert_eq!(reply["result"]["type"], "agent_prompted", "{reply}");
-    assert_eq!(
-        reply["result"]["discarded_aborted_payload"], true,
-        "{reply}"
-    );
+    if typed_draft {
+        assert!(reply["result"].get("discarded_aborted_payload").is_none());
+        assert!(app
+            .lookup_runtime_sender(0, pane)
+            .unwrap()
+            .visible_text()
+            .contains(collapsed));
+    } else {
+        assert_eq!(reply["result"]["discarded_aborted_payload"], true);
+    }
     assert!(writes.try_recv().is_err());
 }
 

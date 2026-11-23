@@ -17,9 +17,15 @@ pub(super) struct DraftInput {
     pending: Option<PendingPaste>,
     working_started: Option<Instant>,
     completed_turn: Option<(Instant, Instant)>,
+    claude_prompt: Option<ClaudePrompt>,
     // Shared with the runtime launch window. AtomicBool's Default is false,
     // which would hide the placeholder, so this Default starts it true.
     launch_window: Arc<AtomicBool>,
+}
+
+enum ClaudePrompt {
+    Submitted,
+    Stopped,
 }
 
 impl Default for DraftInput {
@@ -31,6 +37,7 @@ impl Default for DraftInput {
             pending: None,
             working_started: None,
             completed_turn: None,
+            claude_prompt: None,
             launch_window: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -83,6 +90,7 @@ impl DraftInput {
         state: &SharedDraftInput,
         io: &PaneRuntimeIo,
         bytes: Bytes,
+        claude_stop: bool,
     ) -> Result<(), tokio::sync::mpsc::error::TrySendError<Bytes>> {
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
         // A full channel returns bytes that never reached the pane.
@@ -101,6 +109,10 @@ impl DraftInput {
         if result.is_ok() {
             state.revision = state.revision.wrapping_add(1);
             state.pending = None;
+            state.claude_prompt = (claude_stop
+                && state.buffered.is_none()
+                && matches!(state.claude_prompt, Some(ClaudePrompt::Submitted)))
+            .then_some(ClaudePrompt::Stopped);
         }
         result
     }
@@ -146,6 +158,7 @@ impl DraftInput {
         state.pending = None;
         state.working_started = None;
         state.completed_turn = None;
+        state.claude_prompt = None;
     }
 
     pub(super) fn observe_turn(
@@ -171,6 +184,22 @@ impl DraftInput {
 impl DraftInputLease {
     pub(super) fn restored(&self) {
         self.replay_safe.set(true);
+    }
+
+    pub(super) fn record_claude_submission(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.claude_prompt =
+                (state.revision == self.revision).then_some(ClaudePrompt::Submitted);
+        }
+    }
+
+    /// A paste label only proves a shape. Require a Bus submission from an
+    /// empty composer followed by its stop key, with no developer input.
+    pub(super) fn claude_stopped_without_edits(&self) -> bool {
+        self.state.lock().is_ok_and(|state| {
+            state.revision == self.revision
+                && matches!(state.claude_prompt, Some(ClaudePrompt::Stopped))
+        })
     }
 
     pub(super) fn take_pending(&self) -> Option<PendingPaste> {

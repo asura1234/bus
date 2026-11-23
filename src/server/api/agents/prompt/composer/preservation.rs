@@ -52,6 +52,7 @@ impl AbortedMatcher {
         screen: &str,
         cursor: Option<(u16, u16)>,
         pristine: bool,
+        unedited_stop: bool,
     ) -> InputObservation {
         let Some(body) = super::input_since_launch(kind, screen, cursor, pristine) else {
             return InputObservation::Unavailable;
@@ -64,13 +65,17 @@ impl AbortedMatcher {
             };
         }
         if !self.started {
+            let collapsed = kind == AgentKind::Claude && super::pasted_text_count(&body).is_some();
+            if collapsed && !unedited_stop {
+                return InputObservation::Other;
+            }
             if super::observe_since_launch(kind, screen, &self.payload, cursor, pristine)
                 == InputObservation::Pending
             {
                 self.started = true;
                 self.last_len = body.len();
                 self.progress = self.progress.wrapping_add(1);
-                if kind == AgentKind::Claude && super::pasted_text_count(&body).is_some() {
+                if collapsed {
                     self.collapsed = Some(body);
                 }
                 return InputObservation::Pending;
@@ -80,7 +85,7 @@ impl AbortedMatcher {
         // Claude renders a collapsed paste as one atom. A cursor move leaves
         // its label unchanged, and a line kill removes it in one edit.
         if let Some(collapsed) = &self.collapsed {
-            return if *collapsed == body {
+            return if unedited_stop && *collapsed == body {
                 InputObservation::Pending
             } else {
                 InputObservation::Other
@@ -435,12 +440,13 @@ impl SubmissionInspector for PreservingComposer {
         screen: &str,
         cursor: Option<(u16, u16)>,
         pristine: bool,
+        unedited_stop: bool,
     ) -> InputObservation {
         self.aborted
             .as_ref()
             .and_then(|aborted| aborted.lock().ok())
             .map_or(InputObservation::Other, |mut aborted| {
-                aborted.observe(self.kind, screen, cursor, pristine)
+                aborted.observe(self.kind, screen, cursor, pristine, unedited_stop)
             })
     }
 
