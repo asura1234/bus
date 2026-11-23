@@ -193,6 +193,15 @@ pub(crate) trait SubmissionInspector: Send {
     fn native_stash_visible(&self, _screen: &str) -> bool {
         false
     }
+    fn mark_occupied_stash_for_copy(&self, _screen: &str) -> bool {
+        false
+    }
+    fn copy_stash_key(&self) -> Option<Bytes> {
+        None
+    }
+    fn copy_stash_payload_is_distinct(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> bool {
+        false
+    }
     fn native_draft_restored(&self, _screen: &str) -> bool {
         false
     }

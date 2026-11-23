@@ -1194,3 +1194,7 @@ async fn claude_copy_fallback_blocked_overload_warning_does_not_delay_its_own_pa
     assert!(writes.try_recv().is_err());
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[cfg(feature = "dev-tools")]
+#[path = "claude_occupied_stash_test.rs"]
+mod occupied_stash_tests;

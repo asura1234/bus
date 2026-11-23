@@ -41,7 +41,7 @@ fn begin_with_diagnostics<'a>(
     diagnostics: Option<&'a CallerDiagnostics>,
 ) -> Attempt<'a> {
     let context = context(key);
-    let (registration, _) = register(service, &context, snapshot, diagnostics);
+    let (registration, _) = register(service, &context, snapshot, diagnostics, None);
     Attempt {
         service,
         context: Some(context),

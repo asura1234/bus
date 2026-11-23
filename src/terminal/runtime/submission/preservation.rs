@@ -166,7 +166,7 @@ impl ObservedSubmission {
             DraftPreservation::Copy {
                 snapshot,
                 restore_bytes,
-            } => self.preserve_copy(snapshot, restore_bytes, text, delay, lease),
+            } => self.preserve_copy(snapshot, restore_bytes, text, delay, &screen, lease),
         }
     }
 

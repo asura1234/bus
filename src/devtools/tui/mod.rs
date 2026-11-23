@@ -789,3 +789,6 @@ fn run_replay(args: &[String]) -> i32 {
         Err(message) => usage(message),
     }
 }
+
+#[cfg(test)]
+pub(crate) use fake_agents::FakeClaudeComposer;

@@ -3,15 +3,45 @@ use super::{InputObservation, ObservedSubmission, PromptNotShown};
 use crate::protocol::api::submission::{withdrawal_budget, CLEAR_KEY_DELAY};
 use crate::terminal::runtime::draft_input::DraftInputLease;
 use bytes::Bytes;
-use std::{io, sync::atomic::Ordering, time::Duration};
+use std::{
+    io,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 mod recovery;
+mod stash;
 #[cfg(test)]
 pub(crate) use recovery::test_hooks;
 pub(super) use recovery::CallerDiagnostics;
 use recovery::Outcome;
 
 const RESTORE_BUDGET: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy)]
+enum CopyClear {
+    Unprotected,
+    OccupiedStash,
+    PromotedDraft,
+}
+
+#[derive(Clone, Copy)]
+enum Readback {
+    Visible,
+    ExactWithStash(bool),
+}
+
+impl Readback {
+    fn matches_stash(self, submission: &ObservedSubmission, screen: &str) -> bool {
+        match self {
+            Self::Visible => true,
+            Self::ExactWithStash(occupied) => {
+                submission.inspect.native_stash_visible(screen) == occupied
+                    && !submission.provider_queues_input(screen)
+            }
+        }
+    }
+}
 
 impl ObservedSubmission {
     pub(super) fn fallback_copy_after_handoff_failure(
@@ -30,7 +60,7 @@ impl ObservedSubmission {
             .inspect
             .composer_copy_fallback(&screen, cursor, pristine)?;
         self.inspect.clear_native_draft();
-        Some(self.preserve_copy(snapshot, restore_bytes, text, delay, lease))
+        Some(self.preserve_copy(snapshot, restore_bytes, text, delay, &screen, lease))
     }
 
     pub(super) fn preserve_copy(
@@ -39,14 +69,26 @@ impl ObservedSubmission {
         restore_bytes: Option<Bytes>,
         text: Bytes,
         delay: Duration,
+        screen: &str,
         lease: &DraftInputLease,
     ) -> io::Result<()> {
+        let occupied_stash = self.inspect.mark_occupied_stash_for_copy(screen);
         let diagnostics = &self.diagnostics.copy_recovery;
         let backup = self
             .inspect
             .copy_recovery_directory()
             .and_then(|directory| recovery::start(directory, &snapshot, diagnostics));
-        if let Err(error) = self.clear_for_copy(&snapshot, lease) {
+        let clear_deadline = (self.clock.now() + withdrawal_budget(snapshot.as_bytes()))
+            .min(self.hard_deadline - self.withdraw_grace);
+        let clear_mode = if occupied_stash {
+            CopyClear::OccupiedStash
+        } else {
+            CopyClear::Unprotected
+        };
+        if let Err(error) = self.clear_for_copy(&snapshot, clear_mode, clear_deadline, lease) {
+            if occupied_stash {
+                self.retain_visible_promotion(&error);
+            }
             if let Some(backup) = backup {
                 backup.send(Outcome::Retain {
                     reason: "clear_incomplete",
@@ -60,14 +102,26 @@ impl ObservedSubmission {
         let withdrawal_lease =
             (self.inspect.confirm_consumption() || self.inspect.waits_for_idle()).then_some(lease);
         let result = self.confirm_legacy_submission(self.run(text, delay, withdrawal_lease), lease);
+        let deadline = (self.clock.now() + RESTORE_BUDGET).min(self.hard_deadline);
         let restored = match (&result, restore_bytes) {
-            (Ok(()), Some(restore)) => self.restore_copied_draft(&snapshot, restore, lease),
+            (Ok(()), Some(restore)) if occupied_stash => {
+                self.restore_occupied_stash_copy(&snapshot, restore, deadline, lease)
+            }
+            (Ok(()), Some(restore)) => {
+                self.restore_copied_draft(&snapshot, restore, deadline, Readback::Visible, lease)
+            }
             (Err(error), _) => Err(io::Error::other(format!(
                 "Delivery did not settle: {error}"
             ))),
-            (_, None) => Err(io::Error::other(
-                "Native draft cannot be reconstructed from its visible snapshot",
-            )),
+            (_, None) => {
+                let error = io::Error::other(
+                    "Native draft cannot be reconstructed from its visible snapshot",
+                );
+                if occupied_stash {
+                    self.retain_visible_promotion(&error);
+                }
+                Err(error)
+            }
         };
         match restored {
             Ok(()) => {
@@ -78,6 +132,9 @@ impl ObservedSubmission {
             }
             Err(error) => {
                 lease.restoration_unproven();
+                if occupied_stash && result.is_err() {
+                    self.retain_visible_promotion(&error);
+                }
                 if let Some(backup) = backup {
                     backup.send(Outcome::Retain {
                         reason: "copy_restore_failed",
@@ -96,9 +153,13 @@ impl ObservedSubmission {
         result
     }
 
-    fn clear_for_copy(&self, snapshot: &str, lease: &DraftInputLease) -> io::Result<()> {
-        let deadline = (self.clock.now() + withdrawal_budget(snapshot.as_bytes()))
-            .min(self.hard_deadline - self.withdraw_grace);
+    fn clear_for_copy(
+        &self,
+        snapshot: &str,
+        mode: CopyClear,
+        deadline: Instant,
+        lease: &DraftInputLease,
+    ) -> io::Result<()> {
         // A definite pre-paste refusal lets the queue retry under its
         // existing stall bound if the same pane never accepts clear.
         let not_submitted = || io::Error::other(PromptNotShown::NotSubmitted);
@@ -110,10 +171,23 @@ impl ObservedSubmission {
             let generation = self.clock.generation();
             let completion = {
                 let _guard = self.content_lock.lock().map_err(|_| not_submitted())?;
-                let screen = self.terminal.active_ansi_if_complete();
-                if screen.as_ref().is_some_and(|screen| {
+                if let Some(screen) = self.terminal.active_ansi_if_complete().filter(|screen| {
                     self.inspect.submission_available(screen) && !self.provider_queues_input(screen)
                 }) {
+                    match mode {
+                        CopyClear::OccupiedStash if !self.inspect.native_stash_visible(&screen) => {
+                            return Err(not_submitted());
+                        }
+                        CopyClear::PromotedDraft
+                            if self.inspect.native_stash_visible(&screen)
+                                || self.copy_readback(&screen).is_none_or(|(body, _)| {
+                                    !body.is_empty() && body != snapshot
+                                }) =>
+                        {
+                            return Err(not_submitted());
+                        }
+                        _ => {}
+                    }
                     if self.observe("copy_clear") == InputObservation::Empty {
                         return lease
                             .with_uninvalidated(|| Ok(()))
@@ -151,9 +225,10 @@ impl ObservedSubmission {
         &self,
         snapshot: &str,
         restore: Bytes,
+        deadline: Instant,
+        readback: Readback,
         lease: &DraftInputLease,
     ) -> io::Result<()> {
-        let deadline = (self.clock.now() + RESTORE_BUDGET).min(self.hard_deadline);
         let busy = || io::Error::other(PromptNotShown::ComposerBusy);
         let (completion, before_paste) = loop {
             if self.clock.now() >= deadline {
@@ -163,10 +238,10 @@ impl ObservedSubmission {
             {
                 let _guard = self.content_lock.lock().map_err(|_| busy())?;
                 let screen = self.terminal.active_ansi_if_complete();
-                if screen
-                    .as_ref()
-                    .is_some_and(|screen| self.inspect.submission_available(screen))
-                    && self.observe("copy_restore_ready") == InputObservation::Empty
+                if screen.as_ref().is_some_and(|screen| {
+                    self.inspect.submission_available(screen)
+                        && readback.matches_stash(self, screen)
+                }) && self.observe("copy_restore_ready") == InputObservation::Empty
                 {
                     let seq = self.content_seq.load(Ordering::Acquire);
                     let completion = lease.with_uninvalidated(|| {
@@ -199,22 +274,24 @@ impl ObservedSubmission {
                 let Some(screen) = self.terminal.active_ansi_if_complete() else {
                     return Ok(false);
                 };
-                let cursor = self
-                    .terminal
-                    .cursor_state()
-                    .map(|cursor| (cursor.x, cursor.y));
-                Ok(self
-                    .inspect
-                    .composer_copy_fallback(&screen, cursor, false)
-                    .is_some_and(|(body, _)| {
+                Ok(readback.matches_stash(self, &screen)
+                    && self.copy_readback(&screen).is_some_and(|(body, _)| {
                         body == snapshot
                             // Some providers paint a multiline paste as one
-                            // line. Compare words without joining their boundaries.
-                            || snapshot.contains('\n')
+                            // line. A stash transfer requires exact readback.
+                            || matches!(readback, Readback::Visible)
+                                && snapshot.contains('\n')
                                 && !body.contains('\n')
                                 && body.split_whitespace().eq(snapshot.split_whitespace())
                     }))
             })
         })
+    }
+    fn copy_readback(&self, screen: &str) -> Option<(String, Option<Bytes>)> {
+        let cursor = self
+            .terminal
+            .cursor_state()
+            .map(|cursor| (cursor.x, cursor.y));
+        self.inspect.composer_copy_fallback(screen, cursor, false)
     }
 }

@@ -792,3 +792,9 @@ fn pseudo_uuid() -> String {
 #[cfg(test)]
 #[path = "tests/fake_agents_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "fake_agents/tests/claude_composer_fixture_test.rs"]
+mod claude_composer_fixture;
+#[cfg(test)]
+pub(crate) use claude_composer_fixture::FakeClaudeComposer;

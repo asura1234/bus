@@ -39,6 +39,7 @@ DEPENDENCIES = {
 EXCEPTIONS = {
     "src/server/tests/render_scale_test.rs": frozenset({"client"}),
     "src/server/tests/reply_delivery_test.rs": frozenset({"messaging"}),
+    "src/server/api/agents/tests/claude_occupied_stash_test.rs": frozenset({"devtools"}),
     "src/messaging/coordinator/tests/reply_delivery_support_test.rs": frozenset({"server", "terminal"}),
 }
 IDENTIFIER = r"(?:r#)?[A-Za-z_]\w*"

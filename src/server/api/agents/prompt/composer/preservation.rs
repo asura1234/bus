@@ -111,6 +111,7 @@ impl AbortedMatcher {
 enum NativeDraft {
     Captured(String),
     ExistingStash,
+    OccupiedCopy,
 }
 
 impl PreservingComposer {
@@ -152,6 +153,15 @@ impl PreservingComposer {
     pub(super) fn with_bracketed_paste(mut self, bracketed_paste: bool) -> Self {
         self.bracketed_paste = bracketed_paste;
         self
+    }
+
+    fn copy_lost_stash_marker(&self, screen: &str) -> bool {
+        self.kind == AgentKind::Claude
+            && self
+                .native_draft
+                .lock()
+                .is_ok_and(|draft| matches!(draft.as_ref(), Some(NativeDraft::OccupiedCopy)))
+            && !native_stash_present(screen)
     }
 
     fn copy_draft(&self, body: String) -> DraftPreservation {
@@ -272,7 +282,7 @@ impl SubmissionInspector for PreservingComposer {
         self.owned.confirm_consumption()
     }
     fn recoverable_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
-        self.owned.recoverable_input(screen, cursor)
+        !self.copy_lost_stash_marker(screen) && self.owned.recoverable_input(screen, cursor)
     }
     fn owned_popup_escape(&self, screen: &str) -> Option<bytes::Bytes> {
         self.owned.owned_popup_escape(screen)
@@ -281,7 +291,9 @@ impl SubmissionInspector for PreservingComposer {
         super::submission_available(self.kind, screen)
     }
     fn paste_ready(&self, screen: &str) -> bool {
-        if !super::paste_ready(self.kind, screen, &self.expected) {
+        if self.copy_lost_stash_marker(screen)
+            || !super::paste_ready(self.kind, screen, &self.expected)
+        {
             return false;
         }
         if self.kind != AgentKind::Claude {
@@ -293,7 +305,7 @@ impl SubmissionInspector for PreservingComposer {
         let wait_for_input = match saved.as_ref() {
             Some(NativeDraft::Captured(body)) => opaque(body),
             Some(NativeDraft::ExistingStash) => true,
-            None => false,
+            Some(NativeDraft::OccupiedCopy) | None => false,
         };
         drop(saved);
         // A prior timeout may retain the native stash after its late paste is
@@ -333,7 +345,14 @@ impl SubmissionInspector for PreservingComposer {
         cursor: Option<(u16, u16)>,
         pristine: bool,
     ) -> InputObservation {
-        self.owned.observe_with_launch(screen, cursor, pristine)
+        let observation = self.owned.observe_with_launch(screen, cursor, pristine);
+        if observation == InputObservation::Pending && self.copy_lost_stash_marker(screen) {
+            // The former stash may have promoted text equal to the prompt.
+            // It cannot authorize a withdrawal or another Enter.
+            InputObservation::Other
+        } else {
+            observation
+        }
     }
 
     fn clearing(&self, index: usize) {
@@ -409,6 +428,25 @@ impl SubmissionInspector for PreservingComposer {
         native_stash_present(screen)
     }
 
+    fn mark_occupied_stash_for_copy(&self, screen: &str) -> bool {
+        if self.kind != AgentKind::Claude || !native_stash_present(screen) {
+            return false;
+        }
+        self.native_draft.lock().is_ok_and(|mut draft| {
+            *draft = Some(NativeDraft::OccupiedCopy);
+            true
+        })
+    }
+
+    fn copy_stash_key(&self) -> Option<Bytes> {
+        (self.kind == AgentKind::Claude && self.keys.len() == 3).then(|| self.keys[0].clone())
+    }
+
+    fn copy_stash_payload_is_distinct(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
+        super::observe_with_cursor(self.kind, screen, &self.expected, cursor)
+            == InputObservation::Other
+    }
+
     fn native_draft_restored(&self, screen: &str) -> bool {
         if native_stash_present(screen) {
             return false;
@@ -419,6 +457,10 @@ impl SubmissionInspector for PreservingComposer {
         match saved.as_ref() {
             Some(NativeDraft::Captured(draft)) => input(self.kind, screen).as_ref() == Some(draft),
             Some(NativeDraft::ExistingStash) => input(self.kind, screen).is_some(),
+            Some(NativeDraft::OccupiedCopy) => {
+                self.owned.submitted_prompt_visible(screen)
+                    || self.copy_stash_payload_is_distinct(screen, None)
+            }
             None => false,
         }
     }

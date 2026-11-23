@@ -646,12 +646,19 @@ pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
         "[Pasted text #147 +20 lines]",
     ] {
         let (mut app, method, mut writes) = provider_fixture(kind, bound, draft);
-        if kind == AgentKind::Claude {
+        let repaint_with_stash = |app: &App, body: &str| {
+            let mut frame = screen(kind, body);
+            // Clearing or pasting edits the composer alone. Claude promotes
+            // its occupied stash on Enter, even when the visible draft is opaque.
+            if kind == AgentKind::Claude {
+                frame.push_str("\r\n› stashed");
+            }
             let pane = app.state.workspaces[0].tabs[0].root_pane;
             app.lookup_runtime_sender(0, pane)
                 .unwrap()
-                .test_process_pty_bytes("\r\n› stashed".as_bytes());
-        }
+                .test_process_pty_bytes(frame.as_bytes());
+        };
+        repaint_with_stash(&app, draft);
         let response = start(&mut app, method);
         clock(&app).resume();
         let mut response =
@@ -665,13 +672,13 @@ pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
                 .and_then(|s| s.strip_suffix("\x1b[201~"))
             {
                 current.push_str(pasted);
-                redraw(&app, kind, current);
+                repaint_with_stash(&app, current);
             } else if text == "\r" {
                 submitted.push(std::mem::take(current));
                 redraw(&app, kind, "");
             } else if text == "\x0b" || text == "\x15" {
                 current.clear();
-                redraw(&app, kind, "");
+                repaint_with_stash(&app, "");
             }
         };
         let reply = loop {
