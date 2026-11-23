@@ -292,11 +292,10 @@ impl BusUi {
                 provider,
                 provider_cursor,
                 field,
-                orchestrates,
+                provider_choices: choices,
                 ..
             }) = &mut self.form
             {
-                let choices = forms::provider_choices(orchestrates.is_some());
                 let index = choices
                     .iter()
                     .position(|choice| choice == provider_cursor)

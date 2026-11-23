@@ -26,12 +26,9 @@ pub(super) fn agent_form_gap(main: Rect, form: &Form) -> u16 {
         Form::Agent {
             field: 1,
             orchestrates: None,
+            provider_choices,
             ..
-        } if usize::from(main.height)
-            <= 15 + super::super::forms::provider_choices(false).len() =>
-        {
-            1
-        }
+        } if usize::from(main.height) <= 15 + provider_choices.len() => 1,
         _ => 2,
     }
 }

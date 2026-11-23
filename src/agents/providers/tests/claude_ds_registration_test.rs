@@ -186,3 +186,20 @@ fn claude_argon_registers_a_distinct_claude_wrapper() {
     let plan = catalog::plan("herdr:claude-argon", label, &session).unwrap();
     assert_eq!(plan.argv, argv(&[label, "--resume", "session"]));
 }
+
+#[test]
+fn claude_argon_launch_and_recovery_require_executable_permissions() {
+    let bin = crate::utils::test_temp::unique_temp_path("bus-claude-argon-permissions");
+    std::fs::create_dir(&bin).unwrap();
+    let _path = crate::utils::env::PathOverride::set(&bin);
+    let provider = ProviderKind::ClaudeArgon;
+    let name = provider.executable();
+    let wrapper = bin.join(name);
+    std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+    for (mode, expected) in [(0o644, false), (0o755, true)] {
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(launch::binary_available(provider), expected);
+        assert_eq!(launch::executable_available(name), expected);
+    }
+    std::fs::remove_dir_all(bin).unwrap();
+}

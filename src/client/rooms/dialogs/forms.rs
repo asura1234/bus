@@ -26,6 +26,7 @@ pub(super) enum Form {
         name: Editor,
         provider: Option<Provider>,
         provider_cursor: Provider,
+        provider_choices: Vec<Provider>,
         cwd: Editor,
         args: Box<Editor>,
         field: usize,

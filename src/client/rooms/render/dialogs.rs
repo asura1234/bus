@@ -179,7 +179,7 @@ impl BusUi {
             cwd,
             args,
             field,
-            orchestrates,
+            provider_choices,
             ..
         } = form
         else {
@@ -220,7 +220,7 @@ impl BusUi {
                 );
             }
             if index == 1 && *field == 1 {
-                y += super::super::forms::provider_choices(orchestrates.is_some()).len() as u16;
+                y += provider_choices.len() as u16;
             }
             y += gap;
         }
@@ -297,7 +297,10 @@ impl BusUi {
                 Some(Action::Field(index)),
                 *field == index,
             );
-            y += height + 1;
+            y += height;
+            if y + 1 < main.bottom() {
+                y += 1;
+            }
         }
 
         y
@@ -364,16 +367,13 @@ impl BusUi {
         if let Form::Agent {
             provider_cursor,
             field: 1,
-            orchestrates,
+            provider_choices,
             ..
         } = form
         {
             // Below the Agent field's value row.
             let top = 6 + agent_form_gap(main, form);
-            for (index, kind) in super::super::forms::provider_choices(orchestrates.is_some())
-                .into_iter()
-                .enumerate()
-            {
+            for (index, &kind) in provider_choices.iter().enumerate() {
                 view.overlay_row(
                     Rect::new(x, top + index as u16, width, 1),
                     provider(kind).to_owned(),

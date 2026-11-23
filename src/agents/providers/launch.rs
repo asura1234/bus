@@ -432,13 +432,13 @@ pub(crate) fn binary_available(provider: ProviderKind) -> bool {
     if provider == ProviderKind::Kimi && kimi::launch::source_binary_available() {
         return true;
     }
-    if provider == ProviderKind::ClaudeArgon {
-        return crate::utils::env::resolve_on_path(executable(provider)).is_some();
-    }
     executable_available(executable(provider))
 }
 
 pub(crate) fn executable_available(binary: &str) -> bool {
+    if binary == ProviderKind::ClaudeArgon.executable() {
+        return crate::utils::env::resolve_on_path(binary).is_some();
+    }
     crate::utils::env::path_var()
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(binary).is_file()))
 }

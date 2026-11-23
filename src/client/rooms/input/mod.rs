@@ -9,13 +9,13 @@ pub(super) use composer::{copy_temporary_image, save_pasted_image};
 
 use super::{
     editor::Editor,
-    forms::{Form, Orchestrates, PromptField, RenameTarget, ORCHESTRATES_FIELD},
+    forms::{provider_choices, Form, Orchestrates, PromptField, RenameTarget, ORCHESTRATES_FIELD},
     render::Action,
 };
 use super::{BusUi, Effect};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentId, Provider, RoomId, RoomKind},
+    model::{AgentId, RoomId, RoomKind},
 };
 use crate::{
     client::compositor::ClientShellInput,
@@ -508,14 +508,12 @@ impl BusUi {
     }
     fn open_agent_form(&mut self) {
         let master = self.room.is_some_and(|room| self.is_master_room(room));
+        let provider_choices = provider_choices(master);
         self.open_form(Form::Agent {
             name: Editor::default(),
             provider: None,
-            provider_cursor: if master {
-                Provider::ClaudeCode
-            } else {
-                Provider::Codex
-            },
+            provider_cursor: provider_choices[0],
+            provider_choices,
             cwd: Editor::new("~/".into()),
             args: Box::new(Editor::default()),
             field: 0,

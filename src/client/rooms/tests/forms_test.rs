@@ -793,6 +793,7 @@ fn agent_enter_adds_from_non_model_fields_with_its_own_directory_and_escape_canc
             name: editor::Editor::new("frontend".into()),
             provider: Some(Provider::ClaudeCode),
             provider_cursor: Provider::ClaudeCode,
+            provider_choices: forms::provider_choices(false),
             cwd: editor::Editor::new("/projects/frontend".into()),
             args: Box::new(editor::Editor::new("--model sonnet".into())),
             field,
@@ -1038,6 +1039,7 @@ fn agent_form_with_open_pwd_suggestions(master: bool) -> BusUi {
         name: editor::Editor::new("frontend".into()),
         provider: Some(Provider::ClaudeCode),
         provider_cursor: Provider::ClaudeCode,
+        provider_choices: forms::provider_choices(master),
         cwd: editor::Editor::new("/projects/fr".into()),
         args: Box::new(editor::Editor::new(String::new())),
         field: 2,
@@ -1234,6 +1236,7 @@ fn ctrl_enter_confirms_the_typed_pwd_even_with_directory_suggestions_open() {
             name: editor::Editor::new("frontend".into()),
             provider: Some(Provider::ClaudeCode),
             provider_cursor: Provider::ClaudeCode,
+            provider_choices: forms::provider_choices(false),
             cwd: editor::Editor::new("/projects/".into()),
             args: Box::new(editor::Editor::new(String::new())),
             field: 2,
@@ -1376,6 +1379,12 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
     assert!(forms::provider_choices(true).contains(&Provider::ClaudeArgon));
+    assert!(!form_rows(&mut ui, 100, 30)
+        .iter()
+        .any(|row| row.contains("Claude Argon")));
+    ui.action(render::Action::Cancel);
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Field(1));
     let short = form_rows(&mut ui, 100, 23);
     for label in ["Claude Argon", "Cancel (Esc)", "Add (Enter)"] {
         assert!(short.iter().any(|row| row.contains(label)), "{short:?}");
@@ -1449,6 +1458,16 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         })
     ));
     std::fs::remove_dir_all(bin).unwrap();
+    ui.action(render::Action::Field(1));
+    assert!(form_rows(&mut ui, 100, 30)
+        .iter()
+        .any(|row| row.contains("Claude Argon")));
+    ui.action(render::Action::Cancel);
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Field(1));
+    assert!(!form_rows(&mut ui, 100, 30)
+        .iter()
+        .any(|row| row.contains("Claude Argon")));
 }
 
 #[test]
