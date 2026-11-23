@@ -212,7 +212,11 @@ impl Worker {
                 }
                 (Some(executable), grok_home, kimi_home)
             } else {
-                (None, None, None)
+                let executable = launch::selected_executable(
+                    identity::provider_kind(agent.provider),
+                    &Default::default(),
+                )?;
+                (executable, None, None)
             };
             Ok(binding)
         })();

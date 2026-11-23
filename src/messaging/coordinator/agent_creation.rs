@@ -95,7 +95,12 @@ impl Worker {
             crate::messaging::model::LaunchKind::Create,
         )?;
         state.copy_launch_ledger_from(&self.state);
-        let checked = self.ensure_provider_binary(input.room, input.provider);
+        let checked = self
+            .ensure_provider_binary(input.room, input.provider)
+            .map_err(|_| {
+                let binary = launch::executable(input.provider);
+                format!("Provider executable '{binary}' is missing from PATH. Install it, then retry adding the agent.")
+            });
         self.track_launch_result(attempt, "missing_executable", checked)?;
         let prepared = self.prepare_provider_launch(&input, id);
         let (mut prepared, hooks) =

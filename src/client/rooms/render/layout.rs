@@ -16,14 +16,22 @@ pub(in crate::client) fn layout(
     }
 }
 
-/// Rows from one agent-form field to the next: the MASTER form, which adds a
-/// room and a prompt, drops the blank line in short terminals so its buttons
-/// stay on screen.
+/// Rows from one agent-form field to the next. Drop the blank lines when the
+/// open picker or the MASTER prompt would push the buttons off-screen.
 pub(super) fn agent_form_gap(main: Rect, form: &Form) -> u16 {
     match form {
         Form::Agent {
             prompt: Some(_), ..
         } if main.height < 34 => 1,
+        Form::Agent {
+            field: 1,
+            orchestrates: None,
+            ..
+        } if usize::from(main.height)
+            <= 15 + super::super::forms::provider_choices(false).len() =>
+        {
+            1
+        }
         _ => 2,
     }
 }

@@ -1390,12 +1390,13 @@ fn startup_timeout_identity_survives_restart_before_any_provider_session() {
         sync::Arc,
         time::{Duration, Instant},
     };
-    for kind in [
-        AgentKind::Claude,
-        AgentKind::Codex,
-        AgentKind::Cursor,
-        AgentKind::Grok,
-        AgentKind::Kimi,
+    for (kind, wrapper) in [
+        (AgentKind::Claude, None),
+        (AgentKind::Claude, Some("claude-gpt")),
+        (AgentKind::Codex, None),
+        (AgentKind::Cursor, None),
+        (AgentKind::Grok, None),
+        (AgentKind::Kimi, None),
     ] {
         let mut app = test_app();
         let workspace = crate::server::workspaces::Workspace::test_new("timed-out");
@@ -1404,6 +1405,7 @@ fn startup_timeout_identity_survives_restart_before_any_provider_session() {
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         let terminal = app.state.terminals.get_mut(&id).unwrap();
+        terminal.launch_argv = wrapper.map(|name| vec![name.into()]);
         let now = Instant::now();
         terminal.begin_managed_agent(
             "bus-r1-a2".into(),
@@ -1440,6 +1442,15 @@ fn startup_timeout_identity_survives_restart_before_any_provider_session() {
         let terminal = restored.terminals.values().next().unwrap();
         assert_eq!(terminal.agent_name.as_deref(), Some("bus-r1-a2"));
         assert_eq!(terminal.managed_agent_kind(), Some(kind));
+        if let Some(wrapper) = wrapper {
+            let plan = terminal.pending_agent_resume_plan.as_ref().unwrap();
+            assert_eq!(plan.agent, wrapper);
+            assert_eq!(plan.argv, [wrapper]);
+            assert_eq!(
+                terminal_resume_identity_for_test(terminal).1.as_deref(),
+                Some(wrapper)
+            );
+        }
     }
 }
 

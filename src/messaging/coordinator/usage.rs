@@ -58,6 +58,7 @@ impl CursorUsageSnapshot {
 pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
     pub(crate) claude: Option<UsageSnapshot>,
+    claude_gpt: Option<UsageSnapshot>,
     agy: Option<UsageSnapshot>,
     cursor: Option<CursorUsageSnapshot>,
     cursor_errors: BTreeMap<AgentId, CursorUsageSnapshot>,
@@ -70,6 +71,7 @@ impl Default for Usage {
         Self {
             codex: None,
             claude: None,
+            claude_gpt: None,
             agy: None,
             cursor: None,
             cursor_errors: BTreeMap::new(),
@@ -84,7 +86,8 @@ impl Usage {
     pub(crate) fn retry_reset(&self, agent: &RoomAgent, now_ms: u64) -> Option<u64> {
         let snapshot = match agent.provider {
             Provider::Codex => self.codex.as_ref(),
-            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => self.claude.as_ref(),
+            Provider::ClaudeCode | Provider::ClaudeDs => self.claude.as_ref(),
+            Provider::ClaudeGpt => self.claude_gpt.as_ref(),
             Provider::Agy => self.agy.as_ref(),
             _ => None,
         }?;
@@ -106,6 +109,7 @@ impl Usage {
         for (provider, snapshot) in [
             ("codex", &self.codex),
             ("claude", &self.claude),
+            ("claude-gpt", &self.claude_gpt),
             ("agy", &self.agy),
         ] {
             let Some(snapshot) = snapshot else {
@@ -231,20 +235,20 @@ impl Usage {
 
     /// Advisory only: no State mutation, delivery errors, or event-spool growth.
     pub(crate) fn refresh_claude(&mut self, agent: &RoomAgent, spool: &Path) {
-        if let Some(record) =
-            self.read_verified_statusline(agent, spool, Provider::uses_claude_harness)
-        {
+        if let Some(record) = self.read_verified_statusline(agent, spool, |provider| {
+            provider == agent.provider && provider.uses_claude_harness()
+        }) {
             self.merge_claude(record, agent.id);
         }
     }
 
     fn merge_claude(&mut self, record: Observation, observed_by_agent: AgentId) {
-        merge_snapshot(
-            &mut self.claude,
-            self.started_at_ms,
-            record,
-            observed_by_agent,
-        );
+        let slot = if record.manifest.provider == Provider::ClaudeGpt {
+            &mut self.claude_gpt
+        } else {
+            &mut self.claude
+        };
+        merge_snapshot(slot, self.started_at_ms, record, observed_by_agent);
     }
 
     pub(crate) fn refresh_agy(&mut self, agent: &RoomAgent, spool: &Path) {

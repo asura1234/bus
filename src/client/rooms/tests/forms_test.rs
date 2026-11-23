@@ -1376,6 +1376,13 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
     assert!(forms::provider_choices(true).contains(&Provider::ClaudeGpt));
+    let short = form_rows(&mut ui, 100, 23);
+    for label in ["Claude GPT", "Cancel (Esc)", "Add (Enter)"] {
+        assert!(short.iter().any(|row| row.contains(label)), "{short:?}");
+    }
+    for action in [render::Action::Cancel, render::Action::Add] {
+        assert!(ui.view.hits.iter().any(|hit| hit.action == action));
+    }
     assert!(form_rows(&mut ui, 100, 30)
         .iter()
         .any(|row| row.contains("Claude GPT")));
@@ -1413,6 +1420,34 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         assert!(!model.intersects(rect), "{provider:?} covers Model");
         assert!(!pwd.intersects(rect), "{provider:?} covers PWD");
     }
+    for _ in 0..3 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(matches!(
+        ui.form,
+        Some(forms::Form::Agent {
+            provider: Some(Provider::ClaudeGpt),
+            ..
+        })
+    ));
+    ui.action(render::Action::Field(1));
+    form_rows(&mut ui, 100, 23);
+    let wrapper_hit = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::Provider(Provider::ClaudeGpt))
+        .unwrap();
+    ui.action(wrapper_hit.action.clone());
+    assert!(matches!(
+        ui.form,
+        Some(forms::Form::Agent {
+            provider: Some(Provider::ClaudeGpt),
+            field: 2,
+            ..
+        })
+    ));
     std::fs::remove_dir_all(bin).unwrap();
 }
 

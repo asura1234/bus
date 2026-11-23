@@ -19,10 +19,25 @@ fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeRes
         agent_name: terminal.agent_name.clone(),
         managed_agent: terminal
             .managed_agent_kind()
-            .map(crate::agents::agent_label)
+            .map(|kind| managed_resume_label(kind, terminal.launch_argv.as_deref()))
             .map(str::to_owned),
         session: terminal.persisted_agent_session.clone(),
     }
+}
+
+fn managed_resume_label(kind: crate::agents::AgentKind, argv: Option<&[String]>) -> &'static str {
+    // The Claude process has a shared native kind. The recorded launch argv
+    // distinguishes the wrapper until the room and callback owner are verified.
+    let label = crate::agents::providers::ProviderKind::ClaudeGpt.label();
+    if kind == crate::agents::AgentKind::Claude
+        && argv
+            .and_then(|argv| argv.first())
+            .and_then(|command| std::path::Path::new(command).file_name())
+            .is_some_and(|name| name == label)
+    {
+        return label;
+    }
+    crate::agents::agent_label(kind)
 }
 
 pub(crate) fn unstarted_restore_plan(
@@ -33,7 +48,7 @@ pub(crate) fn unstarted_restore_plan(
     let facts = NativeResumeFacts {
         agent_name: agent_name.map(str::to_owned),
         managed_agent: managed_agent
-            .map(crate::agents::agent_label)
+            .map(|kind| managed_resume_label(kind, argv))
             .map(str::to_owned),
         session: None,
     };
