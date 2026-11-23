@@ -97,7 +97,10 @@ impl Worker {
         state.copy_launch_ledger_from(&self.state);
         let checked = self
             .ensure_provider_binary(input.room, input.provider)
-            .map_err(|_| {
+            .map_err(|error| {
+                if input.provider != Provider::ClaudeGpt {
+                    return error;
+                }
                 let binary = launch::executable(input.provider);
                 format!("Provider executable '{binary}' is missing from PATH. Install it, then retry adding the agent.")
             });
