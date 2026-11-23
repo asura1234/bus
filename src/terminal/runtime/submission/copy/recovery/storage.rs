@@ -24,7 +24,7 @@ fn unique_path(path: &Path, digest: &str) -> PathBuf {
     ))
 }
 
-pub(super) fn save(key: &Key, snapshot: &[u8]) -> io::Result<PathBuf> {
+pub(super) fn save(key: &Key, snapshot: &[u8], sync_reused: bool) -> io::Result<PathBuf> {
     let Key { directory, digest } = key;
     crate::platform::fs::private_dir(directory)?;
     let records = records(directory)?;
@@ -32,6 +32,9 @@ pub(super) fn save(key: &Key, snapshot: &[u8]) -> io::Result<PathBuf> {
         .iter()
         .find(|record| record.digest == *digest && matches_snapshot(&record.path, snapshot))
     {
+        if sync_reused {
+            sync_reused_record(&record.path, directory, snapshot)?;
+        }
         return Ok(record.path.clone());
     }
 
@@ -87,21 +90,57 @@ pub(super) fn verified_records(key: &Key) -> io::Result<Vec<PathBuf>> {
         .collect())
 }
 
-fn read_private(path: &Path) -> Option<Vec<u8>> {
-    fn open(path: &Path) -> io::Result<File> {
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-        }
-        options.open(path)
+fn sync_reused_record(path: &Path, directory: &Path, snapshot: &[u8]) -> io::Result<()> {
+    // The shared Windows helper cannot sync a directory independently.
+    // A reused record there cannot attest publication for this receipt.
+    if cfg!(windows) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Durability of a reused copied draft cannot be verified on this platform",
+        ));
     }
-    let file = fs::symlink_metadata(path)
+    let changed = || io::Error::other("Reused copied draft could not be verified");
+    let file = open_private(path, true).ok_or_else(changed)?;
+    if read_private_file(&file).is_none_or(|bytes| bytes != snapshot) {
+        return Err(changed());
+    }
+    #[cfg(test)]
+    test_hooks::before_reuse_sync(path)?;
+    file.sync_all()?;
+    crate::platform::sync_parent_directory(directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let synced = file.metadata()?;
+        let current = fs::symlink_metadata(path)?;
+        if (synced.dev(), synced.ino()) != (current.dev(), current.ino()) {
+            return Err(changed());
+        }
+    }
+    matches_snapshot(path, snapshot)
+        .then_some(())
+        .ok_or_else(changed)
+}
+
+fn open_private(path: &Path, writable: bool) -> Option<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(writable);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    fs::symlink_metadata(path)
         .ok()
         .filter(private_file)
-        .and_then(|_| open(path).ok())?;
+        .and_then(|_| options.open(path).ok())
+}
+
+fn read_private(path: &Path) -> Option<Vec<u8>> {
+    read_private_file(&open_private(path, false)?)
+}
+
+fn read_private_file(file: &File) -> Option<Vec<u8>> {
     let metadata = file.metadata().ok().filter(private_file)?;
     let size = metadata.len();
     if size > crate::platform::draft_editor::MAX_BYTES {

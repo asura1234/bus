@@ -442,6 +442,25 @@ impl SubmissionInspector for PreservingComposer {
         (self.kind == AgentKind::Claude && self.keys.len() == 3).then(|| self.keys[0].clone())
     }
 
+    fn copy_stash_readback(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+    ) -> Option<(String, bool)> {
+        let parsed = super::input_with_cursor(self.kind, screen, cursor)?;
+        let rendered = rendered_claude_draft(screen);
+        // Rows can soft-wrap, and the shared parser trims indentation. Use
+        // rendered text for recovery but only trust a matching plain line
+        // to authorize moving the native object into the stash.
+        let attested = rendered.as_ref().is_some_and(|body| {
+            !body.is_empty() && !body.contains('\n') && *body == parsed && !opaque(body)
+        });
+        let snapshot = rendered
+            .filter(|body| !parsed.is_empty() || body.chars().all(char::is_whitespace))
+            .unwrap_or(parsed);
+        Some((snapshot, attested))
+    }
+
     fn copy_stash_payload_is_distinct(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
         super::observe_with_cursor(self.kind, screen, &self.expected, cursor)
             == InputObservation::Other
@@ -534,6 +553,23 @@ pub(super) fn native_stash_present(screen: &str) -> bool {
         .into_iter()
         .chain(below)
         .any(|row| row.trim_end().ends_with("› stashed"))
+}
+
+fn rendered_claude_draft(screen: &str) -> Option<String> {
+    let plain = super::super::plain_screen(screen);
+    let rows: Vec<_> = plain.lines().map(str::to_owned).collect();
+    let region = crate::terminal::driver::editable_composer_region(&rows)?;
+    let (prompt, continuation) = rows
+        .get(region.start..region.end.checked_sub(1)?)?
+        .split_first()?;
+    let prompt = prompt.trim_start().strip_prefix('❯')?;
+    let mut body = prompt.strip_prefix(' ').unwrap_or(prompt).to_owned();
+    for row in continuation {
+        body.push('\n');
+        // Only strip the UI's two-column continuation indent.
+        body.push_str(row.strip_prefix("  ").unwrap_or(row));
+    }
+    Some(body)
 }
 
 fn invisible_content(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>) -> bool {

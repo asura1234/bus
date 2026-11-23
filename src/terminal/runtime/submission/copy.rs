@@ -19,24 +19,17 @@ use recovery::Outcome;
 const RESTORE_BUDGET: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy)]
-enum CopyClear {
-    Unprotected,
-    OccupiedStash,
-    PromotedDraft,
-}
-
-#[derive(Clone, Copy)]
 enum Readback {
     Visible,
-    ExactWithStash(bool),
+    ExactWithOccupiedStash,
 }
 
 impl Readback {
     fn matches_stash(self, submission: &ObservedSubmission, screen: &str) -> bool {
         match self {
             Self::Visible => true,
-            Self::ExactWithStash(occupied) => {
-                submission.inspect.native_stash_visible(screen) == occupied
+            Self::ExactWithOccupiedStash => {
+                submission.inspect.native_stash_visible(screen)
                     && !submission.provider_queues_input(screen)
             }
         }
@@ -80,12 +73,7 @@ impl ObservedSubmission {
             .and_then(|directory| recovery::start(directory, &snapshot, diagnostics));
         let clear_deadline = (self.clock.now() + withdrawal_budget(snapshot.as_bytes()))
             .min(self.hard_deadline - self.withdraw_grace);
-        let clear_mode = if occupied_stash {
-            CopyClear::OccupiedStash
-        } else {
-            CopyClear::Unprotected
-        };
-        if let Err(error) = self.clear_for_copy(&snapshot, clear_mode, clear_deadline, lease) {
+        if let Err(error) = self.clear_for_copy(occupied_stash, clear_deadline, lease) {
             if occupied_stash {
                 self.retain_visible_promotion(&error);
             }
@@ -155,8 +143,7 @@ impl ObservedSubmission {
 
     fn clear_for_copy(
         &self,
-        snapshot: &str,
-        mode: CopyClear,
+        occupied_stash: bool,
         deadline: Instant,
         lease: &DraftInputLease,
     ) -> io::Result<()> {
@@ -174,19 +161,8 @@ impl ObservedSubmission {
                 if let Some(screen) = self.terminal.active_ansi_if_complete().filter(|screen| {
                     self.inspect.submission_available(screen) && !self.provider_queues_input(screen)
                 }) {
-                    match mode {
-                        CopyClear::OccupiedStash if !self.inspect.native_stash_visible(&screen) => {
-                            return Err(not_submitted());
-                        }
-                        CopyClear::PromotedDraft
-                            if self.inspect.native_stash_visible(&screen)
-                                || self.copy_readback(&screen).is_none_or(|(body, _)| {
-                                    !body.is_empty() && body != snapshot
-                                }) =>
-                        {
-                            return Err(not_submitted());
-                        }
-                        _ => {}
+                    if occupied_stash && !self.inspect.native_stash_visible(&screen) {
+                        return Err(not_submitted());
                     }
                     if self.observe("copy_clear") == InputObservation::Empty {
                         return lease

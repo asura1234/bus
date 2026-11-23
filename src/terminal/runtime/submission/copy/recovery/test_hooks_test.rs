@@ -82,3 +82,27 @@ pub(super) fn remove_read(directory: &Path) {
         .unwrap()
         .remove(directory);
 }
+
+static REUSE_SYNCS: OnceLock<Mutex<HashMap<PathBuf, Action>>> = OnceLock::new();
+
+#[cfg(feature = "dev-tools")]
+pub(crate) fn install_reuse_sync(
+    path: PathBuf,
+    action: impl FnOnce() -> io::Result<()> + Send + 'static,
+) {
+    let old = REUSE_SYNCS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(path, Box::new(action));
+    assert!(old.is_none());
+}
+
+pub(super) fn before_reuse_sync(path: &Path) -> io::Result<()> {
+    let action = REUSE_SYNCS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .remove(path);
+    action.map_or(Ok(()), |action| action())
+}

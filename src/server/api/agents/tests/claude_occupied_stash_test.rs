@@ -3,7 +3,11 @@ use crate::{
     agents::AgentKind, devtools::tui::FakeClaudeComposer, terminal::runtime::TerminalRuntime,
 };
 use bytes::Bytes;
-use std::{path::PathBuf, sync::mpsc};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    sync::mpsc,
+};
 
 const HIDDEN: &str = "fake:draft-bytes HIDDEN";
 const VISIBLE: &str = "fake:draft-bytes VISIBLE";
@@ -19,6 +23,15 @@ struct Transfer {
 }
 
 async fn transfer(hidden: Option<&str>, visible: &str, promote_on_clear: bool) -> Transfer {
+    transfer_with_setup(hidden, visible, promote_on_clear, |_| {}).await
+}
+
+async fn transfer_with_setup(
+    hidden: Option<&str>,
+    visible: &str,
+    promote_on_clear: bool,
+    setup: impl FnOnce(&Path),
+) -> Transfer {
     let mut fake = FakeClaudeComposer::new();
     if let Some(hidden) = hidden {
         assert!(fake.input(hidden.as_bytes()).is_none());
@@ -29,6 +42,7 @@ async fn transfer(hidden: Option<&str>, visible: &str, promote_on_clear: bool) -
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     paint(&runtime, &fake.shown(), fake.stashed().is_some(), "");
     let directory = crate::utils::test_temp::unique_temp_path("claude-occupied-stash");
+    setup(&directory);
     let (messages, events) = mpsc::channel();
     let dispatch = tracing::Dispatch::new(
         tracing_subscriber::fmt()
@@ -80,7 +94,7 @@ async fn transfer(hidden: Option<&str>, visible: &str, promote_on_clear: bool) -
                     assert!(fake.input(b"\x13").is_none());
                 }
                 let transcript = submitted.last().map_or_else(String::new, |text| format!("❯ {text}"));
-                paint(&runtime, &fake.shown(), fake.stashed().is_some(), &transcript);
+                paint(&runtime, &fake.shown().replace('\n', "\n  "), fake.stashed().is_some(), &transcript);
                 keys.push(bytes);
             }
             result = &mut done => break result.unwrap(),
@@ -96,9 +110,13 @@ async fn transfer(hidden: Option<&str>, visible: &str, promote_on_clear: bool) -
     }
 }
 
-fn backup(transfer: &Transfer, text: &str) {
+fn record_path(directory: &Path, text: &str) -> PathBuf {
     let digest = crate::utils::time::digest(text.as_bytes());
-    let path = transfer.directory.join(format!("copied-{digest}.txt"));
+    directory.join(format!("copied-{digest}.txt"))
+}
+
+fn backup(transfer: &Transfer, text: &str) {
+    let path = record_path(&transfer.directory, text);
     assert_eq!(std::fs::read_to_string(path).unwrap(), text);
 }
 
@@ -170,4 +188,71 @@ async fn claude_occupied_stash_copy_controls_follow_native_behavior() {
     assert_eq!(empty_composer.fake.body(), HIDDEN);
     assert_eq!(empty_composer.fake.stashed(), None);
     remove_directory(empty_composer.directory);
+}
+
+async fn whitespace_promotion_stays_native(hidden: &str) {
+    let transfer = transfer(Some(hidden), VISIBLE, false).await;
+    assert_eq!(transfer.submitted, [MESSAGE]);
+    transfer.result.as_ref().unwrap();
+    assert_eq!(transfer.fake.body(), hidden);
+    assert_eq!(transfer.fake.stashed(), None);
+    assert_eq!(
+        transfer.keys,
+        [
+            Bytes::from_static(b"\x15"),
+            Bytes::from_static(MESSAGE.as_bytes()),
+            Bytes::from_static(b"\r")
+        ],
+        "no native mutation can follow an ambiguous promotion"
+    );
+    copy_event(&transfer.events, "bus.draft.recovery_required");
+    copy_event(&transfer.events, "bus.draft.recovery_required");
+    backup(&transfer, VISIBLE);
+    backup(&transfer, hidden);
+    remove_directory(transfer.directory);
+}
+
+#[tokio::test]
+async fn claude_occupied_stash_copy_refuses_lossy_leading_whitespace() {
+    whitespace_promotion_stays_native("    run()").await;
+}
+
+#[tokio::test]
+async fn claude_occupied_stash_copy_refuses_lossy_continuation_whitespace() {
+    whitespace_promotion_stays_native("inspect():\n    run()").await;
+}
+
+#[tokio::test]
+async fn claude_occupied_stash_copy_reused_record_requires_a_durable_receipt() {
+    let transfer = transfer_with_setup(Some(HIDDEN), VISIBLE, false, |directory| {
+        crate::platform::fs::private_dir(directory).unwrap();
+        let path = record_path(directory, HIDDEN);
+        // This file has the right contents but has never been synced.
+        crate::platform::create_private_state_file(&path)
+            .unwrap()
+            .write_all(HIDDEN.as_bytes())
+            .unwrap();
+        crate::terminal::runtime::copy_recovery_test_hooks::install_reuse_sync(path, || {
+            Err(std::io::Error::other("injected reuse sync failure"))
+        });
+    })
+    .await;
+    transfer.result.as_ref().unwrap();
+    assert_eq!(transfer.submitted, [MESSAGE]);
+    assert_eq!(transfer.fake.body(), HIDDEN);
+    assert_eq!(transfer.fake.stashed(), None);
+    assert_eq!(
+        transfer.keys,
+        [
+            Bytes::from_static(b"\x15"),
+            Bytes::from_static(MESSAGE.as_bytes()),
+            Bytes::from_static(b"\r"),
+        ]
+    );
+    copy_event(&transfer.events, "snapshot_storage_failed");
+    copy_event(&transfer.events, "bus.draft.recovery_required");
+    copy_event(&transfer.events, "bus.draft.recovery_required");
+    backup(&transfer, VISIBLE);
+    backup(&transfer, HIDDEN);
+    remove_directory(transfer.directory);
 }

@@ -1,5 +1,5 @@
 //! Reconstruct a Claude stash promoted when Bus submitted a copied draft.
-use super::{recovery, CopyClear, DraftInputLease, ObservedSubmission, Outcome, Readback};
+use super::{recovery, DraftInputLease, ObservedSubmission, Outcome, Readback};
 use bytes::Bytes;
 use std::{
     io,
@@ -11,7 +11,7 @@ enum StashFrame {
     Occupied,
     Promoted {
         snapshot: String,
-        paste: Option<Bytes>,
+        attested: bool,
         distinct: bool,
     },
 }
@@ -67,7 +67,7 @@ impl ObservedSubmission {
         }
         let Some(StashFrame::Promoted {
             snapshot,
-            paste: promoted_paste,
+            attested,
             distinct,
         }) = frame
         else {
@@ -75,7 +75,7 @@ impl ObservedSubmission {
                 visible,
                 paste,
                 deadline,
-                Readback::ExactWithStash(true),
+                Readback::ExactWithOccupiedStash,
                 lease,
             );
             if let Err(error) = &result {
@@ -95,13 +95,19 @@ impl ObservedSubmission {
                 .inspect
                 .copy_stash_key()
                 .ok_or_else(|| io::Error::other("Native stash key is unavailable"))?;
-            let promoted_paste = promoted_paste.filter(|_| distinct).ok_or_else(|| {
-                io::Error::other(
+            if !distinct {
+                return Err(io::Error::other(
                     "Promoted draft cannot be verified distinct from the incoming prompt",
-                )
-            })?;
-            // A failed write or missed deadline leaves P where it was. Only
-            // clear it after the worker has synced and verified its backup.
+                ));
+            }
+            if !attested {
+                return Err(io::Error::other(
+                    "Promoted draft left native; readback may lose whitespace or native objects",
+                ));
+            }
+            // A missed durability receipt leaves P where it was. With a
+            // verified backup, move the original native object directly:
+            // the terminal's representation can omit trailing spaces.
             verified
                 .recv_timeout(self.clock.remaining(deadline))
                 .map_err(|_| {
@@ -109,20 +115,12 @@ impl ObservedSubmission {
                         "Promoted draft left in composer; recovery copy was not verified",
                     )
                 })?;
-            self.clear_for_copy(&snapshot, CopyClear::PromotedDraft, deadline, lease)?;
-            self.restore_copied_draft(
-                &snapshot,
-                promoted_paste,
-                deadline,
-                Readback::ExactWithStash(false),
-                lease,
-            )?;
             self.stash_verified_promotion(&snapshot, key, deadline, lease)?;
             self.restore_copied_draft(
                 visible,
                 paste,
                 deadline,
-                Readback::ExactWithStash(true),
+                Readback::ExactWithOccupiedStash,
                 lease,
             )
         })();
@@ -147,19 +145,19 @@ impl ObservedSubmission {
     }
 
     fn copy_stash_frame(&self, screen: &str) -> Option<StashFrame> {
-        let (snapshot, paste) = self.copy_readback(screen)?;
+        let cursor = self
+            .terminal
+            .cursor_state()
+            .map(|cursor| (cursor.x, cursor.y));
+        let (snapshot, attested) = self.inspect.copy_stash_readback(screen, cursor)?;
         let occupied = self.inspect.native_stash_visible(screen);
         if occupied && snapshot.is_empty() {
             Some(StashFrame::Occupied)
         } else if !occupied && !snapshot.is_empty() {
-            let cursor = self
-                .terminal
-                .cursor_state()
-                .map(|cursor| (cursor.x, cursor.y));
             let distinct = self.inspect.copy_stash_payload_is_distinct(screen, cursor);
             Some(StashFrame::Promoted {
                 snapshot,
-                paste,
+                attested,
                 distinct,
             })
         } else {
@@ -181,7 +179,7 @@ impl ObservedSubmission {
                 .as_deref()
                 .and_then(|screen| self.copy_stash_frame(screen));
             if self.clock.now() >= deadline
-                || !matches!(promoted, Some(StashFrame::Promoted { snapshot: ref body, paste: Some(_), distinct: true }) if body == snapshot)
+                || !matches!(promoted, Some(StashFrame::Promoted { snapshot: ref body, attested: true, distinct: true }) if body == snapshot)
             {
                 return Err(transfer_changed());
             }

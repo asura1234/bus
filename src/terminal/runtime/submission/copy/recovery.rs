@@ -281,7 +281,7 @@ impl Service {
                 .is_some_and(|state| state.active != 0 || !state.restored)
         };
         if should_save {
-            match save(key, snapshot.as_bytes()) {
+            match save(key, snapshot.as_bytes(), ready.is_some()) {
                 Ok(path) => {
                     if let Some(ready) = ready {
                         let _ = ready.send(());
