@@ -86,26 +86,55 @@ impl BusState {
         }
     }
 
-    pub(super) fn unconfirmed_submission_error(
-        &self,
-        id: RequestId,
-        fallback: String,
-    ) -> Option<String> {
-        let lead = self.request(id)?;
-        if lead.failure_reason.as_deref() != Some(AGENT_DELETED) {
-            return self.request_failure_error(id, fallback);
+    pub(super) fn unconfirmed_submission_error(&self, id: RequestId) -> Option<String> {
+        // Closing the provider turn can release an answered lead or an obsolete
+        // notice. Warn only for a request that actually closed as unconfirmed.
+        let unconfirmed = |request: &&Request| {
+            request.failure_reason.as_deref() == Some("submission_unconfirmed")
+                && request.reply().is_none()
+        };
+        let failed = self.request(id).filter(unconfirmed).or_else(|| {
+            self.group_members(id)
+                .into_iter()
+                .filter_map(|member| self.request(member))
+                .find(unconfirmed)
+        })?;
+        self.request_failure_error(failed.id, failed.submission_notice()?)
+    }
+
+    /// Earlier builds could persist a submission warning after a reply.
+    pub(crate) fn clear_answered_submission_errors(&mut self) {
+        let answered: Vec<_> = self
+            .agents()
+            .filter_map(|agent| {
+                let error = agent.actionable_error.as_deref()?;
+                let owner_replied = agent
+                    .current_request
+                    .and_then(|id| self.request(id))
+                    .is_some_and(|request| {
+                        request.reply().is_some()
+                            && request.submission_error.as_deref() == Some(error)
+                    });
+                let named_reply = error
+                    .strip_prefix("The outcome of message ")
+                    .and_then(|rest| rest.split_once(' '))
+                    .and_then(|(id, _)| id.parse().ok())
+                    .map(super::PromptId)
+                    .is_some_and(|prompt| {
+                        error.lines().next().is_some_and(|line| {
+                            line == Self::unconfirmed_submission_message(prompt)
+                        }) && self.requests_for_message(prompt).any(|request| {
+                            request.agent_id == agent.id && request.reply().is_some()
+                        })
+                    });
+                (owner_replied || named_reply).then_some(agent.id)
+            })
+            .collect();
+        for id in answered {
+            if let Some(agent) = self.agents.get_mut(&id) {
+                agent.actionable_error = None;
+            }
         }
-        // The lead was an obsolete notice. A coalesced message can still need
-        // an unknown-outcome error for the same native write.
-        let member = self
-            .group_members(id)
-            .into_iter()
-            .filter_map(|id| self.request(id))
-            .find(|request| request.failure_reason.as_deref() == Some("submission_unconfirmed"))?;
-        let error = member
-            .submission_notice()
-            .unwrap_or_else(|| Self::unconfirmed_submission_message(member.prompt.id));
-        self.request_failure_error(member.id, error)
     }
 }
 

@@ -113,6 +113,127 @@ fn claude_coalesced_paste_with_adjacent_input_completes_every_joined_message() {
     }
 }
 
+fn claude_steer_batch_with_image() -> (Fixture, RequestId, RequestId, String) {
+    let mut fixture = Fixture::in_room(Provider::ClaudeDs, true);
+    fixture.status(RuntimeStatus::Launching);
+    let mut state = fixture.worker.state.clone();
+    let room = state.create_room("work").unwrap();
+    let sender = state
+        .create_agent(
+            room,
+            "reporter",
+            Provider::ClaudeDs,
+            fixture.dir.clone(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(fixture.agent, room).unwrap();
+    let image = fixture.dir.join("screenshot.png");
+    let first = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "设备前台显示「双击画布 / 开始创作」。".into(),
+                files: vec![image.clone()],
+                recipient_ids: [fixture.agent].into(),
+            },
+            Author::Agent(sender),
+            fixture.now,
+        )
+        .unwrap()[0];
+    state
+        .record_send_mode(&[first], crate::messaging::model::SendMode::Steer)
+        .unwrap();
+    let second = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "The worker has been idle for five minutes.".into(),
+                files: Vec::new(),
+                recipient_ids: [fixture.agent].into(),
+            },
+            Author::Bus,
+            fixture.now,
+        )
+        .unwrap()[0];
+    fixture.worker.save(state).unwrap();
+    fixture.deliver();
+    assert!(fixture.typed().is_empty());
+    fixture.status(RuntimeStatus::Idle);
+    fixture.deliver();
+    let typed = fixture.typed();
+    assert_eq!(typed.len(), 1);
+    assert!(
+        !typed[0].1,
+        "the steer envelope was delivered as a standalone batch"
+    );
+    assert_eq!(fixture.request(second).group, Some(first));
+    assert!(!fixture.request(second).steered);
+    let path_and_separator = format!("\n\"{}\"\n\n", image.display());
+    assert!(typed[0].0.contains(&path_and_separator));
+    assert!(typed[0].0.contains("画布 / 开始"));
+    // Match the recorded hook shape: one leading chip, a complete paste frame,
+    // and a newline in place of the space before the literal slash.
+    let body = typed[0]
+        .0
+        .replace(&path_and_separator, "\n")
+        .replace("画布 / 开始", "画布\n/ 开始");
+    let payload = format!(
+        "[Image #435]\n\n<pasted_content id=\"3c97\">\n{body}\n</pasted_content id=\"3c97\">\n"
+    );
+    (fixture, first, second, payload)
+}
+
+#[test]
+fn claude_steer_batch_with_image_binds_and_settles_both_requests() {
+    let (mut fixture, first, second, payload) = claude_steer_batch_with_image();
+    fixture.started("batch", &payload);
+    fixture.consume();
+    assert!(
+        fixture.request(first).trusted_start_bound,
+        "Started must bind the frozen batch after the image and paste transformations"
+    );
+    fixture.stopped("batch", "Both messages received.");
+    fixture.consume();
+    for request in [first, second] {
+        assert_eq!(fixture.request(request).phase, RequestPhase::Completed);
+        assert_eq!(
+            fixture.reply(request).as_deref(),
+            Some("Both messages received.")
+        );
+        assert_eq!(fixture.request(request).reply_key(), first);
+        assert!(fixture.request(request).failure_reason.is_none());
+    }
+}
+
+#[test]
+fn claude_steer_batch_with_image_rejects_unrelated_turn_and_keeps_warning() {
+    let (mut fixture, first, second, payload) = claude_steer_batch_with_image();
+    let foreign = payload.replace(
+        "The worker has been idle",
+        "A different worker has been idle",
+    );
+    assert_ne!(foreign, payload);
+    fixture.started("foreign", &foreign);
+    fixture.stopped("foreign", "An answer to different input.");
+    fixture.consume();
+    assert!(!fixture.request(first).trusted_start_bound);
+    assert!(fixture.request(first).foreign_turn_settled_at_ms.is_some());
+
+    // A subsequent autonomous turn proves the agent has moved on.
+    fixture.started("next", "A new autonomous turn.");
+    fixture.consume();
+    for request in [first, second] {
+        assert_eq!(fixture.request(request).phase, RequestPhase::Abandoned);
+        assert_eq!(
+            fixture.request(request).failure_reason.as_deref(),
+            Some("submission_unconfirmed")
+        );
+        assert!(fixture.reply(request).is_none());
+    }
+    assert!(fixture.error().is_some());
+}
+
 #[test]
 fn queued_cross_room_messages_keep_distinct_replies_in_their_source_rooms() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);

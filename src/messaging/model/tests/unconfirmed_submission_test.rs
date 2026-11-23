@@ -148,6 +148,134 @@ fn a_failed_unconfirmed_write_leaves_the_agent_an_actionable_error() {
 }
 
 #[test]
+fn submission_agent_notice_names_an_unanswered_member_after_the_lead_replies() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let lead = submit_text(&mut state, room, agent, "first");
+    let member = submit_text(&mut state, room, agent, "second");
+    assert!(state.coalesce_queue(lead).is_some());
+    state.begin_submission(lead, "launch-codex", 5).unwrap();
+    let lead_message = state.request(lead).unwrap().prompt.id;
+    let member_message = state.request(member).unwrap().prompt.id;
+    state
+        .answer_message(lead_message, agent, "first answer".into(), 1001)
+        .unwrap();
+    state.release_unbound_request(agent, 1002).unwrap();
+
+    assert_eq!(
+        state.request(lead).unwrap().reply().unwrap().text,
+        "first answer"
+    );
+    assert_eq!(
+        state.request(member).unwrap().failure_reason.as_deref(),
+        Some("submission_unconfirmed"),
+    );
+    assert_eq!(
+        state.agent(agent).unwrap().actionable_error,
+        Some(BusState::unconfirmed_submission_message(member_message)),
+    );
+}
+
+#[test]
+fn submission_agent_notice_ignores_a_late_uncertain_native_receipt_after_reply() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, agent, "first");
+    state.begin_submission(request, "launch-codex", 5).unwrap();
+    let message = state.request(request).unwrap().prompt.id;
+    state
+        .answer_message(message, agent, "first answer".into(), 1001)
+        .unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Uncertain {
+                message: "late native timeout".into(),
+            },
+        )
+        .unwrap();
+
+    assert!(state.request(request).unwrap().settled());
+    assert!(state
+        .request(request)
+        .unwrap()
+        .submission_notice()
+        .is_none());
+    assert_eq!(state.agent(agent).unwrap().actionable_error, None);
+}
+
+#[test]
+fn submission_agent_notice_removes_a_persisted_warning_only_for_the_answering_recipient() {
+    let (mut state, room, agent, other) = state_with_room_and_agents();
+    let requests = state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "question".into(),
+                recipient_ids: [agent, other].into(),
+                files: Vec::new(),
+            },
+            Author::Developer,
+            1,
+        )
+        .unwrap();
+    let request = requests
+        .into_iter()
+        .find(|id| state.request(*id).unwrap().agent_id == agent)
+        .unwrap();
+    state.begin_submission(request, "launch-codex", 5).unwrap();
+    let message = state.request(request).unwrap().prompt.id;
+    state
+        .answer_message(message, agent, "stored answer".into(), 1001)
+        .unwrap();
+    state.release_unbound_request(agent, 1002).unwrap();
+    let error = BusState::unconfirmed_submission_message(message);
+    state.set_agent_error(agent, Some(error.clone())).unwrap();
+    state.set_agent_error(other, Some(error.clone())).unwrap();
+
+    let mut restored: BusState =
+        serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    restored.clear_answered_submission_errors();
+    assert_eq!(restored.agent(agent).unwrap().actionable_error, None);
+    assert_eq!(restored.agent(other).unwrap().actionable_error, Some(error));
+}
+
+#[test]
+fn submission_agent_notice_keeps_a_native_confirmed_batch_uncertain_without_replies() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let lead = submit_text(&mut state, room, agent, "message with an attachment");
+    let member = submit_text(&mut state, room, agent, "coalesced notice");
+    state.record_send_mode(&[lead], SendMode::Steer).unwrap();
+    assert!(state.coalesce_queue(lead).is_some());
+    state.begin_submission(lead, "launch-codex", 5).unwrap();
+    state
+        .record_submission(
+            lead,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+    let next = submit_text(&mut state, room, agent, "independent delivery");
+    assert_eq!(state.release_unbound_request(agent, 1002), Some(lead));
+    for id in [lead, member] {
+        let request = state.request(id).unwrap();
+        assert_eq!(request.phase, RequestPhase::Abandoned);
+        assert_eq!(request.completed_at_ms, Some(1002));
+        assert!(request.reply().is_none());
+        assert_eq!(
+            request.failure_reason.as_deref(),
+            Some("submission_unconfirmed")
+        );
+    }
+    let message = state.request(lead).unwrap().prompt.id;
+    assert_eq!(
+        state.agent(agent).unwrap().actionable_error,
+        Some(BusState::unconfirmed_submission_message(message)),
+    );
+    assert_eq!(state.next_queued_request(agent), Some(next));
+}
+
+#[test]
 fn coalesced_messages_failed_with_their_unconfirmed_lead_carry_its_reason() {
     let (mut state, room, agent, _) = state_with_room_and_agents();
     state

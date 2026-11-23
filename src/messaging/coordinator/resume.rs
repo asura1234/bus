@@ -3,10 +3,14 @@ use super::{schema, BusState, RoomAgent};
 use crate::messaging::identity;
 
 mod capture;
+#[cfg(all(test, unix))]
+#[path = "resume/tests/kept_owner_fixture_test.rs"]
+pub(crate) mod kept_owner_fixture;
 #[cfg(test)]
 pub(crate) use capture::load;
 pub(crate) use capture::{
     for_native_resume, revalidate, LaunchExtras, NativeResumeContext, NativeResumeFacts,
+    RETIRED_OWNER,
 };
 
 /// Sessionless managed providers keep their empty launch across restore.
