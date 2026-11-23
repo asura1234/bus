@@ -58,6 +58,15 @@ impl BusState {
         });
         request.completed_at_ms = Some(now_ms);
         request.latency.reply_captured_at_ms.get_or_insert(now_ms);
+        // A recipient answer disproves this submission error while the provider
+        // turn can still own the queue. Preserve independent agent errors.
+        if let Some(agent) = self.agents.get_mut(&recipient).filter(|agent| {
+            agent.current_request == Some(id)
+                && request.submission_error.is_some()
+                && agent.actionable_error == request.submission_error
+        }) {
+            agent.actionable_error = None;
+        }
         let room = self
             .rooms
             .get_mut(&room)

@@ -9,6 +9,7 @@ use crate::agents::{
 use crate::messaging::{identity, storage::state_store::JsonStore};
 
 mod ownership;
+pub(crate) use ownership::RETIRED_OWNER;
 
 /// An immutable snapshot extracted by the server. No PTY/state handle crosses
 /// this boundary, and the snapshot alone does not attest ownership.

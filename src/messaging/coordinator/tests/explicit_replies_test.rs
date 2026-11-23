@@ -150,6 +150,62 @@ fn explicit_work_room_reply_is_visible_before_the_turn_ends() {
     assert_eq!(projected.to_string().matches("explicit answer").count(), 1);
 }
 
+#[test]
+fn answered_codex_steer_releases_the_queue_after_a_proven_idle_edge() {
+    use crate::messaging::model::{SendMode, TURN_SETTLE_MS};
+
+    let mut fixture = Fixture::new(Provider::Codex);
+    let lead = running(&mut fixture, "steer sent as a new turn", "turn-1");
+    let mut state = fixture.worker.state.clone();
+    state.record_send_mode(&[lead], SendMode::Steer).unwrap();
+    assert!(!state.request(lead).unwrap().steered);
+    let message = state.request(lead).unwrap().prompt.id;
+    state
+        .answer_message(
+            message,
+            fixture.agent,
+            "explicit answer".into(),
+            fixture.now,
+        )
+        .unwrap();
+    let completed_at = state.request(lead).unwrap().completed_at_ms;
+    fixture.worker.save(state).unwrap();
+
+    let queued = fixture.send("next task", true);
+    fixture.deliver();
+    assert_eq!(fixture.request(queued).phase, RequestPhase::Queued);
+    fixture.status(RuntimeStatus::Idle);
+    assert!(fixture.request(lead).turn_ended_at_ms.is_some());
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+
+    // No Stop hook or readable Codex final arrives. The verified idle edge
+    // still ends this answered turn after the ordinary callback grace.
+    fixture.now += TURN_SETTLE_MS;
+    fixture.status(RuntimeStatus::Idle);
+    fixture.worker.settle_requests().unwrap();
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Completed);
+    assert_eq!(fixture.request(lead).completed_at_ms, completed_at);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("explicit answer"));
+    assert!(fixture
+        .worker
+        .state
+        .agent(fixture.agent)
+        .unwrap()
+        .actionable_error
+        .is_none());
+
+    fixture.deliver();
+    assert_eq!(
+        fixture.typed_content(),
+        [
+            ("steer sent as a new turn".to_owned(), false),
+            ("next task".to_owned(), false),
+        ]
+    );
+    assert_ne!(fixture.request(queued).phase, RequestPhase::Queued);
+}
+
 /// The correlated answer is visible once, even when a final follows.
 #[test]
 fn explicit_developer_reply_and_final_appear_as_one_answer() {

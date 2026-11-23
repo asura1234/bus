@@ -979,6 +979,70 @@ async fn suspended_restored_resume_is_not_reported_interactive() {
 }
 
 #[cfg(unix)]
+#[tokio::test]
+async fn kept_resume_pane_for_deleted_agent_does_not_report_warning() {
+    assert_kept_resume_pane_warning(true, &[]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn kept_resume_pane_for_live_mismatched_agent_still_reports_warning() {
+    assert_kept_resume_pane_warning(false, &["bus.resume.suspended"]);
+}
+
+#[cfg(unix)]
+fn assert_kept_resume_pane_warning(deleted: bool, expected_events: &[&str]) {
+    use crate::agents::AgentKind;
+    use crate::utils::error_pipe;
+    use tracing_subscriber::prelude::*;
+
+    let scratch = crate::utils::test_temp::unique_temp_path("bus-kept-resume-pane");
+    let root = scratch.as_path();
+    let (agent_name, context) = super::kept_resume_fixture_for_test(root, deleted);
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("kept-resume-pane");
+    let pane = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane).unwrap().clone();
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent(agent_name.clone(), AgentKind::Claude);
+    let facts = super::terminal_resume_facts(terminal);
+    let plan =
+        super::unstarted_restore_plan(Some(&agent_name), Some(AgentKind::Claude), None).unwrap();
+    terminal.pending_agent_resume_plan = Some(plan.clone());
+
+    let mut reporter = error_pipe::Runtime::default();
+    reporter.configure(root, Some("reporter"));
+    let subscriber =
+        tracing_subscriber::registry().with(error_pipe::CaptureLayer::new(root.join("server.log")));
+    tracing::subscriber::with_default(subscriber, || {
+        let prepared = super::prepare_native_resume(context, &facts, &plan);
+        assert!(app.start_prepared_agent_resume(
+            super::PendingAgentResumeCandidate {
+                pane_id: pane,
+                terminal_id: terminal_id.clone(),
+                cwd: root.into(),
+                plan,
+                rows: 30,
+                cols: 100,
+            },
+            prepared,
+        ));
+    });
+
+    let terminal = &app.state.terminals[&terminal_id];
+    assert_eq!(terminal.agent_name.as_deref(), Some(agent_name.as_str()));
+    assert!(terminal.pending_agent_resume_plan.is_none());
+    assert!(app.terminal_runtimes.get(&terminal_id).is_none());
+    let records = error_pipe::drain(root).unwrap();
+    let events: Vec<_> = records.iter().map(|record| record.event.as_str()).collect();
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(events, expected_events);
+}
+
+#[cfg(unix)]
 fn native_attempt_app(
     kind: crate::agents::AgentKind,
     label: &str,

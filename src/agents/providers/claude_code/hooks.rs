@@ -300,13 +300,16 @@ fn backslash_escapes_only_spaces(line: &str) -> bool {
     true
 }
 
-/// Claude 2.1.310 can move an inline escaped PNG token onto a new line even
-/// when its read fails. Only that preceding space may change; the path and
-/// all surrounding text must remain exact, including any Unicode whitespace.
+/// When lifting images, Claude can move an inline escaped PNG token or a
+/// standalone slash onto a new line. Match that one separator change while
+/// requiring the token and surrounding text to stay exact.
 pub(crate) fn claude_text_matches(mut actual: &str, expected: &str) -> bool {
     let mut copied = 0;
     for (index, _) in expected.match_indices(" /") {
-        if expected[..index].ends_with('\\') || !escaped_png_token(&expected[index + 1..]) {
+        let token = &expected[index + 1..];
+        if expected[..index].ends_with('\\')
+            || !(token.starts_with("/ ") || escaped_png_token(token))
+        {
             continue;
         }
         let Some(tail) = actual.strip_prefix(&expected[copied..index]) else {

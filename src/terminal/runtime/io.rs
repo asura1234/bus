@@ -236,7 +236,7 @@ impl TerminalRuntime {
         self.invalidate_shell_prompt();
         // DraftInput closes the launch window when these bytes are queued,
         // including a restored lease replay. A buffer-only Ok leaves it open.
-        super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes)
+        super::draft_input::DraftInput::send(&self.draft_input, &self.io, bytes, false)
     }
     pub(crate) fn try_send_developer_paste(
         &self,
