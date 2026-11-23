@@ -6,6 +6,8 @@ use bytes::Bytes;
 use std::{io, sync::atomic::Ordering, time::Duration};
 
 mod recovery;
+#[cfg(test)]
+pub(crate) use recovery::test_hooks;
 use recovery::Outcome;
 
 const RESTORE_BUDGET: Duration = Duration::from_secs(1);
@@ -44,7 +46,7 @@ impl ObservedSubmission {
             .and_then(|directory| recovery::start(directory, &snapshot));
         if let Err(error) = self.clear_for_copy(&snapshot, lease) {
             if let Some(backup) = backup {
-                let _ = backup.send(Outcome::Retain {
+                backup.send(Outcome::Retain {
                     reason: "clear_incomplete",
                     error: error.to_string(),
                 });
@@ -69,13 +71,13 @@ impl ObservedSubmission {
             Ok(()) => {
                 lease.restored();
                 if let Some(backup) = backup {
-                    let _ = backup.send(Outcome::Restored);
+                    backup.send(Outcome::Restored);
                 }
             }
             Err(error) => {
                 lease.restoration_unproven();
                 if let Some(backup) = backup {
-                    let _ = backup.send(Outcome::Retain {
+                    backup.send(Outcome::Retain {
                         reason: "copy_restore_failed",
                         error: error.to_string(),
                     });

@@ -1,6 +1,8 @@
 //! Save the native draft, submit guarded owned input, then restore it.
 mod consumption;
 mod copy;
+#[cfg(test)]
+pub(crate) use copy::test_hooks as copy_recovery_test_hooks;
 mod diagnostics;
 mod plain;
 mod preservation;
