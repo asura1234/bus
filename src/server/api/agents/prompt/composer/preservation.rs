@@ -265,6 +265,9 @@ impl SubmissionInspector for PreservingComposer {
         });
         Some((body, restore))
     }
+    fn copy_recovery_directory(&self) -> Option<&std::path::Path> {
+        Some(&self.directory)
+    }
     fn confirm_consumption(&self) -> bool {
         self.owned.confirm_consumption()
     }

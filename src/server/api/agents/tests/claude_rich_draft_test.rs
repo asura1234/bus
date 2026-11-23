@@ -409,3 +409,172 @@ async fn claude_existing_stash_waits_for_rich_paste_materialization() {
         "retained-stash recovery bypassed rich-paste readiness and Enter reached the empty frame"
     );
 }
+
+const COPIED_DRAFT: &str = "developer draft";
+const INCOMING: &str = "from bus";
+
+fn queue_claude_copy(
+    runtime: &TerminalRuntime,
+    directory: std::path::PathBuf,
+) -> crate::terminal::pty::actor::InputCompletion {
+    paint(runtime, COPIED_DRAFT, false, "");
+    runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(INCOMING.as_bytes()),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x15")],
+            Duration::ZERO,
+            None,
+            Box::new(PreservingComposer::new(
+                AgentKind::Claude,
+                INCOMING.into(),
+                directory,
+                Vec::new(),
+            )),
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_retries_delayed_clear_before_submitting_and_restores() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-clear-retry");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let completion = queue_claude_copy(&runtime, directory.clone());
+
+    // Ignore the first two clears. A paste here would append to the draft.
+    for _ in 0..2 {
+        assert_eq!(key(&mut writes).await.as_ref(), b"\x15");
+        clock.advance(Duration::from_millis(25));
+    }
+    let third = key(&mut writes).await;
+    if third.as_ref() != b"\x15" {
+        clock.resume();
+    }
+    assert_eq!(
+        third.as_ref(),
+        b"\x15",
+        "paste overtook the confirmed clear"
+    );
+
+    let mut composer = String::new();
+    paint(&runtime, &composer, false, "");
+    let pasted = key(&mut writes).await;
+    composer.push_str(std::str::from_utf8(&pasted).unwrap());
+    paint(&runtime, &composer, false, "");
+    assert_eq!(key(&mut writes).await.as_ref(), b"\r");
+    let submitted = std::mem::take(&mut composer);
+    assert_eq!(submitted, INCOMING);
+    clock.wait_for_enters(1);
+
+    runtime.test_process_pty_bytes(
+        "\x1b[2J\x1b[H> from bus\r\n✻ Working… (0s · esc to interrupt)\r\n".as_bytes(),
+    );
+    let generation = clock.advance(Duration::from_millis(100));
+    clock.wait_for_submission_check(generation);
+    assert!(
+        writes.try_recv().is_err(),
+        "restore must wait for an editable composer"
+    );
+    paint(&runtime, &composer, false, "");
+    assert_eq!(
+        key(&mut writes).await.as_ref(),
+        b"\x1b[200~developer draft\x1b[201~"
+    );
+    paint(&runtime, COPIED_DRAFT, false, "");
+    completion
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(writes.try_recv().is_err());
+    assert!(std::fs::read_dir(&directory).unwrap().next().is_none());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_retains_draft_when_restore_lease_is_invalidated() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-restore-revoked");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let completion = queue_claude_copy(&runtime, directory.clone());
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x15");
+    paint(&runtime, "", false, "");
+    assert_eq!(key(&mut writes).await.as_ref(), INCOMING.as_bytes());
+    paint(&runtime, INCOMING, false, "");
+    assert_eq!(key(&mut writes).await.as_ref(), b"\r");
+    clock.wait_for_enters(1);
+    runtime.invalidate_submission_ownership();
+    paint(&runtime, "", false, "");
+    completion
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "revoked restore must never write"
+    );
+    let files: Vec<_> = std::fs::read_dir(&directory)
+        .expect("keep the copied draft recoverable")
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "keep exactly one recovery record");
+    assert_eq!(std::fs::read_to_string(&files[0]).unwrap(), COPIED_DRAFT);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_expires_without_paste_when_clear_never_confirms() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-clear-expired");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let receipt = clock.hold_next_write_completion();
+    let completion = queue_claude_copy(&runtime, directory.clone());
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x15");
+    clock.advance(Duration::from_secs(2));
+    receipt.send(()).unwrap();
+    let mut result = tokio::task::spawn_blocking(move || {
+        completion.recv_timeout(Duration::from_secs(5)).unwrap()
+    });
+    let error = tokio::select! {
+        result = &mut result => result.unwrap().unwrap_err(),
+        bytes = key(&mut writes) => {
+            clock.resume();
+            panic!("clear expiry wrote unexpected input: {bytes:?}");
+        }
+    };
+    assert!(matches!(
+        crate::terminal::runtime::PromptNotShown::classified(&error),
+        Some(crate::terminal::runtime::PromptNotShown::NotSubmitted)
+    ));
+    assert!(writes.try_recv().is_err());
+    assert!(runtime.visible_ansi().contains(COPIED_DRAFT));
+
+    // A later retry is a fresh attempt, with no pending paste or recovery
+    // exchange that could prevent the queued request from delivering.
+    paint(&runtime, "", false, "");
+    let retry = runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(INCOMING.as_bytes()),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x15")],
+            Duration::ZERO,
+            None,
+            Box::new(PreservingComposer::new(
+                AgentKind::Claude,
+                INCOMING.into(),
+                directory.clone(),
+                Vec::new(),
+            )),
+        )
+        .unwrap();
+    assert_eq!(key(&mut writes).await.as_ref(), INCOMING.as_bytes());
+    paint(&runtime, INCOMING, false, "");
+    assert_eq!(key(&mut writes).await.as_ref(), b"\r");
+    paint(&runtime, "", false, "");
+    retry.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert!(writes.try_recv().is_err());
+    std::fs::remove_dir_all(directory).unwrap();
+}

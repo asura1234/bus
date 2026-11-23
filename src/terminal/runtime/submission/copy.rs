@@ -1,28 +1,25 @@
-//! Shared composer snapshot -> send -> restore delivery path.
-//!
-//! Used whenever composer content is present and native stash / external editor
-//! handoff is unavailable or does not respond within its bounded fallback window.
-//! Never holds the queue or blocks on proof; logs any loss and delivers anyway.
-use super::{InputObservation, ObservedSubmission};
-use crate::protocol::api::submission::{withdrawal_budget, CLEAR_KEY_DELAY, WITHDRAW_GRACE};
+//! Snapshot, clear, deliver and restore when the provider handoff is unavailable.
+use super::{InputObservation, ObservedSubmission, PromptNotShown};
+use crate::protocol::api::submission::{withdrawal_budget, CLEAR_KEY_DELAY};
+use crate::terminal::runtime::draft_input::DraftInputLease;
 use bytes::Bytes;
-use std::{io, time::Duration};
+use std::{io, path::PathBuf, sync::atomic::Ordering, time::Duration};
+
+const RESTORE_BUDGET: Duration = Duration::from_secs(1);
 
 impl ObservedSubmission {
     pub(super) fn fallback_copy_after_handoff_failure(
         &self,
         text: Bytes,
         delay: Duration,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+        lease: &DraftInputLease,
     ) -> Option<io::Result<()>> {
-        let screen = self.terminal.active_ansi();
+        let screen = self.terminal.active_ansi_if_complete()?;
         let cursor = self
             .terminal
             .cursor_state()
             .map(|cursor| (cursor.x, cursor.y));
-        let pristine = self
-            .startup_suggestion_open
-            .load(std::sync::atomic::Ordering::Acquire);
+        let pristine = self.startup_suggestion_open.load(Ordering::Acquire);
         let (snapshot, restore_bytes) = self
             .inspect
             .composer_copy_fallback(&screen, cursor, pristine)?;
@@ -30,172 +27,193 @@ impl ObservedSubmission {
         Some(self.preserve_copy(snapshot, restore_bytes, text, delay, lease))
     }
 
-    /// Unified shared delivery path when composer content is present:
-    /// snapshot (already captured) -> clear -> send new message -> restore copy -> drop copy.
-    /// Never holds the queue or blocks on proof; logs any loss and delivers anyway.
     pub(super) fn preserve_copy(
         &self,
         snapshot: String,
         restore_bytes: Option<Bytes>,
         text: Bytes,
         delay: Duration,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+        lease: &DraftInputLease,
     ) -> io::Result<()> {
-        if !snapshot.is_empty() && restore_bytes.is_none() {
-            tracing::warn!(
-                event = "bus.draft.copy_loss",
-                reason = "unrestorable_composer_content",
-                "Composer content cannot be restored reliably; delivering anyway"
-            );
+        let backup = match self.save_copy_snapshot(&snapshot) {
+            Ok(backup) => backup,
+            Err(error) => {
+                tracing::error!(event = "bus.draft.copy_recovery_failed", %error, "Cannot back up the composer; its contents were left intact");
+                lease.restored();
+                return Err(io::Error::other(PromptNotShown::NotSubmitted));
+            }
+        };
+        if let Err(error) = self.clear_for_copy(&snapshot, lease) {
+            if let Some((path, _)) = backup {
+                tracing::warn!(event = "bus.draft.recovery_required", reason = "clear_incomplete", recovery = %path.display(), %error, "Composer clear could not be confirmed; delivery remains queued and the snapshot is recoverable");
+            }
+            return Err(error);
         }
-        let cleared = self.best_effort_clear_composer(&snapshot, lease);
-        if !cleared {
-            tracing::warn!(
-                event = "bus.draft.copy_loss",
-                reason = "clear_incomplete",
-                "Composer did not confirm empty after clear; delivering anyway"
-            );
-        }
+
         self.reset_confirmation(delay);
-        let result = self.run_for_copy_delivery(text, delay, lease, cleared);
-        if result.is_ok() && !self.inspect.waits_for_idle() {
-            let saved_deadline = self.deadline.get();
-            self.deadline
-                .set((self.clock.now() + Duration::from_secs(2)).min(self.hard_deadline));
-            let _ = self.wait_for_consumption();
-            self.deadline.set(saved_deadline);
-        }
-        if let Some(restore) = restore_bytes {
-            if let Err(error) = self.restore_copied_draft(restore, lease) {
-                tracing::warn!(
-                    event = "bus.draft.copy_loss",
-                    reason = "restore_failed",
-                    %error,
-                    "Could not restore copied composer content after delivery"
-                );
+        let withdrawal_lease =
+            (self.inspect.confirm_consumption() || self.inspect.waits_for_idle()).then_some(lease);
+        let result = self.confirm_legacy_submission(self.run(text, delay, withdrawal_lease), lease);
+        let restored = match (&result, restore_bytes) {
+            (Ok(()), Some(restore)) => self.restore_copied_draft(&snapshot, restore, lease),
+            (Err(error), _) => Err(io::Error::other(format!(
+                "Delivery did not settle: {error}"
+            ))),
+            (_, None) => Err(io::Error::other(
+                "Native draft cannot be reconstructed from its visible snapshot",
+            )),
+        };
+        match (restored, backup) {
+            (Ok(()), Some((path, true))) => {
+                if let Err(error) = std::fs::remove_file(&path) {
+                    tracing::warn!(event = "bus.draft.recovery_required", recovery = %path.display(), %error, "Restored draft backup could not be retired");
+                }
+                lease.restored();
+            }
+            (Ok(()), _) => lease.restored(),
+            (Err(error), Some((path, _))) => {
+                lease.restoration_unproven();
+                tracing::warn!(event = "bus.draft.recovery_required", reason = "copy_restore_failed", recovery = %path.display(), %error, "Copied composer snapshot retained for manual recovery");
+            }
+            (Err(error), None) => {
+                tracing::warn!(event = "bus.draft.copy_loss", reason = "unreadable_composer_content", %error, "No visible composer text was available to save");
             }
         }
-        lease.restored();
         result
     }
 
-    fn best_effort_clear_composer(
-        &self,
-        snapshot: &str,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
-    ) -> bool {
-        if self.observe("copy_clear") == InputObservation::Empty {
-            return true;
+    /// Keep a private copy outside the native editor exchange. The same
+    /// snapshot can be encountered again on a queued clear retry.
+    fn save_copy_snapshot(&self, snapshot: &str) -> io::Result<Option<(PathBuf, bool)>> {
+        if snapshot.is_empty() {
+            return Ok(None);
         }
-        let clear_deadline = (self.clock.now()
-            + WITHDRAW_GRACE.max(withdrawal_budget(snapshot.as_bytes())))
-        .min(self.hard_deadline);
-        let max_passes = snapshot.lines().count().max(1).saturating_mul(2).min(32);
-        for _ in 0..max_passes {
-            for key in &self.clear {
-                if self.observe("copy_clear") == InputObservation::Empty {
-                    return true;
-                }
-                if self.clock.now() >= clear_deadline {
-                    return false;
-                }
-                let generation = self.clock.generation();
-                let sent = lease.with_uninvalidated(|| {
-                    self.io.queue_input_write_scoped(
-                        key.clone(),
-                        Bytes::new(),
-                        Duration::ZERO,
-                        Some(clear_deadline),
-                        &self.scope,
-                    )
-                });
-                let Ok(completion) = sent else {
-                    return false;
-                };
-                if completion
-                    .recv_timeout(self.clock.remaining(clear_deadline))
-                    .ok()
-                    .and_then(Result::ok)
-                    .is_none()
-                {
-                    return false;
-                }
-                self.clock.sleep(CLEAR_KEY_DELAY, generation);
-                if self.observe("copy_clear") == InputObservation::Empty {
-                    return true;
-                }
-            }
+        let directory = self
+            .inspect
+            .copy_recovery_directory()
+            .ok_or_else(|| io::Error::other("Draft recovery directory is unavailable"))?;
+        crate::platform::fs::private_dir(directory)?;
+        let digest = crate::utils::time::digest(snapshot.as_bytes());
+        let path = directory.join(format!("copied-{digest}.txt"));
+        let created = !path.try_exists()?;
+        if created {
+            crate::platform::atomic_write(&path, snapshot.as_bytes())?;
         }
-        self.observe("copy_clear") == InputObservation::Empty
+        Ok(Some((path, created)))
     }
 
-    fn run_for_copy_delivery(
-        &self,
-        text: Bytes,
-        delay: Duration,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
-        cleared: bool,
-    ) -> io::Result<()> {
-        let withdrawal_lease =
-            (self.inspect.confirm_consumption() || self.inspect.waits_for_idle()).then_some(lease);
-        if cleared {
-            return self.confirm_legacy_submission(self.run(text, delay, withdrawal_lease), lease);
+    fn clear_for_copy(&self, snapshot: &str, lease: &DraftInputLease) -> io::Result<()> {
+        let deadline = (self.clock.now() + withdrawal_budget(snapshot.as_bytes()))
+            .min(self.hard_deadline - self.withdraw_grace);
+        // A definite pre-paste refusal lets the queue retry under its
+        // existing stall bound if the same pane never accepts clear.
+        let not_submitted = || io::Error::other(PromptNotShown::NotSubmitted);
+        let mut keys = self.clear.iter().cycle();
+        loop {
+            if self.clock.now() >= deadline {
+                return Err(not_submitted());
+            }
+            let generation = self.clock.generation();
+            let completion = {
+                let _guard = self.content_lock.lock().map_err(|_| not_submitted())?;
+                let screen = self.terminal.active_ansi_if_complete();
+                if screen.as_ref().is_some_and(|screen| {
+                    self.inspect.submission_available(screen) && !self.provider_queues_input(screen)
+                }) {
+                    if self.observe("copy_clear") == InputObservation::Empty {
+                        return lease
+                            .with_uninvalidated(|| Ok(()))
+                            .map_err(|_| not_submitted());
+                    }
+                    let key = keys.next().ok_or_else(not_submitted)?;
+                    Some(
+                        lease
+                            .with_uninvalidated(|| {
+                                self.io.queue_input_write_scoped(
+                                    key.clone(),
+                                    Bytes::new(),
+                                    Duration::ZERO,
+                                    Some(deadline),
+                                    &self.scope,
+                                )
+                            })
+                            .map_err(|_| not_submitted())?,
+                    )
+                } else {
+                    None
+                }
+            };
+            if let Some(completion) = completion {
+                completion
+                    .recv_timeout(self.clock.remaining(deadline))
+                    .map_err(|_| not_submitted())?
+                    .map_err(|_| not_submitted())?;
+            }
+            self.clock.sleep(CLEAR_KEY_DELAY, generation);
         }
-        // Clear did not confirm empty; still paste and submit without blocking on proof.
-        if self.inspect.retry_owned_enter() {
-            self.deadline.set(self.hard_deadline - self.withdraw_grace);
-        }
-        self.diagnostics
-            .paste(text.len(), delay.as_millis() as u64, self.clock.now());
-        let completion = self.io.queue_payload_input_write_scoped(
-            text,
-            Bytes::new(),
-            delay,
-            Some(self.deadline.get()),
-            &self.scope,
-        )?;
-        let write_result = completion
-            .recv_timeout(self.clock.remaining(self.deadline.get()))
-            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))
-            .and_then(|result| result);
-        if write_result.is_ok() {
-            self.startup_suggestion_open
-                .store(false, std::sync::atomic::Ordering::Release);
-        }
-        self.diagnostics.pasted(&write_result, self.clock.now());
-        write_result?;
-        self.await_submit_key_or_withdraw(withdrawal_lease)?;
-        let entered_at = self.clock.now();
-        #[cfg(test)]
-        self.clock.entered();
-        if self.inspect.waits_for_idle() {
-            return self.confirm_claude_submission(withdrawal_lease, entered_at);
-        }
-        self.confirm_legacy_submission(Ok(()), lease)
     }
 
     fn restore_copied_draft(
         &self,
+        snapshot: &str,
         restore: Bytes,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+        lease: &DraftInputLease,
     ) -> io::Result<()> {
-        let deadline = self
-            .clock
-            .now()
-            .checked_add(Duration::from_secs(1))
-            .unwrap_or(self.hard_deadline)
-            .min(self.hard_deadline);
-        let completion = lease.with_uninvalidated(|| {
-            self.io.queue_input_write_scoped(
-                restore,
-                Bytes::new(),
-                Duration::ZERO,
-                Some(deadline),
-                &self.scope,
-            )
-        })?;
+        let deadline = (self.clock.now() + RESTORE_BUDGET).min(self.hard_deadline);
+        let busy = || io::Error::other(PromptNotShown::ComposerBusy);
+        let (completion, before_paste) = loop {
+            if self.clock.now() >= deadline {
+                return Err(busy());
+            }
+            let generation = self.clock.generation();
+            {
+                let _guard = self.content_lock.lock().map_err(|_| busy())?;
+                let screen = self.terminal.active_ansi_if_complete();
+                if screen
+                    .as_ref()
+                    .is_some_and(|screen| self.inspect.submission_available(screen))
+                    && self.observe("copy_restore_ready") == InputObservation::Empty
+                {
+                    let seq = self.content_seq.load(Ordering::Acquire);
+                    let completion = lease.with_uninvalidated(|| {
+                        self.io.queue_input_write_scoped(
+                            restore,
+                            Bytes::new(),
+                            Duration::ZERO,
+                            Some(deadline),
+                            &self.scope,
+                        )
+                    })?;
+                    break (completion, seq);
+                }
+                lease.with_uninvalidated(|| Ok(()))?;
+            }
+            #[cfg(test)]
+            self.clock.submission_checked(generation);
+            self.clock.sleep(CLEAR_KEY_DELAY, generation);
+        };
+        // Once enqueued, a lost receipt can't authorize replay of the paste.
         completion
             .recv_timeout(self.clock.remaining(deadline))
-            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?
+            .map_err(|_| busy())??;
+        self.wait_transfer_until(deadline, || {
+            let _guard = self.content_lock.lock().map_err(|_| busy())?;
+            lease.with_uninvalidated(|| {
+                if self.content_seq.load(Ordering::Acquire) == before_paste {
+                    return Ok(false);
+                }
+                let Some(screen) = self.terminal.active_ansi_if_complete() else {
+                    return Ok(false);
+                };
+                let cursor = self
+                    .terminal
+                    .cursor_state()
+                    .map(|cursor| (cursor.x, cursor.y));
+                Ok(self
+                    .inspect
+                    .composer_copy_fallback(&screen, cursor, false)
+                    .is_some_and(|(body, _)| body == snapshot))
+            })
+        })
     }
 }

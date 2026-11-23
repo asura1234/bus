@@ -240,7 +240,7 @@ impl ObservedSubmission {
             .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?
     }
 
-    fn wait_transfer_until(
+    pub(super) fn wait_transfer_until(
         &self,
         deadline: std::time::Instant,
         mut ready: impl FnMut() -> io::Result<bool>,

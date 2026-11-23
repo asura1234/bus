@@ -141,6 +141,9 @@ pub(crate) trait SubmissionInspector: Send {
     ) -> Option<(String, Option<Bytes>)> {
         None
     }
+    fn copy_recovery_directory(&self) -> Option<&std::path::Path> {
+        None
+    }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         self.observe_with_launch(screen, cursor, pristine) == InputObservation::Empty
     }

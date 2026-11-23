@@ -186,6 +186,10 @@ impl DraftInputLease {
         self.replay_safe.set(true);
     }
 
+    pub(super) fn restoration_unproven(&self) {
+        self.replay_safe.set(false);
+    }
+
     pub(super) fn record_claude_submission(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.claude_prompt =
