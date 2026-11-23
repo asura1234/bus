@@ -34,6 +34,8 @@ pub(crate) enum ProviderKind {
     /// DeepSeek wrapper around the Claude Code CLI. The terminal harness is
     /// Claude's; only the label, PATH executable, and launch command differ.
     ClaudeDs,
+    /// Argon wrapper around the Claude Code CLI.
+    ClaudeArgon,
     Cursor,
     Grok,
     Kimi,
@@ -50,6 +52,7 @@ impl ProviderKind {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
             Self::ClaudeDs => "claude-ds",
+            Self::ClaudeArgon => "claude-argon",
             Self::Cursor => "cursor",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
@@ -65,6 +68,7 @@ impl ProviderKind {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
             Self::ClaudeDs => "claude-ds",
+            Self::ClaudeArgon => "claude-argon",
             Self::Cursor => "cursor-agent",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
@@ -74,16 +78,17 @@ impl ProviderKind {
         }
     }
 
-    /// Claude Code and `claude-ds` share hook parsing, screen detection,
+    /// Claude Code and its wrappers share hook parsing, screen detection,
     /// composer submission, resume, settings, and dialogs.
     pub(crate) const fn uses_claude_harness(self) -> bool {
-        matches!(self, Self::ClaudeCode | Self::ClaudeDs)
+        matches!(self, Self::ClaudeCode | Self::ClaudeDs | Self::ClaudeArgon)
     }
 
     /// A live pane reports `claude` after the wrapper execs the Claude CLI.
     pub(crate) fn observes_label(self, label: &str) -> bool {
         label == self.label()
-            || (self.uses_claude_harness() && matches!(label, "claude" | "claude-ds"))
+            || (self.uses_claude_harness()
+                && matches!(label, "claude" | "claude-ds" | "claude-argon"))
     }
 }
 
@@ -93,7 +98,9 @@ pub(crate) fn parse(
 ) -> Result<spool::Parsed, String> {
     match provider {
         ProviderKind::Codex => codex::hooks::parse(value),
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs => claude_code::hooks::parse(value),
+        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => {
+            claude_code::hooks::parse(value)
+        }
         ProviderKind::Cursor => cursor::hooks::parse(value),
         ProviderKind::Grok => grok::hooks::parse(value),
         ProviderKind::Kimi => kimi::hooks::parse(value),

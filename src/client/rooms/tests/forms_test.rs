@@ -1356,11 +1356,28 @@ fn form_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
 
 #[test]
 fn provider_menu_stays_below_the_model_field_and_before_pwd() {
+    let bin = crate::utils::test_temp::unique_temp_path("bus-claude-argon-picker");
+    std::fs::create_dir(&bin).unwrap();
+    let _path = crate::utils::env::PathOverride::set(&bin);
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::NewAgent);
     ui.action(render::Action::Add);
     ui.action(render::Action::Field(1));
-    form_rows(&mut ui, 100, 30);
+    assert!(!form_rows(&mut ui, 100, 30)
+        .iter()
+        .any(|row| row.contains("Claude Argon")));
+    let wrapper = bin.join("claude-argon");
+    std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(!forms::provider_choices(false).contains(&Provider::ClaudeArgon));
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    assert!(forms::provider_choices(true).contains(&Provider::ClaudeArgon));
+    assert!(form_rows(&mut ui, 100, 30)
+        .iter()
+        .any(|row| row.contains("Claude Argon")));
     let model = ui
         .view
         .hits
@@ -1379,6 +1396,7 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         Provider::Codex,
         Provider::ClaudeCode,
         Provider::ClaudeDs,
+        Provider::ClaudeArgon,
         Provider::Cursor,
         Provider::Grok,
         Provider::Kimi,
@@ -1394,6 +1412,7 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         assert!(!model.intersects(rect), "{provider:?} covers Model");
         assert!(!pwd.intersects(rect), "{provider:?} covers PWD");
     }
+    std::fs::remove_dir_all(bin).unwrap();
 }
 
 #[test]

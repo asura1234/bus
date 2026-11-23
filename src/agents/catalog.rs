@@ -151,11 +151,12 @@ pub fn interactive_agent_executable(agent: AgentKind) -> &'static str {
     }
 }
 
-/// `claude-ds` execs the Claude CLI, so the live process name and the launch
+/// Claude wrappers exec the Claude CLI, so the live process name and launch
 /// label are one harness.
 pub fn same_detected_agent(left: &str, right: &str) -> bool {
     left == right
-        || (matches!(left, "claude" | "claude-ds") && matches!(right, "claude" | "claude-ds"))
+        || (matches!(left, "claude" | "claude-ds" | "claude-argon")
+            && matches!(right, "claude" | "claude-ds" | "claude-argon"))
 }
 
 pub fn parse_agent_label(agent: &str) -> Option<AgentKind> {
@@ -172,7 +173,7 @@ fn lookup_agent(name: &str) -> Option<AgentKind> {
     let name = path_basename(name);
     match name {
         "pi" => Some(AgentKind::Pi),
-        "claude" | "claude-code" | "claude-ds" => Some(AgentKind::Claude),
+        "claude" | "claude-code" | "claude-ds" | "claude-argon" => Some(AgentKind::Claude),
         "codex" => Some(AgentKind::Codex),
         "gemini" => Some(AgentKind::Gemini),
         "cursor" | "cursor-agent" => Some(AgentKind::Cursor),

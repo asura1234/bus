@@ -18,6 +18,10 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../orchestration/bus-communication-guide.md"),
     ),
     (
+        "providers/claude-argon.md",
+        include_str!("../../orchestration/providers/claude-argon.md"),
+    ),
+    (
         "providers/grok.md",
         include_str!("../../orchestration/providers/grok.md"),
     ),
@@ -314,7 +318,7 @@ pub(crate) fn prompt_args(
             crate::agents::providers::kimi::system_prompt::prompt_args(path, adopted)?
         }
         Provider::Agy => crate::agents::providers::agy::system_prompt::prompt_args(path, adopted)?,
-        Provider::ClaudeCode | Provider::ClaudeDs => {
+        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeArgon => {
             Some(crate::agents::providers::claude_code::system_prompt::prompt_args(path, adopted))
         }
         Provider::Codex => {

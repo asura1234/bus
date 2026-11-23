@@ -5,7 +5,7 @@ fn directory_fixture(
     status: schema::AgentStatus,
 ) -> (Worker, AgentId, PathBuf, PathBuf) {
     let native = match provider {
-        Provider::ClaudeCode | Provider::ClaudeDs => "claude",
+        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeArgon => "claude",
         Provider::Codex => "codex",
         Provider::Cursor => "cursor",
         Provider::Grok => "grok",

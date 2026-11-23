@@ -84,7 +84,9 @@ impl Usage {
     pub(crate) fn retry_reset(&self, agent: &RoomAgent, now_ms: u64) -> Option<u64> {
         let snapshot = match agent.provider {
             Provider::Codex => self.codex.as_ref(),
-            Provider::ClaudeCode | Provider::ClaudeDs => self.claude.as_ref(),
+            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeArgon => {
+                self.claude.as_ref()
+            }
             Provider::Agy => self.agy.as_ref(),
             _ => None,
         }?;

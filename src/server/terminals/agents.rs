@@ -20,13 +20,13 @@ pub(crate) fn valid_agent_name(name: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
 }
 
-fn claude_ds_launch_target(path: &str) -> bool {
+fn claude_wrapper_launch_target(path: &str) -> bool {
     let file_name = std::path::Path::new(path)
         .file_name()
         .and_then(|name| name.to_str());
-    file_name == Some("claude-ds")
+    matches!(file_name, Some("claude-ds" | "claude-argon"))
         && !path.chars().any(char::is_control)
-        && (path == "claude-ds" || std::path::Path::new(path).is_absolute())
+        && (file_name == Some(path) || std::path::Path::new(path).is_absolute())
 }
 
 fn agent_start_argv(
@@ -60,9 +60,10 @@ fn agent_start_argv(
         {
             path
         }
-        // claude-ds is the Claude harness. The command target is the wrapper,
-        // not the `claude` binary it execs.
-        (crate::agents::AgentKind::Claude, Some(path)) if claude_ds_launch_target(&path) => path,
+        // Claude wrappers use Claude's harness and retain their own command target.
+        (crate::agents::AgentKind::Claude, Some(path)) if claude_wrapper_launch_target(&path) => {
+            path
+        }
         (crate::agents::AgentKind::Grok | crate::agents::AgentKind::Kimi, _) | (_, Some(_)) => {
             return Err(AgentStartError::InvalidArgument);
         }

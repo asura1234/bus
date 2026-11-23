@@ -371,8 +371,7 @@ impl BusUi {
             // Below the Agent field's value row.
             let top = 6 + agent_form_gap(main, form);
             for (index, kind) in super::super::forms::provider_choices(orchestrates.is_some())
-                .iter()
-                .copied()
+                .into_iter()
                 .enumerate()
             {
                 view.overlay_row(
