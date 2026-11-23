@@ -81,6 +81,8 @@ pub enum ResponseResult {
         agent: AgentInfo,
         #[serde(default, skip_serializing_if = "NativeSubmissionTimestamps::is_empty")]
         timestamps: NativeSubmissionTimestamps,
+        #[serde(default, skip_serializing_if = "super::is_false")]
+        discarded_aborted_payload: bool,
     },
     /// Strong native completion; ordinary key writes return only `Ok`.
     AgentInterrupted {

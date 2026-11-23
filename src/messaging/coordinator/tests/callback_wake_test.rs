@@ -13,6 +13,7 @@ impl Transport for CallbackNative {
             Method::AgentPromptIfIdleAtGeneration(_) => Ok(ResponseResult::AgentPrompted {
                 agent: self.info.clone(),
                 timestamps: Default::default(),
+                discarded_aborted_payload: false,
             }),
             _ => Ok(ResponseResult::Ok {}),
         }
@@ -341,6 +342,7 @@ fn callback_wake_waits_for_in_flight_native_receipt() {
         .send(Ok(ResponseResult::AgentPrompted {
             agent: native_info("pane", "claude", "session"),
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         }))
         .unwrap();
     worker.finish_native_submissions(false);

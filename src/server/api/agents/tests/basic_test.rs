@@ -105,6 +105,7 @@ fn claude_agent_with_input(
         allow_working: false,
         expected_generation: None,
         expected_turn_id: None,
+        discard_aborted_payload: None,
     };
     (app, params, writes)
 }

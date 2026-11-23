@@ -674,6 +674,7 @@ fn native_method_budget_reserves_line_edit_cost_for_long_drafts() {
             allow_working: false,
             expected_generation: None,
             expected_turn_id: None,
+            discard_aborted_payload: None,
         });
         let budget = crate::protocol::api::submission::method_budget(&method).unwrap();
         assert!(

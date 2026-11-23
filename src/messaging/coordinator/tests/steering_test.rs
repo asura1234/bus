@@ -93,6 +93,7 @@ impl Transport for Native {
                     }))
                     .unwrap(),
                     timestamps: Default::default(),
+                    discarded_aborted_payload: false,
                 }
             }
             Method::AgentObserve(params) => open_native_question(&params.target),

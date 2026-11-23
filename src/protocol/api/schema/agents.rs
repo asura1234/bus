@@ -212,6 +212,11 @@ pub struct AgentPromptIfIdleParams {
     /// Bind native steering to the Bus lead's turn, never a newer TUI turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_turn_id: Option<String>,
+    /// Exact rendered payload of a just-aborted request on this pane. If the
+    /// composer still holds this payload after an interrupt, discard it instead
+    /// of stashing and restoring it as a developer draft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discard_aborted_payload: Option<String>,
 }
 
 /// First interactive Codex turn: its SessionStart hook is deferred until input.

@@ -13,6 +13,7 @@ fn composer_available() -> Result<ResponseResult, TransportError> {
     Ok(ResponseResult::AgentPrompted {
         agent: native_info("pane", "codex", "session"),
         timestamps: Default::default(),
+        discarded_aborted_payload: false,
     })
 }
 
@@ -26,6 +27,7 @@ impl Transport for LaunchPromptTransport {
                 Ok(ResponseResult::AgentPrompted {
                     agent: native_info("pane", "provider", "session"),
                     timestamps: Default::default(),
+                    discarded_aborted_payload: false,
                 })
             }
             other => panic!("unexpected launch-prompt call: {other:?}"),
@@ -299,6 +301,7 @@ fn rejected_launch_prompt_is_visible_and_retries_once_after_recovery() {
                     Ok(ResponseResult::AgentPrompted {
                         agent: native_info("pane", "provider", "session"),
                         timestamps: Default::default(),
+                        discarded_aborted_payload: false,
                     }),
                 ]
                 .into(),
@@ -904,6 +907,7 @@ fn an_unconfirmed_write_is_failed_at_its_bound_and_the_next_message_is_typed() {
                 }))
                 .unwrap(),
                 timestamps: Default::default(),
+                discarded_aborted_payload: false,
             }),
         ],
     );
@@ -2515,6 +2519,7 @@ impl Transport for NativeStampProbe {
         Ok(ResponseResult::AgentPrompted {
             agent: native_info("pane", "codex", "session"),
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         })
     }
 }

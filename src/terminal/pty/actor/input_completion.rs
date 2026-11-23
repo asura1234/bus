@@ -2,7 +2,10 @@
 use crate::protocol::api::schema::NativeSubmissionTimestamps;
 use std::{
     io,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -13,6 +16,7 @@ pub(crate) struct InputCompletion {
     receiver: mpsc::Receiver<io::Result<()>>,
     enter_delay_allowance: Duration,
     timestamps: SharedSubmissionTimestamps,
+    discarded_aborted_payload: Arc<AtomicBool>,
     #[cfg(unix)]
     cancellation: Option<Cancellation>,
 }
@@ -23,6 +27,7 @@ impl From<mpsc::Receiver<io::Result<()>>> for InputCompletion {
             receiver,
             enter_delay_allowance: Duration::ZERO,
             timestamps: Default::default(),
+            discarded_aborted_payload: Default::default(),
             #[cfg(unix)]
             cancellation: None,
         }
@@ -75,6 +80,15 @@ impl InputCompletion {
         self
     }
 
+    pub(crate) fn with_discarded_aborted_payload(mut self, discarded: Arc<AtomicBool>) -> Self {
+        self.discarded_aborted_payload = discarded;
+        self
+    }
+
+    pub(crate) fn discarded_aborted_payload(&self) -> bool {
+        self.discarded_aborted_payload.load(Ordering::Acquire)
+    }
+
     pub(crate) fn submission_timestamps(&self) -> NativeSubmissionTimestamps {
         *self
             .timestamps
@@ -116,6 +130,7 @@ impl InputCompletion {
             receiver,
             enter_delay_allowance: Duration::ZERO,
             timestamps: Default::default(),
+            discarded_aborted_payload: Default::default(),
             cancellation: Some(Cancellation {
                 permit,
                 armed: true,

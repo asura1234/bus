@@ -300,3 +300,147 @@ async fn claude_plain_paste_releases_draft_keys_when_a_fresh_prompt_echo_hides_t
     assert_eq!(next_write(&mut writes).await, draft);
     assert!(writes.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn claude_interrupt_delivery_discards_returned_aborted_payload_without_stashing() {
+    let aborted =
+        "[Bus message 6 from you (room 1)]\nWrite a detailed glossary directly. Do NOT use tools.";
+    let (mut app, mut method, mut writes) = provider_fixture(
+        AgentKind::Claude,
+        true,
+        "[Bus message 6 from you (room 1)]\r\n  Write a detailed glossary directly. Do NOT use\r\n  tools.",
+    );
+    match &mut method {
+        Method::AgentPromptIfIdle(params) => {
+            params.text = "[Bus message 8 from you (room 1)]\nM3_ACK".into();
+            params.discard_aborted_payload = Some(aborted.into());
+        }
+        _ => unreachable!(),
+    }
+    let response = start(&mut app, method);
+    // Clear keys discard the soft-wrapped aborted payload without ever sending Ctrl+S (\x13).
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x01"); // Ctrl+A
+    redraw(
+        &app,
+        AgentKind::Claude,
+        "[Bus message 6 from you (room 1)]\r\n  Write a detailed glossary directly. Do NOT use\r\n  tools.",
+    );
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x0b"); // Ctrl+K kills visual wrapped row, leaving "tools."
+    redraw(
+        &app,
+        AgentKind::Claude,
+        "[Bus message 6 from you (room 1)]\r\n  tools.",
+    );
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x15"); // Ctrl+U joins
+    redraw(&app, AgentKind::Claude, "[Bus message 6 from you (room 1)]");
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x01"); // Ctrl+A on line 1
+    redraw(&app, AgentKind::Claude, "[Bus message 6 from you (room 1)]");
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\x0b"); // Ctrl+K kills line 1
+    redraw(&app, AgentKind::Claude, "");
+
+    let paste = next_write(&mut writes).await;
+    assert_eq!(
+        paste,
+        Bytes::from("\x1b[200~[Bus message 8 from you (room 1)]\nM3_ACK\x1b[201~")
+    );
+    redraw(
+        &app,
+        AgentKind::Claude,
+        "[Bus message 8 from you (room 1)]\r\n  M3_ACK",
+    );
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    redraw(&app, AgentKind::Claude, "");
+
+    let reply: serde_json::Value =
+        serde_json::from_str(&response.recv_timeout(WAIT).unwrap()).unwrap();
+    assert_eq!(reply["result"]["type"], "agent_prompted", "{reply}");
+    assert_eq!(
+        reply["result"]["discarded_aborted_payload"], true,
+        "{reply}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "no stash/restore keys and no stray bytes after submit; a later Enter sees an empty composer"
+    );
+}
+
+#[tokio::test]
+async fn claude_interrupt_delivery_still_preserves_unrelated_typed_draft() {
+    let aborted = "[Bus message 6 from you (room 1)]\nM2_STEER_MARKER_A report alpha";
+    let draft = "aa  developer draft";
+    let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, draft);
+    match &mut method {
+        Method::AgentPromptIfIdle(params) => {
+            params.text = "[Bus message 8 from you (room 1)]\nM3_ACK".into();
+            params.discard_aborted_payload = Some(aborted.into());
+        }
+        _ => unreachable!(),
+    }
+    let response = start(&mut app, method);
+    // Unrelated developer draft takes #494's Ctrl+S stash path, not aborted-payload discard.
+    let first_key = next_write(&mut writes).await;
+    assert_eq!(
+        first_key.as_ref(),
+        b"\x13",
+        "typed developer draft must still be stashed with Ctrl+S"
+    );
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(
+        "\x1b[2J\x1b[H› stashed\r\n────────────────────────\r\n❯ \r\n────────────────────────\r\n"
+            .as_bytes(),
+    );
+    let paste = next_write(&mut writes).await;
+    assert_eq!(
+        paste,
+        Bytes::from("\x1b[200~[Bus message 8 from you (room 1)]\nM3_ACK\x1b[201~")
+    );
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(
+            "\x1b[2J\x1b[H› stashed\r\n────────────────────────\r\n❯ [Bus message 8 from you (room 1)]\r\n  M3_ACK\r\n────────────────────────\r\n"
+                .as_bytes(),
+        );
+    assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+    // Native stash pops the developer draft back into the composer after submit.
+    redraw(&app, AgentKind::Claude, draft);
+
+    let reply: serde_json::Value =
+        serde_json::from_str(&response.recv_timeout(WAIT).unwrap()).unwrap();
+    assert_eq!(reply["result"]["type"], "agent_prompted", "{reply}");
+    assert!(
+        reply["result"].get("discarded_aborted_payload").is_none(),
+        "real draft was preserved, not discarded: {reply}"
+    );
+}
+
+#[tokio::test]
+async fn claude_working_steer_still_refuses_with_turn_busy_and_leaves_composer_empty() {
+    let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(
+            "\x1b[2J\x1b[H✻ Puttering… (16s · esc to interrupt)\r\n────────────────────────\r\n❯ \r\n────────────────────────\r\n"
+                .as_bytes(),
+        );
+    match &mut method {
+        Method::AgentPromptIfIdle(params) => {
+            params.text = "[Bus message 14 from you (room 1)]\nM2_WORKING_STEER_B".into();
+            params.steer = true;
+        }
+        _ => unreachable!(),
+    }
+    let reply: serde_json::Value =
+        serde_json::from_str(&start(&mut app, method).recv_timeout(WAIT).unwrap()).unwrap();
+    assert_eq!(
+        reply["error"]["code"],
+        crate::protocol::api::AGENT_CLAUDE_TURN_BUSY,
+        "{reply}"
+    );
+    assert!(
+        writes.try_recv().is_err(),
+        "Working steer must write nothing"
+    );
+}

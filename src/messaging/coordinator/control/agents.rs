@@ -268,6 +268,7 @@ impl Worker {
                     allow_working: false,
                     expected_generation: Some(self.serving_generation),
                     expected_turn_id: None,
+                    discard_aborted_payload: None,
                 })
             }
             // Codex and AGY start their provider session with the first turn.

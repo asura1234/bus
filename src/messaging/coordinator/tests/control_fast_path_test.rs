@@ -50,6 +50,7 @@ impl Transport for FloodNative {
                 Ok(ResponseResult::AgentPrompted {
                     agent: self.info.clone(),
                     timestamps: Default::default(),
+                    discarded_aborted_payload: false,
                 })
             }
             _ => Ok(ResponseResult::Ok {}),

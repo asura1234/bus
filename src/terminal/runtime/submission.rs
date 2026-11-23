@@ -205,6 +205,21 @@ pub(crate) trait SubmissionInspector: Send {
     fn editor_submit_key(&self, _screen: &str, default: &Bytes) -> Bytes {
         default.clone()
     }
+    /// Recognize an interrupted request's payload returned to the composer so
+    /// the next delivery discards it instead of stashing and restoring it.
+    fn observe_aborted_payload(
+        &self,
+        _screen: &str,
+        _cursor: Option<(u16, u16)>,
+        _pristine: bool,
+    ) -> InputObservation {
+        InputObservation::Other
+    }
+    fn clearing_aborted(&self, _key_index: usize) {}
+    fn aborted_cleanup_progress(&self) -> u64 {
+        0
+    }
+    fn mark_aborted_payload_discarded(&self) {}
 }
 
 impl<F: Fn(&str) -> InputObservation + Send> SubmissionInspector for F {

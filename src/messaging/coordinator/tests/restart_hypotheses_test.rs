@@ -145,6 +145,7 @@ fn legacy_awaiting_start() -> (Fixture, RequestId) {
                 allow_working: false,
                 expected_generation: None,
                 expected_turn_id: None,
+                discard_aborted_payload: None,
             }));
     assert!(matches!(result, Ok(ResponseResult::AgentPrompted { .. })));
     let mut state = f.worker.state.clone();

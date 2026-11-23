@@ -2,17 +2,91 @@
 use super::{input, ownership::OwnedComposer, AgentKind, InputObservation};
 use crate::terminal::runtime::{DraftPreservation, EditorSubmission, SubmissionInspector};
 use bytes::Bytes;
-use std::{path::PathBuf, sync::Mutex, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
 pub(super) struct PreservingComposer {
     kind: AgentKind,
     owned: OwnedComposer,
+    aborted: Option<Mutex<AbortedMatcher>>,
+    discarded_aborted_payload: Arc<AtomicBool>,
     expected: String,
     directory: PathBuf,
     keys: Vec<Bytes>,
     steer: bool,
     bracketed_paste: bool,
     native_draft: Mutex<Option<NativeDraft>>,
+}
+
+struct AbortedMatcher {
+    payload: String,
+    normalized: String,
+    started: bool,
+    last_len: usize,
+    progress: u64,
+}
+
+impl AbortedMatcher {
+    fn new(payload: String) -> Self {
+        let normalized = payload.chars().filter(|c| !c.is_whitespace()).collect();
+        Self {
+            payload,
+            normalized,
+            started: false,
+            last_len: usize::MAX,
+            progress: 0,
+        }
+    }
+
+    fn observe(
+        &mut self,
+        kind: AgentKind,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+        pristine: bool,
+    ) -> InputObservation {
+        let Some(body) = super::input_since_launch(kind, screen, cursor, pristine) else {
+            return InputObservation::Unavailable;
+        };
+        if body.is_empty() {
+            return if self.started {
+                InputObservation::Empty
+            } else {
+                InputObservation::Other
+            };
+        }
+        if !self.started {
+            if super::observe_since_launch(kind, screen, &self.payload, cursor, pristine)
+                == InputObservation::Pending
+            {
+                self.started = true;
+                self.last_len = body.len();
+                self.progress = self.progress.wrapping_add(1);
+                return InputObservation::Pending;
+            }
+            return InputObservation::Other;
+        }
+        let norm: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        let mut hay = self.normalized.chars();
+        if body.len() <= self.last_len
+            && norm.len() <= self.normalized.len()
+            && norm.chars().all(|c| hay.any(|h| h == c))
+        {
+            if body.len() < self.last_len {
+                self.last_len = body.len();
+                self.progress = self.progress.wrapping_add(1);
+            }
+            InputObservation::Pending
+        } else {
+            InputObservation::Other
+        }
+    }
 }
 
 enum NativeDraft {
@@ -30,6 +104,8 @@ impl PreservingComposer {
         Self {
             kind,
             owned: OwnedComposer::new(kind, expected.clone()),
+            aborted: None,
+            discarded_aborted_payload: Arc::new(AtomicBool::new(false)),
             expected,
             directory,
             keys,
@@ -37,6 +113,16 @@ impl PreservingComposer {
             bracketed_paste: true,
             native_draft: Mutex::new(None),
         }
+    }
+
+    pub(super) fn with_aborted_payload(
+        mut self,
+        payload: Option<String>,
+        discarded: Arc<AtomicBool>,
+    ) -> Self {
+        self.aborted = payload.map(|text| Mutex::new(AbortedMatcher::new(text)));
+        self.discarded_aborted_payload = discarded;
+        self
     }
 
     pub(super) fn with_steering(mut self, steer: bool) -> Self {
@@ -328,6 +414,34 @@ impl SubmissionInspector for PreservingComposer {
                 body.ends_with(marker)
             }
         })
+    }
+
+    fn observe_aborted_payload(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+        pristine: bool,
+    ) -> InputObservation {
+        self.aborted
+            .as_ref()
+            .and_then(|aborted| aborted.lock().ok())
+            .map_or(InputObservation::Other, |mut aborted| {
+                aborted.observe(self.kind, screen, cursor, pristine)
+            })
+    }
+
+    fn clearing_aborted(&self, _key_index: usize) {}
+
+    fn aborted_cleanup_progress(&self) -> u64 {
+        self.aborted
+            .as_ref()
+            .and_then(|aborted| aborted.lock().ok())
+            .map_or(0, |aborted| aborted.progress)
+    }
+
+    fn mark_aborted_payload_discarded(&self) {
+        self.discarded_aborted_payload
+            .store(true, Ordering::Release);
     }
 }
 

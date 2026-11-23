@@ -499,6 +499,7 @@ mod tests {
                 allow_working: false,
                 expected_generation: None,
                 expected_turn_id: None,
+                discard_aborted_payload: None,
             },
         ));
         assert!(outcome.unwrap_err().definitely_rejected);

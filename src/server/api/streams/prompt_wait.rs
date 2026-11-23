@@ -232,6 +232,7 @@ fn agent_prompt_success(
         result: ResponseResult::AgentPrompted {
             agent,
             timestamps: Default::default(),
+            discarded_aborted_payload: false,
         },
     })
     .map_err(std::io::Error::other)

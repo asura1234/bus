@@ -93,6 +93,7 @@ impl Transport for ScriptedStopTransport {
                     }))
                     .unwrap(),
                     timestamps: Default::default(),
+                    discarded_aborted_payload: false,
                 })
             }
             _ => Ok(ResponseResult::Ok {}),
@@ -401,4 +402,230 @@ fn genuinely_stuck_request_remains_recoverable_without_retirement() {
             "{provider:?}: queue must drain after manual recovery"
         );
     }
+}
+
+fn msg_status(fixture: &mut Fixture, message: PromptId) -> Response {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    fixture.worker.control_response_with_events(
+        &crate::messaging::control::Request {
+            id: format!("status-{}", NEXT.fetch_add(1, Ordering::Relaxed)),
+            method: "message.status".into(),
+            params: json!({"message": message.0.to_string()}),
+        },
+        None,
+    )
+}
+
+#[test]
+fn interrupt_delivery_passes_aborted_payload_and_records_discarded_close_detail() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = fixture.send("M2_IDLE_PAYLOAD report alpha", false);
+    fixture.deliver();
+    let lead_payload = fixture.typed().last().unwrap().0.clone();
+    let lead_msg = fixture.request(lead).prompt.id;
+    fixture.started("turn-idle-1", &lead_payload);
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+
+    let native = fixture.native.clone();
+    let agent_info: crate::protocol::api::schema::AgentInfo = serde_json::from_value(json!({
+        "terminal_id": "terminal",
+        "pane_id": "pane",
+        "agent": "claude",
+        "agent_status": "idle",
+        "interactive_ready": true,
+        "workspace_id": "workspace", "tab_id": "tab",
+        "focused": false, "revision": 1,
+        "agent_session": {
+            "source": "bus", "agent": "claude",
+            "kind": "id", "value": "session",
+        },
+    }))
+    .unwrap();
+    fixture.worker.transport = Box::new(ScriptedStopTransport::new(
+        native.clone(),
+        std::iter::once(Ok(ResponseResult::Ok {})),
+        std::iter::once(Ok(ResponseResult::AgentPrompted {
+            agent: agent_info,
+            timestamps: Default::default(),
+            discarded_aborted_payload: true,
+        })),
+    ));
+
+    let room = fixture.room.0.to_string();
+    let resp = send_msg(
+        &mut fixture,
+        json!({
+            "room": room,
+            "to": ["builder"],
+            "text": "M3_INTERRUPT_ACK",
+        }),
+    );
+    assert!(resp.ok, "{resp:?}");
+    let incoming = sent_request(&resp);
+    fixture.deliver();
+
+    // The interrupt delivery carried the exact aborted payload of `lead`.
+    let sent_prompt = native
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|method| match method {
+            Method::AgentPromptIfIdleAtGeneration(params) => Some(params.clone()),
+            _ => None,
+        })
+        .expect("expected interrupt delivery prompt");
+    assert_eq!(
+        sent_prompt.discard_aborted_payload.as_deref(),
+        Some(lead_payload.as_str())
+    );
+    assert_eq!(fixture.request(incoming).phase, RequestPhase::Active);
+
+    // Closed lead records discarded_aborted_payload as its close detail.
+    let status = msg_status(&mut fixture, lead_msg);
+    assert!(status.ok, "{status:?}");
+    let row = &status.result["requests"][0];
+    assert_eq!(row["stage"], "abandoned");
+    assert_eq!(row["reason"], "interrupted");
+    assert_eq!(row["detail"], "discarded_aborted_payload");
+    assert!(row["reply"].is_null());
+
+    // After confirmation, aborted_payload is cleared so a subsequent delivery carries None.
+    let incoming_payload = sent_prompt.text;
+    fixture.started("turn-2", &incoming_payload);
+    fixture.consume();
+    fixture.stopped("turn-2", "M3_ACK");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+
+    let follow = fixture.send("afterward", false);
+    fixture.deliver();
+    assert_eq!(fixture.request(follow).phase, RequestPhase::Active);
+    let follow_prompt = native
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|method| match method {
+            Method::AgentPromptIfIdleAtGeneration(params) => Some(params.clone()),
+            _ => None,
+        })
+        .expect("expected follow-up prompt");
+    assert_eq!(follow_prompt.discard_aborted_payload, None);
+}
+
+#[test]
+fn working_steer_refused_then_interrupt_discards_aborted_lead_on_first_queued_delivery() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut fixture, "long glossary turn", "turn-1");
+    let lead_payload = fixture.typed().last().unwrap().0.clone();
+    let lead_msg = fixture.request(lead).prompt.id;
+
+    let native = fixture.native.clone();
+    let agent_info: crate::protocol::api::schema::AgentInfo = serde_json::from_value(json!({
+        "terminal_id": "terminal",
+        "pane_id": "pane",
+        "agent": "claude",
+        "agent_status": "idle",
+        "interactive_ready": true,
+        "workspace_id": "workspace", "tab_id": "tab",
+        "focused": false, "revision": 1,
+        "agent_session": {
+            "source": "bus", "agent": "claude",
+            "kind": "id", "value": "session",
+        },
+    }))
+    .unwrap();
+    fixture.worker.transport = Box::new(ScriptedStopTransport::new(
+        native.clone(),
+        std::iter::once(Ok(ResponseResult::Ok {})),
+        vec![
+            // 1. Working steer refused by ClaudeTurnBusy (ComposerBusy)
+            Err(TransportError {
+                code: Some(crate::protocol::api::AGENT_CLAUDE_TURN_BUSY.into()),
+                message: "Claude turn busy".into(),
+                definitely_rejected: true,
+                timestamps: Default::default(),
+            }),
+            // 2. First delivery after interrupt (queued steer) discards aborted lead payload
+            Ok(ResponseResult::AgentPrompted {
+                agent: agent_info.clone(),
+                timestamps: Default::default(),
+                discarded_aborted_payload: true,
+            }),
+            // 3. Interrupt message delivers afterwards with no aborted payload left
+            Ok(ResponseResult::AgentPrompted {
+                agent: agent_info,
+                timestamps: Default::default(),
+                discarded_aborted_payload: false,
+            }),
+        ],
+    ));
+
+    // Send M2 in steer mode (non-queue) while lead is Working -> stays queued after refusal.
+    let m2_steer = fixture.send("M2_WORKING_STEER_B report beta", false);
+    fixture.deliver();
+    assert_eq!(fixture.request(m2_steer).phase, RequestPhase::Queued);
+
+    // Send M3 in interrupt mode -> closes lead, records lead_payload as aborted_payload.
+    let room = fixture.room.0.to_string();
+    let resp = send_msg(
+        &mut fixture,
+        json!({
+            "room": room,
+            "to": ["builder"],
+            "text": "M3_WORKING_INT_B",
+        }),
+    );
+    assert!(resp.ok, "{resp:?}");
+    let m3_interrupt = sent_request(&resp);
+
+    // Stop completes -> agent becomes Idle; first delivery after stop is queued M2,
+    // which receives and discards lead_payload.
+    fixture.status(RuntimeStatus::Idle);
+    fixture.deliver();
+    assert_eq!(fixture.request(m2_steer).phase, RequestPhase::Active);
+    let status = msg_status(&mut fixture, lead_msg);
+    assert_eq!(status.result["requests"][0]["stage"], "abandoned");
+    assert_eq!(status.result["requests"][0]["reason"], "interrupted");
+    assert_eq!(
+        status.result["requests"][0]["detail"],
+        "discarded_aborted_payload"
+    );
+
+    // Finish M2 and deliver M3 -> M3 receives discard_aborted_payload: None.
+    let m2_prompt = native
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|method| match method {
+            Method::AgentPromptIfIdleAtGeneration(params) if !params.steer => Some(params.clone()),
+            _ => None,
+        })
+        .expect("expected M2 delivery");
+    assert_eq!(
+        m2_prompt.discard_aborted_payload.as_deref(),
+        Some(lead_payload.as_str())
+    );
+    fixture.started("turn-2", &m2_prompt.text);
+    fixture.consume();
+    fixture.stopped("turn-2", "beta");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+
+    fixture.deliver();
+    assert_eq!(fixture.request(m3_interrupt).phase, RequestPhase::Active);
+    let m3_prompt = native
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|method| match method {
+            Method::AgentPromptIfIdleAtGeneration(params) if !params.steer => Some(params.clone()),
+            _ => None,
+        })
+        .expect("expected M3 delivery");
+    assert_eq!(m3_prompt.discard_aborted_payload, None);
 }
