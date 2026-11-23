@@ -18,13 +18,12 @@ composer, permissions, callbacks, and resume.
 Claude Code speaks the Anthropic Messages API to Magpie, which sends OpenAI Chat
 Completions requests to the approved TGW upstream. Set up the `tgw-argon` entry
 in `~/.config/magpie/providers.json` with the TGW chat base URL, required
-`gateway_context`, and explicit `gemini-4-argon` and `gemini-4-hydrogen` models.
-Keep the file mode 0600. Build the upstream `Authorization: AK …` header from
-`access_key` in the local credential file. The documented setup only uses the
-access key. Keep all credential values out of source, launch arguments, and logs.
+`gateway_context`, and `gemini-4-argon` as the sole model. Keep the file mode
+0600. Build the upstream header as `Authorization: AK <access_key>:<secret_key_once>`
+using the two fields from the local credential file. Keep all credential values
+out of source, launch arguments, and logs.
 
-The wrapper defaults to `tgw-argon/gemini-4-argon`. Set `CLAUDE_ARGON_MODEL` to
-`tgw-argon/gemini-4-hydrogen` for Hydrogen, or set `CLAUDE_ARGON_BASE_URL` for a
+The wrapper selects `tgw-argon/gemini-4-argon`. Set `CLAUDE_ARGON_BASE_URL` for a
 different local Magpie listener. The wrapper forwards Claude Code arguments,
 including Bus-supplied `--settings` and `--resume`. Once the gateway is
 configured, verify it before launching an agent.
