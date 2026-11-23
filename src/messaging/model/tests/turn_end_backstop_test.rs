@@ -113,6 +113,45 @@ fn idle_backstop_reconciles_owned_provider_records_before_uncertain_release() {
 }
 
 #[test]
+fn answered_codex_turn_keeps_ownership_with_progress_after_the_idle_edge() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+    let lead = submit_text(&mut state, room, agent, "still working after the answer");
+    start_request(&mut state, lead, "launch-codex", 100);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 102)
+        .unwrap();
+    let message = state.request(lead).unwrap().prompt.id;
+    state
+        .answer_message(message, agent, "explicit answer".into(), 103)
+        .unwrap();
+    let queued = submit_text(&mut state, room, agent, "queued next task");
+    let idle_at = 200;
+    state
+        .observe_status(agent, RuntimeStatus::Idle, idle_at)
+        .unwrap();
+    let settled_at = idle_at + TURN_SETTLE_MS;
+    state
+        .observe_status(agent, RuntimeStatus::Idle, settled_at)
+        .unwrap();
+    assert_eq!(
+        state.settle_ended_request_with_codex_progress(
+            agent,
+            settled_at,
+            |_| None,
+            |_| { Some(idle_at + 1) }
+        ),
+        None
+    );
+    assert_eq!(
+        state.settle_ended_request(agent, settled_at, |_| None),
+        None
+    );
+    assert_eq!(state.agent(agent).unwrap().current_request, Some(lead));
+    assert_eq!(state.request(queued).unwrap().phase, RequestPhase::Queued);
+}
+
+#[test]
 fn idle_backstop_preserves_an_explicit_reply_and_marks_only_unanswered_group_members() {
     for provider in providers() {
         let (mut state, room, agent, _) = state_with_room_and_agents();

@@ -148,6 +148,7 @@ impl Worker {
         state.ensure_master_room();
         state.upgrade_dialog_notice_delivery();
         state.upgrade_requester_reply_routes();
+        state.clear_answered_submission_errors();
         state
             .upgrade_agent_names(io::now_ms())
             .map_err(|e| e.to_string())?;

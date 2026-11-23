@@ -131,6 +131,25 @@ impl BusState {
         let recorded = recorded_end(request);
         if recorded.is_none() && self.agents.get(&agent)?.provider == Provider::Codex {
             let progress = codex_progress_at(request);
+            // A fresh Working-to-Idle edge with no unanswered requests can
+            // close after the usual callback grace without a Codex final.
+            let latest_progress = request
+                .bound_turn_activity
+                .as_ref()
+                .and_then(|activity| activity.codex_progress_at_ms)
+                .max(progress.filter(|at| *at <= now_ms));
+            if request.reply().is_some()
+                && self
+                    .settle_candidate(agent)
+                    .and_then(|lead| lead.turn_ended_at_ms)
+                    .is_some_and(|ended_at| latest_progress.is_none_or(|at| at <= ended_at))
+                && self
+                    .group_members(id)
+                    .into_iter()
+                    .all(|member| self.requests.get(&member).is_none_or(Request::settled))
+            {
+                return self.complete_silent_turn(agent, id, now_ms);
+            }
             if !self.codex_idle_evidence_wait_elapsed(id, agent, now_ms, progress) {
                 return None;
             }
