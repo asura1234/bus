@@ -580,9 +580,10 @@ fn settings_idle_alert_minutes_is_visible_and_stops_at_one_and_sixty() {
     assert_eq!(ui.settings_field, ui.idle_alert_minutes_field());
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert_eq!(ui.settings.idle_alert_minutes, 6);
-    assert!(ui.pending.iter().any(|pending| {
-        matches!(pending.command, BusCommand::SetIdleAlertMinutes(6))
-    }));
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| { matches!(pending.command, BusCommand::SetIdleAlertMinutes(6)) }));
     ui.settings.idle_alert_minutes = 60;
     let before = ui.pending.len();
     ui.action(render::Action::AdjustIdleAlertMinutes(true));
@@ -1356,11 +1357,28 @@ fn form_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
 
 #[test]
 fn provider_menu_stays_below_the_model_field_and_before_pwd() {
+    let bin = crate::utils::test_temp::unique_temp_path("bus-claude-gpt-picker");
+    std::fs::create_dir(&bin).unwrap();
+    let _path = crate::utils::env::PathOverride::set(&bin);
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::NewAgent);
     ui.action(render::Action::Add);
     ui.action(render::Action::Field(1));
-    form_rows(&mut ui, 100, 30);
+    assert!(!form_rows(&mut ui, 100, 30)
+        .iter()
+        .any(|row| row.contains("Claude GPT")));
+    let wrapper = bin.join("claude-gpt");
+    std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(!forms::provider_choices(false).contains(&Provider::ClaudeGpt));
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    assert!(forms::provider_choices(true).contains(&Provider::ClaudeGpt));
+    assert!(form_rows(&mut ui, 100, 30)
+        .iter()
+        .any(|row| row.contains("Claude GPT")));
     let model = ui
         .view
         .hits
@@ -1379,6 +1397,7 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         Provider::Codex,
         Provider::ClaudeCode,
         Provider::ClaudeDs,
+        Provider::ClaudeGpt,
         Provider::Cursor,
         Provider::Grok,
         Provider::Kimi,
@@ -1394,6 +1413,7 @@ fn provider_menu_stays_below_the_model_field_and_before_pwd() {
         assert!(!model.intersects(rect), "{provider:?} covers Model");
         assert!(!pwd.intersects(rect), "{provider:?} covers PWD");
     }
+    std::fs::remove_dir_all(bin).unwrap();
 }
 
 #[test]
@@ -1507,12 +1527,18 @@ fn failed_native_launch_stays_bound_to_its_saved_agent() {
             None,
         )
         .unwrap();
-    snapshot.state.set_agent_error(agent, Some(error.into())).unwrap();
+    snapshot
+        .state
+        .set_agent_error(agent, Some(error.into()))
+        .unwrap();
     ui.receive_snapshot(Arc::new(snapshot.clone()));
     ui.settle_agent_creation(command_id, &Err(error.into()));
     assert!(room_screen(&mut ui, 100, 40).contains(error));
 
-    snapshot.state.rename_agent(agent, "renamed-worker").unwrap();
+    snapshot
+        .state
+        .rename_agent(agent, "renamed-worker")
+        .unwrap();
     ui.receive_snapshot(Arc::new(snapshot.clone()));
     assert_eq!(ui.provisional_agents().count(), 0);
     snapshot.state.delete_agent(agent, 0).unwrap();

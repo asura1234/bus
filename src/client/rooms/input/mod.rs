@@ -15,7 +15,7 @@ use super::{
 use super::{BusUi, Effect};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentId, RoomId, RoomKind},
+    model::{AgentId, Provider, RoomId, RoomKind},
 };
 use crate::{
     client::compositor::ClientShellInput,
@@ -511,7 +511,11 @@ impl BusUi {
         self.open_form(Form::Agent {
             name: Editor::default(),
             provider: None,
-            provider_cursor: super::forms::provider_choices(master)[0],
+            provider_cursor: if master {
+                Provider::ClaudeCode
+            } else {
+                Provider::Codex
+            },
             cwd: Editor::new("~/".into()),
             args: Box::new(Editor::default()),
             field: 0,
