@@ -426,6 +426,9 @@ impl SubmissionHandle {
                     .diagnostics
                     .finish(&result, submission.clock.now());
                 let _ = tx.send(result);
+                // Copy recovery diagnostics can wait on the logging sink.
+                // The input lease and the completion both precede emission.
+                submission.diagnostics.copy_recovery.emit();
             })
         });
         Ok(scope.completion(rx))

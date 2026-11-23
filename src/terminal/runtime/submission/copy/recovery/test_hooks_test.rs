@@ -45,10 +45,12 @@ pub(super) fn before_write(directory: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn retain(directory: &Path, text: &str) {
-    if let Some(attempt) = start(directory, text) {
+    let diagnostics = CallerDiagnostics::default();
+    if let Some(attempt) = start(directory, text, &diagnostics) {
         attempt.send(Outcome::Retain {
             reason: "test_retain",
             error: String::new(),
         });
     }
+    diagnostics.emit();
 }

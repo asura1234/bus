@@ -8,6 +8,7 @@ use std::{io, sync::atomic::Ordering, time::Duration};
 mod recovery;
 #[cfg(test)]
 pub(crate) use recovery::test_hooks;
+pub(super) use recovery::CallerDiagnostics;
 use recovery::Outcome;
 
 const RESTORE_BUDGET: Duration = Duration::from_secs(1);
@@ -40,10 +41,11 @@ impl ObservedSubmission {
         delay: Duration,
         lease: &DraftInputLease,
     ) -> io::Result<()> {
+        let diagnostics = &self.diagnostics.copy_recovery;
         let backup = self
             .inspect
             .copy_recovery_directory()
-            .and_then(|directory| recovery::start(directory, &snapshot));
+            .and_then(|directory| recovery::start(directory, &snapshot, diagnostics));
         if let Err(error) = self.clear_for_copy(&snapshot, lease) {
             if let Some(backup) = backup {
                 backup.send(Outcome::Retain {
@@ -87,7 +89,7 @@ impl ObservedSubmission {
                     } else {
                         "snapshot_storage_unavailable"
                     };
-                    tracing::warn!(event = "bus.draft.copy_loss", reason, %error, "Copied draft restoration was not proven and no recovery record was scheduled");
+                    diagnostics.copy_loss(reason, error);
                 }
             }
         }

@@ -4,6 +4,7 @@ use std::{cell::Cell, io, time::Instant};
 
 #[derive(Default)]
 pub(super) struct Diagnostics {
+    pub(super) copy_recovery: super::copy::CallerDiagnostics,
     timestamps: crate::terminal::pty::actor::SharedSubmissionTimestamps,
     refusal_recorded: Cell<bool>,
     started: Cell<Option<Instant>>,

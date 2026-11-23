@@ -3,6 +3,8 @@
 use super::test_hooks;
 use super::Key;
 use std::{
+    cell::Cell,
+    collections::HashSet,
     fs::{self, File, Metadata, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -160,11 +162,22 @@ pub(super) fn records(directory: &Path) -> io::Result<Vec<Record>> {
     Ok(records)
 }
 
+pub(super) enum PruneDecision {
+    Discard,
+    Keep,
+    HonorPin,
+}
+
+pub(super) struct PruneResult {
+    pub(super) within_cap: bool,
+    pub(super) honored_pins: HashSet<String>,
+}
+
 pub(super) fn prune(
     directory: &Path,
     current: &Path,
-    can_discard: impl Fn(&str) -> bool,
-) -> io::Result<bool> {
+    decision: impl Fn(&str) -> PruneDecision,
+) -> io::Result<PruneResult> {
     let mut records = records(directory)?;
     let mut count = records.len();
     let mut bytes = records.iter().fold(0_u64, |sum, record| {
@@ -177,18 +190,36 @@ pub(super) fn prune(
             .cmp(&b.metadata.modified().ok())
             .then_with(|| a.path.cmp(&b.path))
     });
+    let mut honored_pins = HashSet::new();
     for record in records {
         if count <= MAX_RECORDS && bytes <= MAX_BYTES {
             break;
         }
-        if record.path != current
-            && discard_if(&record.path, &record.digest, || can_discard(&record.digest))?
-        {
+        if record.path == current {
+            continue;
+        }
+        let honored = Cell::new(false);
+        if discard_if(&record.path, &record.digest, || {
+            match decision(&record.digest) {
+                PruneDecision::Discard => true,
+                PruneDecision::Keep => false,
+                PruneDecision::HonorPin => {
+                    honored.set(true);
+                    false
+                }
+            }
+        })? {
             count -= 1;
             bytes = bytes.saturating_sub(record.metadata.len());
         }
+        if honored.get() {
+            honored_pins.insert(record.digest);
+        }
     }
-    Ok(count <= MAX_RECORDS && bytes <= MAX_BYTES)
+    Ok(PruneResult {
+        within_cap: count <= MAX_RECORDS && bytes <= MAX_BYTES,
+        honored_pins,
+    })
 }
 
 // Stage the pathname change reversibly. The final authorization after

@@ -17,7 +17,6 @@ fn key(directory: &Path, snapshot: &str) -> Key {
 fn context(key: &Key) -> Context {
     Context {
         key: key.clone(),
-        span: tracing::Span::none(),
         dispatch: tracing::dispatcher::get_default(Clone::clone),
     }
 }
@@ -31,13 +30,23 @@ fn service() -> (&'static Service, mpsc::Receiver<Work>) {
     (service, receiver)
 }
 
-fn begin(service: &'static Service, key: &Key, snapshot: &str) -> Attempt {
+fn begin(service: &'static Service, key: &Key, snapshot: &str) -> Attempt<'static> {
+    begin_with_diagnostics(service, key, snapshot, None)
+}
+
+fn begin_with_diagnostics<'a>(
+    service: &'static Service,
+    key: &Key,
+    snapshot: &str,
+    diagnostics: Option<&'a CallerDiagnostics>,
+) -> Attempt<'a> {
     let context = context(key);
-    let (registration, _) = register(service, &context, snapshot);
+    let (registration, _) = register(service, &context, snapshot, diagnostics);
     Attempt {
         service,
         context: Some(context),
         registration,
+        diagnostics,
     }
 }
 
@@ -372,7 +381,7 @@ fn copy_recovery_round4_newer_retain_waits_for_its_admitted_save() {
     assert!(notices.contains(&*path.to_string_lossy()), "{notices}");
 }
 
-fn fill_tracking(service: &'static Service, directory: &Path) -> Vec<Attempt> {
+fn fill_tracking(service: &'static Service, directory: &Path) -> Vec<Attempt<'static>> {
     (0..MAX_TRACKED)
         .map(|i| {
             let text = format!("held {i}");
@@ -510,7 +519,15 @@ fn copy_recovery_round4_disconnect_reports_abandoned_outcomes_once() {
         let last = begin(service, &key(&dir, "last pending"), "last pending");
         drop(receiver);
         last.send(retain());
-        begin(service, &key(&dir, "dead service"), "dead service").send(retain());
+        let diagnostics = CallerDiagnostics::default();
+        begin_with_diagnostics(
+            service,
+            &key(&dir, "dead service"),
+            "dead service",
+            Some(&diagnostics),
+        )
+        .send(retain());
+        diagnostics.emit();
     });
     assert!(service.registry().entries.is_empty());
     assert!(service.registry().deferred.is_empty());
@@ -530,4 +547,114 @@ fn copy_recovery_round4_disconnect_reports_abandoned_outcomes_once() {
         "{log}"
     );
     assert!(!log.contains("private content"), "{log}");
+}
+
+#[test]
+fn copy_recovery_round5_refused_latest_retain_waits_for_older_queued_save() {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-refused-latest");
+    let text = "same draft in three attempts";
+    let snapshot = key(&dir, text);
+    let (service, receiver) = service();
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let dispatch = dispatch_for(&buffer);
+    test_hooks::install(dir.clone(), || Err(io::Error::other("first save failed")));
+    tracing::dispatcher::with_default(&dispatch, || {
+        begin(service, &snapshot, text).send(retain());
+    });
+    service.step(receiver.recv().unwrap()); // Save A fails and queues Settle.
+    begin(service, &snapshot, text).send(retain()); // Save B queues behind Settle.
+    for index in 1..QUEUED_BACKUPS {
+        let payload = format!("filler {index}");
+        begin(service, &key(&dir.join("filler"), &payload), &payload).send(Outcome::Restored);
+    }
+    tracing::dispatcher::with_default(&dispatch, || {
+        begin(service, &snapshot, text).send(retain()); // C cannot enqueue a save.
+    });
+
+    drain(service, &receiver);
+    let log = output(&buffer);
+    let path = verified_records(&snapshot).unwrap().pop().unwrap();
+    let bytes = fs::read_to_string(&path).unwrap();
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(bytes, text);
+    assert!(!log.contains("bus.draft.copy_loss"), "{log}");
+    assert_eq!(
+        log.matches("bus.draft.recovery_required").count(),
+        1,
+        "{log}"
+    );
+    assert!(log.contains(&*path.to_string_lossy()), "{log}");
+}
+
+#[test]
+fn copy_recovery_round5_blocked_scan_keeps_pin_until_first_eligible_prune() {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-ordinary-blocked-prune");
+    let pane = dir.join("pane");
+    let (service, receiver) = service();
+    let mut held = Vec::new();
+    for index in 0..16 {
+        let text = format!("protected record {index}");
+        let snapshot = key(&pane, &text);
+        make_record(&snapshot, &text);
+        held.push(begin(service, &snapshot, &text));
+    }
+    held.extend(fill_tracking(service, &dir.join("held")));
+    drain(service, &receiver);
+    let text = "oldest overflow draft";
+    let snapshot = key(&pane, text);
+    let path = make_record(&snapshot, text);
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH)
+        .unwrap();
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let dispatch = dispatch_for(&buffer);
+    tracing::dispatcher::with_default(&dispatch, || {
+        begin(service, &snapshot, text).send(retain());
+    });
+    drain(service, &receiver);
+    assert_eq!(records(&pane).unwrap().len(), 17);
+    let log = output(&buffer);
+    assert!(
+        log.contains("bus.draft.recovery_required") && log.contains(&*path.to_string_lossy()),
+        "{log}"
+    );
+
+    let victim = make_record(&key(&pane, "unprotected backup"), "unprotected backup");
+    let replacement_key = key(&pane, "replacement");
+    let replacement = make_record(&replacement_key, "replacement");
+    service.enforce_retention(&replacement_key, &replacement);
+    let first_pass_kept_pin = path.exists() && !victim.exists();
+    service.enforce_retention(&replacement_key, &replacement);
+    let second_pass_evicted_pin = !path.exists();
+    fs::remove_dir_all(dir).unwrap();
+    assert!(
+        first_pass_kept_pin,
+        "the first eligible scan evicted the copy just reported"
+    );
+    assert!(
+        second_pass_evicted_pin,
+        "a pin survived after it protected its copy"
+    );
+    drop(held);
+}
+
+#[test]
+fn copy_recovery_round5_pin_releases_without_an_unrelated_save() {
+    let dir = crate::utils::test_temp::unique_temp_path("copy-idle-overflow-pin");
+    let (service, receiver) = service();
+    let held = fill_tracking(service, &dir.join("held"));
+    assert_eq!(receiver.try_iter().count(), QUEUED_BACKUPS);
+    let text = "verified overflow backup";
+    let snapshot = key(&dir.join("pane"), text);
+    let path = make_record(&snapshot, text);
+    begin(service, &snapshot, text).send(retain());
+    drain(service, &receiver);
+    let pin_released = !service.registry().overflow.contains_key(&snapshot);
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    fs::remove_dir_all(dir).unwrap();
+    assert!(pin_released, "an idle pane still occupied an overflow slot");
+    drop(held);
 }

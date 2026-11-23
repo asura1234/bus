@@ -6,8 +6,10 @@ use std::{
     thread,
 };
 
+mod caller;
 mod storage;
-use storage::{discard_if, prune, save, verified_records};
+pub(in crate::terminal::runtime::submission) use caller::CallerDiagnostics;
+use storage::{discard_if, prune, save, verified_records, PruneDecision, PruneResult};
 
 const QUEUED_BACKUPS: usize = 16;
 const MAX_TRACKED: usize = 256;
@@ -28,12 +30,11 @@ struct Key {
 #[derive(Clone)]
 struct Context {
     key: Key,
-    span: tracing::Span,
     dispatch: tracing::Dispatch,
 }
 
 enum Work {
-    Save(Context, String, u64),
+    Save(Context, String),
     Settle(Key),
     Revisit,
 }
@@ -79,7 +80,6 @@ impl Terminal {
 struct Entry {
     terminal: Terminal,
     saving: usize,
-    latest_save_pending: bool,
 }
 
 #[derive(Default)]
@@ -137,16 +137,21 @@ impl Registry {
             .is_some_and(|state| state.active == 0 && state.generation == generation)
     }
 
-    fn protected(&self, key: &Key) -> bool {
-        self.untracked != 0
+    fn prune_decision(&self, key: &Key) -> PruneDecision {
+        let overflow = self.overflow.get(key);
+        if self.untracked != 0
             || self
                 .entries
                 .get(key)
                 .is_some_and(|entry| entry.saving != 0 || entry.terminal.protected())
-            || self
-                .overflow
-                .get(key)
-                .is_some_and(|entry| entry.pin_next_prune || entry.terminal.protected())
+            || overflow.is_some_and(|entry| entry.terminal.protected())
+        {
+            PruneDecision::Keep
+        } else if overflow.is_some_and(|entry| entry.pin_next_prune) {
+            PruneDecision::HonorPin
+        } else {
+            PruneDecision::Discard
+        }
     }
 
     fn disconnect(&mut self) -> Option<Abandoned> {
@@ -237,10 +242,9 @@ impl Service {
 
     fn step(&self, work: Work) {
         match work {
-            Work::Save(context, snapshot, generation) => {
+            Work::Save(context, snapshot) => {
                 tracing::dispatcher::with_default(&context.dispatch, || {
-                    let _span = context.span.enter();
-                    self.persist(&context.key, snapshot, generation);
+                    self.persist(&context.key, snapshot);
                 });
             }
             Work::Settle(key) => self.settle(&key),
@@ -255,13 +259,13 @@ impl Service {
                         .collect::<Vec<_>>()
                 };
                 for directory in directories {
-                    self.revisit_retention(&directory);
+                    self.revisit_retention(&directory, false);
                 }
             }
         }
     }
 
-    fn persist(&self, key: &Key, snapshot: String, generation: u64) {
+    fn persist(&self, key: &Key, snapshot: String) {
         let should_save = {
             let mut registry = self.registry();
             registry.queued -= 1;
@@ -281,18 +285,15 @@ impl Service {
             let mut registry = self.registry();
             let work = registry.entries.get_mut(key).and_then(|entry| {
                 entry.saving -= 1;
-                if entry.terminal.generation == generation {
-                    entry.latest_save_pending = false;
-                }
                 entry
                     .terminal
-                    .queue_if_ready(key.clone(), entry.latest_save_pending)
+                    .queue_if_ready(key.clone(), entry.saving != 0)
             });
             registry.discard_idle(key);
             self.send_control(&mut registry, work)
         };
         report_disconnect("control_send_failed", abandoned);
-        self.revisit_retention(&key.directory);
+        self.revisit_retention(&key.directory, false);
     }
 
     fn send_control(&self, registry: &mut Registry, work: Option<Work>) -> Option<Abandoned> {
@@ -309,13 +310,14 @@ impl Service {
             let save_pending = registry
                 .entries
                 .get(key)
-                .is_some_and(|entry| entry.latest_save_pending);
+                .is_some_and(|entry| entry.saving != 0);
             let Some(state) = registry.terminal_mut(key) else {
                 return;
             };
             state.control_queued = false;
-            // An older coalesced control can precede a newer Save in the
-            // channel. Save completion will wake the latest resolution.
+            // Every admitted save for this digest can supply the latest
+            // resolution, even when that attempt could not queue its own save.
+            // The last such save will wake the control.
             if state.active == 0 && !save_pending {
                 state.settling = state.resolution.is_some();
                 state.resolution.take()
@@ -323,10 +325,10 @@ impl Service {
                 None
             }
         };
+        let mut check_idle_pin = false;
         if let Some(resolution) = resolution {
             let generation = resolution.generation;
             let pin = tracing::dispatcher::with_default(&resolution.context.dispatch, || {
-                let _span = resolution.context.span.enter();
                 let backups = verified_records(key).unwrap_or_else(|error| {
                     tracing::warn!(event = "bus.draft.copy_recovery_failed", reason = "snapshot_lookup_failed", %error, "Could not verify copied draft recovery records");
                     Vec::new()
@@ -337,6 +339,7 @@ impl Service {
             if let Some(entry) = registry.overflow.get_mut(key) {
                 if entry.terminal.generation == generation {
                     entry.pin_next_prune = pin;
+                    check_idle_pin = pin;
                 }
             }
             if let Some(state) = registry.terminal_mut(key) {
@@ -344,7 +347,7 @@ impl Service {
             }
             registry.discard_idle(key);
         }
-        self.revisit_retention(&key.directory);
+        self.revisit_retention(&key.directory, check_idle_pin);
     }
 
     fn apply_outcome(
@@ -410,7 +413,7 @@ impl Service {
         self.prune_directory(&key.directory, current);
     }
 
-    fn revisit_retention(&self, directory: &Path) {
+    fn revisit_retention(&self, directory: &Path, check_idle_pin: bool) {
         let current = self
             .registry()
             .deferred
@@ -419,24 +422,21 @@ impl Service {
             .map(|(_, path)| path.clone());
         if let Some(current) = current {
             self.prune_directory(directory, &current);
+        } else if check_idle_pin {
+            // An idle pane still needs a cap check to release its pin.
+            self.prune_directory(directory, Path::new(""));
         }
     }
 
     fn prune_directory(&self, directory: &Path, current: &Path) {
-        let untracked_seen = std::cell::Cell::new(false);
         let result = prune(directory, current, |digest| {
             let candidate = Key {
                 directory: directory.to_owned(),
                 digest: digest.to_owned(),
             };
-            let registry = self.registry();
-            if registry.untracked != 0 {
-                untracked_seen.set(true);
-            }
-            !registry.protected(&candidate)
+            self.registry().prune_decision(&candidate)
         });
-        let (evicted, error) =
-            self.record_prune_result(directory, current, result, untracked_seen.get());
+        let (evicted, error) = self.record_prune_result(directory, current, result);
         if evicted {
             tracing::warn!(
                 event = "bus.draft.copy_recovery_failed",
@@ -453,25 +453,25 @@ impl Service {
         &self,
         directory: &Path,
         current: &Path,
-        result: std::io::Result<bool>,
-        untracked_seen: bool,
+        result: std::io::Result<PruneResult>,
     ) -> (bool, Option<std::io::Error>) {
         let mut registry = self.registry();
-        if result.is_ok() && !untracked_seen {
-            // A conservatively blocked scan has not yet exercised its pins.
+        if let Ok(pass) = &result {
             registry.overflow.retain(|key, entry| {
-                if key.directory == directory {
+                if key.directory == directory
+                    && (pass.within_cap || pass.honored_pins.contains(&key.digest))
+                {
                     entry.pin_next_prune = false;
                 }
                 entry.pin_next_prune || entry.terminal.protected()
             });
         }
         match result {
-            Ok(true) => {
+            Ok(pass) if pass.within_cap => {
                 registry.deferred.retain(|(dir, _)| dir != directory);
                 (false, None)
             }
-            Ok(false) => {
+            Ok(_) => {
                 if let Some((_, path)) = registry
                     .deferred
                     .iter_mut()
@@ -536,13 +536,14 @@ enum Registration {
     Unavailable,
 }
 
-pub(super) struct Attempt {
+pub(super) struct Attempt<'a> {
     service: &'static Service,
     context: Option<Context>,
     registration: Registration,
+    diagnostics: Option<&'a CallerDiagnostics>,
 }
 
-impl Attempt {
+impl Attempt<'_> {
     pub(super) fn send(mut self, outcome: Outcome) {
         self.finish(outcome);
     }
@@ -571,18 +572,16 @@ impl Attempt {
             };
             self.service.send_control(&mut registry, work)
         };
-        report_disconnect("control_send_failed", abandoned);
-        if untracked {
-            tracing::warn!(
-                event = "bus.draft.copy_recovery_failed",
-                reason = "snapshot_overflow_outcome_dropped",
-                "Copied draft outcome could not be tracked beyond the overflow limit"
-            );
+        if let Some(diagnostics) = self.diagnostics {
+            diagnostics.disconnected("control_send_failed", abandoned);
+            if untracked {
+                diagnostics.overflow_outcome_dropped();
+            }
         }
     }
 }
 
-impl Drop for Attempt {
+impl Drop for Attempt<'_> {
     fn drop(&mut self) {
         self.finish(Outcome::Retain {
             reason: "attempt_unsettled",
@@ -601,7 +600,7 @@ fn finish_tracked(
     let save_pending = registry
         .entries
         .get(&key)
-        .is_some_and(|entry| entry.latest_save_pending);
+        .is_some_and(|entry| entry.saving != 0);
     let terminal = registry.terminal_mut(&key)?;
     terminal.active -= 1;
     if terminal.generation == generation {
@@ -615,39 +614,44 @@ fn finish_tracked(
     terminal.queue_if_ready(key, save_pending)
 }
 
-pub(super) fn start(directory: &Path, snapshot: &str) -> Option<Attempt> {
+pub(super) fn start<'a>(
+    directory: &Path,
+    snapshot: &str,
+    diagnostics: &'a CallerDiagnostics,
+) -> Option<Attempt<'a>> {
     if snapshot.is_empty() {
         return None;
     }
-    static WORKER: OnceLock<Option<Service>> = OnceLock::new();
+    static WORKER: OnceLock<std::io::Result<Service>> = OnceLock::new();
     let service = WORKER.get_or_init(|| {
         let (work, receive) = mpsc::channel();
-        let service = Service { work, registry: Default::default() };
+        let service = Service {
+            work,
+            registry: Default::default(),
+        };
         let worker = service.clone();
         thread::Builder::new()
             .name("copy-draft-recovery".into())
             .spawn(move || worker.run(receive))
             .map(|_| service)
-            .inspect_err(|error| {
-                tracing::warn!(event = "bus.draft.copy_recovery_failed", reason = "snapshot_worker_unavailable", %error, "Could not start copied draft storage");
-            })
-            .ok()
-    }).as_ref()?;
+    });
+    let service = match service {
+        Ok(service) => service,
+        Err(error) => {
+            diagnostics.startup_failed(error.to_string());
+            return None;
+        }
+    };
     let context = Context {
         key: Key {
             directory: directory.to_owned(),
             digest: crate::utils::time::digest(snapshot.as_bytes()),
         },
-        span: tracing::Span::current(),
         dispatch: tracing::dispatcher::get_default(Clone::clone),
     };
-    let (registration, skipped_reason) = register(service, &context, snapshot);
+    let (registration, skipped_reason) = register(service, &context, snapshot, Some(diagnostics));
     if let Some(reason) = skipped_reason {
-        tracing::warn!(
-            event = "bus.draft.copy_recovery_failed",
-            reason,
-            "Copied draft persistence was not queued"
-        );
+        diagnostics.admission_skipped(reason);
     }
     if matches!(registration, Registration::Unavailable) {
         return None;
@@ -656,6 +660,7 @@ pub(super) fn start(directory: &Path, snapshot: &str) -> Option<Attempt> {
         service,
         registration,
         context: Some(context),
+        diagnostics: Some(diagnostics),
     })
 }
 
@@ -663,6 +668,7 @@ fn register(
     service: &Service,
     context: &Context,
     snapshot: &str,
+    diagnostics: Option<&CallerDiagnostics>,
 ) -> (Registration, Option<&'static str>) {
     let mut registry = service.registry();
     let unavailable = (
@@ -696,24 +702,24 @@ fn register(
     let full = registry.queued >= QUEUED_BACKUPS;
     let entry = registry.entries.entry(context.key.clone()).or_default();
     entry.terminal.begin(generation);
-    entry.latest_save_pending = false;
     let reason = if snapshot.len() as u64 > crate::platform::draft_editor::MAX_BYTES {
         Some("snapshot_too_large")
     } else if full {
         Some("snapshot_worker_busy")
     } else if service
         .work
-        .send(Work::Save(context.clone(), snapshot.to_owned(), generation))
+        .send(Work::Save(context.clone(), snapshot.to_owned()))
         .is_err()
     {
         let abandoned = registry.disconnect();
         drop(registry);
-        report_disconnect("snapshot_send_failed", abandoned);
+        if let Some(diagnostics) = diagnostics {
+            diagnostics.disconnected("snapshot_send_failed", abandoned);
+        }
         return unavailable;
     } else {
         // Enqueue while registering so completion cannot overtake its save.
         entry.saving += 1;
-        entry.latest_save_pending = true;
         registry.queued += 1;
         None
     };

@@ -1033,6 +1033,7 @@ async fn claude_copy_fallback_replacement_protects_in_flight_oldest() {
 struct BlockedCopyLog {
     writer: CopyLogWriter,
     gate: SharedCopyLogGate,
+    blocked_event: &'static str,
 }
 
 type SharedCopyLogGate = std::sync::Arc<
@@ -1051,7 +1052,7 @@ impl std::io::Write for BlockedCopyLog {
 
 impl Drop for BlockedCopyLog {
     fn drop(&mut self) {
-        if String::from_utf8_lossy(&self.writer.line).contains("bus.draft.recovery_required") {
+        if String::from_utf8_lossy(&self.writer.line).contains(self.blocked_event) {
             let gate = self.gate.lock().unwrap().take();
             if let Some((started, release)) = gate {
                 started.send(()).unwrap();
@@ -1077,6 +1078,7 @@ async fn claude_copy_fallback_blocked_recovery_notice_does_not_delay_other_pane_
                     line: Vec::new(),
                 },
                 gate: gate.clone(),
+                blocked_event: "bus.draft.recovery_required",
             })
             .finish(),
     );
@@ -1114,5 +1116,81 @@ async fn claude_copy_fallback_blocked_recovery_notice_does_not_delay_other_pane_
     );
     copy_event(&second_events, "bus.draft.copy_recovery_retired");
     assert!(second_keys.try_recv().is_err());
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_blocked_overload_warning_does_not_delay_its_own_pane() {
+    use crate::terminal::runtime::copy_recovery_test_hooks as hooks;
+
+    let scratch = crate::utils::test_temp::unique_temp_path("copy-blocked-overload-pty");
+    let blocker = scratch.join("storage");
+    let (storage_started, storage_waiting) = std::sync::mpsc::channel();
+    let (release_storage, resume_storage) = std::sync::mpsc::channel();
+    hooks::install(blocker.clone(), move || {
+        storage_started.send(()).unwrap();
+        resume_storage
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        Ok(())
+    });
+    hooks::retain(&blocker, "pause the worker");
+    storage_waiting
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    for slot in 0..16 {
+        hooks::retain(&scratch.join("queued"), &format!("queued snapshot {slot}"));
+    }
+
+    let (messages, events) = std::sync::mpsc::channel();
+    let (started, waiting) = std::sync::mpsc::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    let gate = std::sync::Arc::new(std::sync::Mutex::new(Some((started, resume))));
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || BlockedCopyLog {
+                writer: CopyLogWriter {
+                    messages: messages.clone(),
+                    line: Vec::new(),
+                },
+                gate: gate.clone(),
+                blocked_event: "snapshot_worker_busy",
+            })
+            .finish(),
+    );
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime.test_submission_clock().unwrap().pause();
+    let completion = tracing::dispatcher::with_default(&dispatch, || {
+        queue_claude_copy(&runtime, scratch.join("pane"), COPIED_DRAFT)
+    });
+    drop(dispatch);
+    let delivery = tokio::time::timeout(Duration::from_secs(2), async {
+        restore_copy_message(&runtime, &mut writes).await;
+        completion
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    })
+    .await;
+    release_storage.send(()).unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    release.send(()).unwrap();
+    assert!(
+        delivery.is_ok(),
+        "the pane could not clear, submit and restore while its overload warning was blocked"
+    );
+    let diagnostic = copy_event(&events, "snapshot_worker_busy");
+    assert!(
+        diagnostic.contains("bus.draft.copy_recovery_failed"),
+        "{diagnostic}"
+    );
+    while let Ok(line) = events.recv_timeout(Duration::from_secs(5)) {
+        assert!(
+            !line.contains("snapshot_worker_busy"),
+            "duplicate diagnostic: {line}"
+        );
+    }
+    assert!(writes.try_recv().is_err());
     std::fs::remove_dir_all(scratch).unwrap();
 }
