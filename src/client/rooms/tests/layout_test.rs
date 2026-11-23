@@ -10,7 +10,10 @@ fn assert_composer_toolbar(ui: &BusUi, buffer: &ratatui::buffer::Buffer, x: u16,
     let mode = control(render::Action::DeliveryMode);
     let files = control(render::Action::Files);
     let recipients = control(render::Action::Recipients);
-    assert_eq!((mode.x, mode.y), (x, y));
+    assert_eq!((mode.x, mode.y), (x + 1, y));
+    assert_eq!(buffer[(x - 1, y)].symbol(), "│");
+    assert_eq!(buffer[(x, y)].symbol(), " ");
+    assert_eq!(ui.view.hit_at(x, y), None);
     assert_eq!((files.y, recipients.y), (y, y));
     assert_eq!(mode.width, 1, "the delivery hit is only the arrow");
     let arrow = &buffer[(mode.x, y)];
@@ -31,6 +34,9 @@ fn assert_composer_toolbar(ui: &BusUi, buffer: &ratatui::buffer::Buffer, x: u16,
         .map(|x| buffer[(x, y)].symbol())
         .collect();
     assert_eq!(hint, expected_hint);
+    let hint_x = recipients.x + 3;
+    assert_eq!(buffer[(hint_x, y)].fg, render::GREY);
+    assert_eq!(ui.view.hit_at(hint_x, y), Some(&render::Action::Recipients));
 }
 
 #[test]
