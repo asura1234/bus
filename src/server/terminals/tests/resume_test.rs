@@ -1422,7 +1422,7 @@ async fn startup_timeout_identity_survives_restart_before_any_provider_session()
                 kimi_home: None,
                 timeout_ms: Some(30_000),
             })
-            .unwrap();
+            .unwrap_or_else(|error| panic!("{}", app.agent_start_error_body(error).message));
         } else {
             app.state
                 .terminals
