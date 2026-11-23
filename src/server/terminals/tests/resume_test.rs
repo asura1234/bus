@@ -979,6 +979,99 @@ async fn suspended_restored_resume_is_not_reported_interactive() {
 }
 
 #[cfg(unix)]
+#[tokio::test]
+async fn kept_resume_pane_for_deleted_agent_does_not_report_warning() {
+    assert_kept_resume_pane_warning(true, &[]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn kept_resume_pane_for_live_mismatched_agent_still_reports_warning() {
+    assert_kept_resume_pane_warning(false, &["bus.resume.suspended"]);
+}
+
+#[cfg(unix)]
+fn assert_kept_resume_pane_warning(deleted: bool, expected_events: &[&str]) {
+    use crate::messaging::{
+        identity,
+        model::{BusState, Provider},
+        storage::state_store::JsonStore,
+    };
+    use crate::utils::error_pipe;
+    use tracing_subscriber::prelude::*;
+
+    let scratch = crate::utils::test_temp::unique_temp_path("bus-kept-resume-pane");
+    let root = scratch.as_path();
+    std::fs::create_dir_all(root).unwrap();
+    let mut state = BusState::new();
+    let room = state.create_room("work").unwrap();
+    // The server saves Claude as the harness kind, including for claude-ds.
+    let provider = if deleted {
+        Provider::ClaudeDs
+    } else {
+        Provider::Codex
+    };
+    let agent = state
+        .create_agent(room, "saved-worker", provider, root.into(), None)
+        .unwrap();
+    if deleted {
+        state.prepare_delete_agent(agent).unwrap();
+        state.delete_agent(agent, 1).unwrap();
+    }
+    JsonStore::new(root.join("state.json"))
+        .save(&state)
+        .unwrap();
+    let context = super::NativeResumeContext {
+        root: Some(root.into()),
+        session_name: Some("bus".into()),
+        config_root: root.join("herdr-config"),
+        project: root.into(),
+        binary: std::env::current_exe().unwrap(),
+    };
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("kept-resume-pane");
+    let pane = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane).unwrap().clone();
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    let agent_name = identity::managed_name(room, agent);
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent(agent_name.clone(), crate::agents::AgentKind::Claude);
+    let facts = super::terminal_resume_facts(terminal);
+    let plan = crate::messaging::coordinator::resume::unstarted_plan(&facts, None).unwrap();
+    terminal.pending_agent_resume_plan = Some(plan.clone());
+
+    let mut reporter = error_pipe::Runtime::default();
+    reporter.configure(root, Some("reporter"));
+    let subscriber =
+        tracing_subscriber::registry().with(error_pipe::CaptureLayer::new(root.join("server.log")));
+    tracing::subscriber::with_default(subscriber, || {
+        let prepared = super::prepare_native_resume(context, &facts, &plan);
+        assert!(app.start_prepared_agent_resume(
+            super::PendingAgentResumeCandidate {
+                pane_id: pane,
+                terminal_id: terminal_id.clone(),
+                cwd: root.into(),
+                plan,
+                rows: 30,
+                cols: 100,
+            },
+            prepared,
+        ));
+    });
+
+    let terminal = &app.state.terminals[&terminal_id];
+    assert_eq!(terminal.agent_name.as_deref(), Some(agent_name.as_str()));
+    assert!(terminal.pending_agent_resume_plan.is_none());
+    assert!(app.terminal_runtimes.get(&terminal_id).is_none());
+    let records = error_pipe::drain(root).unwrap();
+    let events: Vec<_> = records.iter().map(|record| record.event.as_str()).collect();
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(events, expected_events);
+}
+
+#[cfg(unix)]
 fn native_attempt_app(
     kind: crate::agents::AgentKind,
     label: &str,

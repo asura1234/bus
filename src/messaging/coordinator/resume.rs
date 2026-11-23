@@ -7,6 +7,7 @@ mod capture;
 pub(crate) use capture::load;
 pub(crate) use capture::{
     for_native_resume, revalidate, LaunchExtras, NativeResumeContext, NativeResumeFacts,
+    RETIRED_OWNER,
 };
 
 /// Sessionless managed providers keep their empty launch across restore.
