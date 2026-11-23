@@ -236,8 +236,9 @@ with room/provider context; affected agents and tasks stay saved.
 
 MASTER requires --orchestrates ROOM (one orchestrator per work room, binding for
 life); --orchestrates and custom system prompts are MASTER-only. Claude Code,
-Codex, Cursor, Grok and Kimi can orchestrate. Codex cannot wake on background
-command completion; use foreground bounded waits or ordinary worker messages.
+Claude DS, Claude Argon, Codex, Cursor, Grok and Kimi can orchestrate. Codex cannot
+wake on background command completion; use foreground bounded waits or ordinary
+worker messages.
 Default prompt is built in (orchestration/prompt.md); --system-prompt TEXT or
 --system-prompt-file PATH replaces it (mutually exclusive). Bus fills {{ROOM_NAME}},
 {{ROOM_ID}}, {{AGENT_NAME}}, {{DOCS}} (the session's <BUS_DATA_DIR>/docs/) and
