@@ -80,6 +80,7 @@ pub(super) fn provider_choices(orchestrator: bool) -> Vec<Provider> {
             Provider::ClaudeCode,
             Provider::ClaudeDs,
             Provider::ClaudeArgon,
+            Provider::ClaudeGpt,
             Provider::Codex,
             Provider::Cursor,
             Provider::Grok,
@@ -91,6 +92,7 @@ pub(super) fn provider_choices(orchestrator: bool) -> Vec<Provider> {
             Provider::ClaudeCode,
             Provider::ClaudeDs,
             Provider::ClaudeArgon,
+            Provider::ClaudeGpt,
             Provider::Cursor,
             Provider::Grok,
             Provider::Kimi,
@@ -99,10 +101,15 @@ pub(super) fn provider_choices(orchestrator: bool) -> Vec<Provider> {
     };
     let has_claude_argon =
         crate::agents::providers::launch::binary_available(Provider::ClaudeArgon);
+    let has_claude_gpt = crate::agents::providers::launch::binary_available(Provider::ClaudeGpt);
     choices
         .iter()
         .copied()
-        .filter(|choice| *choice != Provider::ClaudeArgon || has_claude_argon)
+        .filter(|choice| match choice {
+            Provider::ClaudeArgon => has_claude_argon,
+            Provider::ClaudeGpt => has_claude_gpt,
+            _ => true,
+        })
         .collect()
 }
 

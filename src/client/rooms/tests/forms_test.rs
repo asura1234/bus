@@ -1360,114 +1360,126 @@ fn form_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
 
 #[test]
 fn provider_menu_stays_below_the_model_field_and_before_pwd() {
-    let bin = crate::utils::test_temp::unique_temp_path("bus-claude-argon-picker");
+    let bin = crate::utils::test_temp::unique_temp_path("bus-claude-wrapper-picker");
     std::fs::create_dir(&bin).unwrap();
     let _path = crate::utils::env::PathOverride::set(&bin);
+    let wrappers = [
+        (Provider::ClaudeArgon, "claude-argon", "Claude Argon"),
+        (Provider::ClaudeGpt, "claude-gpt", "Claude GPT"),
+    ];
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::NewAgent);
     ui.action(render::Action::Add);
     ui.action(render::Action::Field(1));
-    assert!(!form_rows(&mut ui, 100, 30)
-        .iter()
-        .any(|row| row.contains("Claude Argon")));
-    let wrapper = bin.join("claude-argon");
-    std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert!(!forms::provider_choices(false).contains(&Provider::ClaudeArgon));
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    for (provider, executable, label) in wrappers {
+        let wrapper = bin.join(executable);
+        std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert!(!forms::provider_choices(false).contains(&provider));
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert!(forms::provider_choices(false).contains(&provider));
+        assert!(forms::provider_choices(true).contains(&provider));
+        assert!(!form_rows(&mut ui, 100, 30)
+            .iter()
+            .any(|row| row.contains(label)));
     }
-    assert!(forms::provider_choices(true).contains(&Provider::ClaudeArgon));
-    assert!(!form_rows(&mut ui, 100, 30)
-        .iter()
-        .any(|row| row.contains("Claude Argon")));
     ui.action(render::Action::Cancel);
     ui.action(render::Action::NewAgent);
     ui.action(render::Action::Field(1));
     let short = form_rows(&mut ui, 100, 23);
-    for label in ["Claude Argon", "Cancel (Esc)", "Add (Enter)"] {
+    for label in ["Claude Argon", "Claude GPT", "Cancel (Esc)", "Add (Enter)"] {
         assert!(short.iter().any(|row| row.contains(label)), "{short:?}");
     }
-    for action in [render::Action::Cancel, render::Action::Add] {
-        assert!(ui.view.hits.iter().any(|hit| hit.action == action));
-    }
-    assert!(form_rows(&mut ui, 100, 30)
-        .iter()
-        .any(|row| row.contains("Claude Argon")));
-    let model = ui
-        .view
-        .hits
-        .iter()
-        .find(|hit| hit.action == render::Action::Field(1))
-        .unwrap()
-        .rect;
-    let pwd = ui
-        .view
-        .hits
-        .iter()
-        .find(|hit| hit.action == render::Action::Field(2))
-        .unwrap()
-        .rect;
-    for provider in [
-        Provider::Codex,
-        Provider::ClaudeCode,
-        Provider::ClaudeDs,
-        Provider::ClaudeArgon,
-        Provider::Cursor,
-        Provider::Grok,
-        Provider::Kimi,
-        Provider::Agy,
-    ] {
-        let rect = ui
-            .view
+    let rect_for = |ui: &BusUi, action| {
+        ui.view
             .hits
             .iter()
-            .find(|hit| hit.action == render::Action::Provider(provider))
+            .find(|hit| hit.action == action)
             .unwrap()
-            .rect;
-        assert!(!model.intersects(rect), "{provider:?} covers Model");
-        assert!(!pwd.intersects(rect), "{provider:?} covers PWD");
+            .rect
+    };
+    let model = rect_for(&ui, render::Action::Field(1));
+    let pwd = rect_for(&ui, render::Action::Field(2));
+    for provider in forms::provider_choices(false) {
+        let rect = rect_for(&ui, render::Action::Provider(provider));
+        assert!(model.bottom() <= rect.y, "{provider:?} covers Model");
+        assert!(rect.bottom() <= pwd.y, "{provider:?} covers PWD");
     }
-    for _ in 0..3 {
-        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    for (index, (provider, _, _)) in wrappers.into_iter().enumerate() {
+        ui.action(render::Action::Field(1));
+        if index == 0 {
+            for _ in 0..3 {
+                key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+            }
+        } else {
+            key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+        }
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(
+            ui.form,
+            Some(forms::Form::Agent { provider: Some(selected), field: 2, .. }) if selected == provider
+        ));
     }
-    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert!(matches!(
-        ui.form,
-        Some(forms::Form::Agent {
-            provider: Some(Provider::ClaudeArgon),
-            ..
-        })
-    ));
-    ui.action(render::Action::Field(1));
-    form_rows(&mut ui, 100, 23);
-    let wrapper_hit = ui
-        .view
-        .hits
-        .iter()
-        .find(|hit| hit.action == render::Action::Provider(Provider::ClaudeArgon))
-        .unwrap();
-    ui.action(wrapper_hit.action.clone());
-    assert!(matches!(
-        ui.form,
-        Some(forms::Form::Agent {
-            provider: Some(Provider::ClaudeArgon),
-            field: 2,
-            ..
-        })
-    ));
-    std::fs::remove_dir_all(bin).unwrap();
-    ui.action(render::Action::Field(1));
-    assert!(form_rows(&mut ui, 100, 30)
-        .iter()
-        .any(|row| row.contains("Claude Argon")));
+
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    state.create_room("work").unwrap();
+    let mut ui = BusUi::new(Arc::new(BusSnapshot {
+        state,
+        revision: 0,
+        last_command_id: 0,
+        error: None,
+    }));
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    for (provider, executable, label) in wrappers {
+        ui.action(render::Action::Field(1));
+        let short = form_rows(&mut ui, 100, 23);
+        for label in ["Claude Argon", "Claude GPT", "Cancel (Esc)", "Add (Enter)"] {
+            assert!(short.iter().any(|row| row.contains(label)), "{short:?}");
+        }
+        for action in [render::Action::Cancel, render::Action::Add] {
+            let rect = rect_for(&ui, action.clone());
+            assert!(rect.y < 23);
+            assert_eq!(ui.view.hit_at(rect.x, rect.y), Some(&action));
+        }
+        let rect = rect_for(&ui, render::Action::Provider(provider));
+        mouse(
+            &mut ui,
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            rect.x,
+            rect.y,
+        );
+        assert!(matches!(
+            ui.form,
+            Some(forms::Form::Agent { provider: Some(selected), field: 2, .. }) if selected == provider
+        ));
+        std::fs::remove_file(bin.join(executable)).unwrap();
+        ui.action(render::Action::Field(1));
+        let rows = form_rows(&mut ui, 100, 23);
+        let rect = rect_for(&ui, render::Action::Provider(provider));
+        assert!(rows[usize::from(rect.y)].contains(label));
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(
+            ui.form,
+            Some(forms::Form::Agent { provider: Some(selected), .. }) if selected == provider
+        ));
+    }
     ui.action(render::Action::Cancel);
     ui.action(render::Action::NewAgent);
     ui.action(render::Action::Field(1));
-    assert!(!form_rows(&mut ui, 100, 30)
-        .iter()
-        .any(|row| row.contains("Claude Argon")));
+    form_rows(&mut ui, 100, 23);
+    for (provider, _, _) in wrappers {
+        assert!(!ui
+            .view
+            .hits
+            .iter()
+            .any(|hit| hit.action == render::Action::Provider(provider)));
+    }
+    std::fs::remove_dir(bin).unwrap();
 }
 
 #[test]

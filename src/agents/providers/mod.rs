@@ -36,6 +36,8 @@ pub(crate) enum ProviderKind {
     ClaudeDs,
     /// Argon wrapper around the Claude Code CLI.
     ClaudeArgon,
+    /// Magpie GPT wrapper around the Claude Code CLI.
+    ClaudeGpt,
     Cursor,
     Grok,
     Kimi,
@@ -53,6 +55,7 @@ impl ProviderKind {
             Self::ClaudeCode => "claude",
             Self::ClaudeDs => "claude-ds",
             Self::ClaudeArgon => "claude-argon",
+            Self::ClaudeGpt => "claude-gpt",
             Self::Cursor => "cursor",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
@@ -69,6 +72,7 @@ impl ProviderKind {
             Self::ClaudeCode => "claude",
             Self::ClaudeDs => "claude-ds",
             Self::ClaudeArgon => "claude-argon",
+            Self::ClaudeGpt => "claude-gpt",
             Self::Cursor => "cursor-agent",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
@@ -81,14 +85,20 @@ impl ProviderKind {
     /// Claude Code and its wrappers share hook parsing, screen detection,
     /// composer submission, resume, settings, and dialogs.
     pub(crate) const fn uses_claude_harness(self) -> bool {
-        matches!(self, Self::ClaudeCode | Self::ClaudeDs | Self::ClaudeArgon)
+        matches!(
+            self,
+            Self::ClaudeCode | Self::ClaudeDs | Self::ClaudeArgon | Self::ClaudeGpt
+        )
     }
 
     /// A live pane reports `claude` after the wrapper execs the Claude CLI.
     pub(crate) fn observes_label(self, label: &str) -> bool {
         label == self.label()
             || (self.uses_claude_harness()
-                && matches!(label, "claude" | "claude-ds" | "claude-argon"))
+                && matches!(
+                    label,
+                    "claude" | "claude-ds" | "claude-argon" | "claude-gpt"
+                ))
     }
 }
 
@@ -98,9 +108,10 @@ pub(crate) fn parse(
 ) -> Result<spool::Parsed, String> {
     match provider {
         ProviderKind::Codex => codex::hooks::parse(value),
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => {
-            claude_code::hooks::parse(value)
-        }
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => claude_code::hooks::parse(value),
         ProviderKind::Cursor => cursor::hooks::parse(value),
         ProviderKind::Grok => grok::hooks::parse(value),
         ProviderKind::Kimi => kimi::hooks::parse(value),

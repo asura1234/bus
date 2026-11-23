@@ -1447,8 +1447,8 @@ fn original_provider_resume_preserves_argv_with_grok_environment_present() {
     }
 }
 
-#[test]
-fn startup_timeout_identity_survives_restart_before_any_provider_session() {
+#[tokio::test]
+async fn startup_timeout_identity_survives_restart_before_any_provider_session() {
     use crate::agents::{AgentKind, AgentState};
     use std::{
         sync::Arc,
@@ -1457,6 +1457,7 @@ fn startup_timeout_identity_survives_restart_before_any_provider_session() {
     for (kind, wrapper) in [
         (AgentKind::Claude, None),
         (AgentKind::Claude, Some("claude-argon")),
+        (AgentKind::Claude, Some("claude-gpt")),
         (AgentKind::Codex, None),
         (AgentKind::Cursor, None),
         (AgentKind::Grok, None),
@@ -1468,16 +1469,39 @@ fn startup_timeout_identity_survives_restart_before_any_provider_session() {
         let id = workspace.terminal_id(pane).unwrap().clone();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
-        let terminal = app.state.terminals.get_mut(&id).unwrap();
-        terminal.launch_argv = wrapper.map(|name| vec![name.into()]);
         let now = Instant::now();
-        terminal.begin_managed_agent(
-            "bus-r1-a2".into(),
-            kind,
-            now,
-            Duration::ZERO,
-            Duration::from_secs(30),
-        );
+        let mut writes = None;
+        if let Some(wrapper) = wrapper {
+            app.state.active = Some(0);
+            let pane_id = app.pane_info(0, pane).unwrap().pane_id;
+            let (runtime, receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+            writes = Some(receiver);
+            app.terminal_runtimes.insert(id.clone(), runtime);
+            app.start_agent(crate::protocol::api::schema::AgentStartParams {
+                name: "bus-r1-a2".into(),
+                kind: wrapper.into(),
+                pane_id,
+                args: vec!["--settings".into(), "saved settings.json".into()],
+                executable: Some(wrapper.into()),
+                grok_home: None,
+                kimi_home: None,
+                timeout_ms: Some(30_000),
+            })
+            .unwrap_or_else(|error| panic!("{}", app.agent_start_error_body(error).message));
+        } else {
+            app.state
+                .terminals
+                .get_mut(&id)
+                .unwrap()
+                .begin_managed_agent(
+                    "bus-r1-a2".into(),
+                    kind,
+                    now,
+                    Duration::ZERO,
+                    Duration::from_secs(30),
+                );
+        }
+        let terminal = app.state.terminals.get_mut(&id).unwrap();
         terminal.set_detected_state(Some(kind), AgentState::Unknown);
         terminal.reconcile_managed_agent_at(now + Duration::from_secs(31), false);
         let snapshot = crate::server::persistence::capture(
@@ -1515,6 +1539,7 @@ fn startup_timeout_identity_survives_restart_before_any_provider_session() {
                 Some(wrapper)
             );
         }
+        drop(writes);
     }
 }
 

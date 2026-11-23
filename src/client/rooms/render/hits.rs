@@ -94,6 +94,7 @@ impl BusUi {
             Action::Provider(Provider::ClaudeCode) => "provider:claude".into(),
             Action::Provider(Provider::ClaudeDs) => "provider:claude-ds".into(),
             Action::Provider(Provider::ClaudeArgon) => "provider:claude-argon".into(),
+            Action::Provider(Provider::ClaudeGpt) => "provider:claude-gpt".into(),
             Action::Provider(Provider::Codex) => "provider:codex".into(),
             Action::Provider(Provider::Cursor) => "provider:cursor".into(),
             Action::Provider(Provider::Grok) => "provider:grok".into(),

@@ -68,15 +68,18 @@ pub(crate) const fn executable(provider: ProviderKind) -> &'static str {
     provider.executable()
 }
 
-/// Grok preparation validates and prepends the selected alias directory. Carry
-/// that exact absolute alias into the eventual shell command, rather than
-/// allowing shell startup PATH edits or functions to choose another `grok`.
+/// Carry a selected provider executable into the pane's shell command.
 pub(crate) fn selected_executable(
     provider: ProviderKind,
     env: &HashMap<String, String>,
 ) -> Result<Option<String>, String> {
     if matches!(provider, ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon) {
         return Ok(Some(provider.executable().to_owned()));
+    }
+    if provider == ProviderKind::ClaudeGpt {
+        let path = crate::utils::env::resolve_on_path(provider.executable())
+            .ok_or("No executable claude-gpt found on PATH")?;
+        return checked_executable(&path).map(Some);
     }
     if !matches!(
         provider,
@@ -92,22 +95,26 @@ pub(crate) fn selected_executable(
         .and_then(|path| std::env::split_paths(path).next())
         .filter(|path| path.is_absolute())
         .ok_or("Provider launch is missing its selected executable directory")?;
-    let path = directory.join(provider.executable());
+    checked_executable(&directory.join(provider.executable())).map(Some)
+}
+
+fn checked_executable(path: &Path) -> Result<String, String> {
     let path = path
         .to_str()
         .ok_or("Provider executable path is not UTF-8")?;
     if path.chars().any(char::is_control) {
         return Err("Provider executable path contains control characters".into());
     }
-    Ok(Some(path.to_owned()))
+    Ok(path.to_owned())
 }
 
 pub(crate) fn runtime_args(provider: ProviderKind) -> Vec<String> {
     match provider {
         ProviderKind::Codex => codex::launch::runtime_args(),
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => {
-            claude_code::launch::runtime_args()
-        }
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => claude_code::launch::runtime_args(),
         ProviderKind::Cursor => cursor::launch::runtime_args(),
         ProviderKind::Grok => grok::launch::runtime_args(),
         ProviderKind::Kimi | ProviderKind::Agy => Vec::new(),
@@ -122,6 +129,7 @@ pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
         "claude" => Some(ProviderKind::ClaudeCode),
         "claude-ds" => Some(ProviderKind::ClaudeDs),
         "claude-argon" => Some(ProviderKind::ClaudeArgon),
+        "claude-gpt" => Some(ProviderKind::ClaudeGpt),
         "cursor" => Some(ProviderKind::Cursor),
         "kimi" => Some(ProviderKind::Kimi),
         "agy" => Some(ProviderKind::Agy),
@@ -140,7 +148,10 @@ pub(crate) fn native_provider(label: &str) -> Option<ProviderKind> {
 /// environment setting; user/project settings can also override inherited env.
 pub(crate) fn runtime_env(provider: ProviderKind) -> Vec<(String, String)> {
     match provider {
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => vec![(
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => vec![(
             "DISABLE_AUTOUPDATER".into(),
             std::env::var("DISABLE_AUTOUPDATER").unwrap_or_else(|_| "1".into()),
         )],
@@ -171,6 +182,7 @@ pub(crate) fn apply_run_permissions(provider: ProviderKind, args: &mut Vec<Strin
         ProviderKind::ClaudeCode
         | ProviderKind::ClaudeDs
         | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt
         | ProviderKind::Agy => (
             "--dangerously-skip-permissions",
             &["--dangerously-skip-permissions"],
@@ -198,9 +210,10 @@ pub(crate) fn take_adopted_session(
 ) -> Result<Option<String>, String> {
     match provider {
         ProviderKind::Codex => codex::launch::take_adopted_session(args),
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => {
-            claude_code::launch::take_adopted_session(args)
-        }
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => claude_code::launch::take_adopted_session(args),
         ProviderKind::Cursor => cursor::launch::take_adopted_session(args),
         ProviderKind::Grok => grok::launch::take_adopted_session(args),
         ProviderKind::Kimi => kimi::launch::take_adopted_session(args),
@@ -213,9 +226,10 @@ pub(crate) fn take_adopted_session(
 fn resume_args(provider: ProviderKind, session: &str) -> Vec<String> {
     match provider {
         ProviderKind::Codex => codex::launch::resume_args(session),
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => {
-            claude_code::launch::resume_args(session)
-        }
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => claude_code::launch::resume_args(session),
         ProviderKind::Cursor => cursor::launch::resume_args(session),
         ProviderKind::Grok => grok::launch::resume_args(session),
         ProviderKind::Kimi => kimi::launch::resume_args(session),
@@ -311,7 +325,10 @@ pub(crate) fn extend_generated_args(
     let flag = match provider {
         ProviderKind::Codex => Some("--no-daemon"),
         ProviderKind::Cursor => Some("--disable-auto-update"),
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => None,
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => None,
         ProviderKind::Grok | ProviderKind::Kimi | ProviderKind::Agy => None,
         #[cfg(feature = "dev-tools")]
         ProviderKind::Fake => None,
@@ -357,7 +374,10 @@ pub(crate) fn validate_args(provider: ProviderKind, args: &[String]) -> Result<(
         let arg = args[index].as_str();
         let incompatible = match provider {
             ProviderKind::Codex => matches!(arg, "exec" | "e" | "review"),
-            ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => {
+            ProviderKind::ClaudeCode
+            | ProviderKind::ClaudeDs
+            | ProviderKind::ClaudeArgon
+            | ProviderKind::ClaudeGpt => {
                 matches!(
                     arg,
                     "-p" | "--print" | "--bg" | "--background" | "--bare" | "--safe-mode"
@@ -432,6 +452,9 @@ pub(crate) fn binary_available(provider: ProviderKind) -> bool {
     if provider == ProviderKind::Kimi && kimi::launch::source_binary_available() {
         return true;
     }
+    if provider == ProviderKind::ClaudeGpt {
+        return crate::utils::env::resolve_on_path(executable(provider)).is_some();
+    }
     executable_available(executable(provider))
 }
 
@@ -467,7 +490,10 @@ pub(crate) fn setup_notice(
     let root = project_root(cwd);
     let notice = match provider {
         ProviderKind::Codex => Some(codex::launch::setup_notice(&root)),
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => None,
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => None,
         ProviderKind::Cursor => Some(cursor::launch::setup_notice(&root)),
         ProviderKind::Grok => Some(grok::launch::setup_notice(&root)),
         ProviderKind::Agy => Some(agy::launch::setup_notice(&root)),
@@ -537,9 +563,10 @@ pub(crate) fn prepare(
     }
     apply_run_permissions(spec.provider, &mut args);
     match spec.provider {
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeArgon => {
-            claude_code::launch::prepare(spec, cwd, args, adopted_session)
-        }
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => claude_code::launch::prepare(spec, cwd, args, adopted_session),
         ProviderKind::Codex | ProviderKind::Cursor => Ok(PreparedLaunch {
             cwd,
             args,

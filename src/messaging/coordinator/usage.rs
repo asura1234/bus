@@ -59,6 +59,7 @@ pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
     pub(crate) claude: Option<UsageSnapshot>,
     claude_argon: Option<UsageSnapshot>,
+    claude_gpt: Option<UsageSnapshot>,
     agy: Option<UsageSnapshot>,
     cursor: Option<CursorUsageSnapshot>,
     cursor_errors: BTreeMap<AgentId, CursorUsageSnapshot>,
@@ -72,6 +73,7 @@ impl Default for Usage {
             codex: None,
             claude: None,
             claude_argon: None,
+            claude_gpt: None,
             agy: None,
             cursor: None,
             cursor_errors: BTreeMap::new(),
@@ -88,6 +90,7 @@ impl Usage {
             Provider::Codex => self.codex.as_ref(),
             Provider::ClaudeCode | Provider::ClaudeDs => self.claude.as_ref(),
             Provider::ClaudeArgon => self.claude_argon.as_ref(),
+            Provider::ClaudeGpt => self.claude_gpt.as_ref(),
             Provider::Agy => self.agy.as_ref(),
             _ => None,
         }?;
@@ -110,6 +113,7 @@ impl Usage {
             ("codex", &self.codex),
             ("claude", &self.claude),
             ("claude-argon", &self.claude_argon),
+            ("claude-gpt", &self.claude_gpt),
             ("agy", &self.agy),
         ] {
             let Some(snapshot) = snapshot else {
@@ -150,6 +154,7 @@ impl Usage {
         let now_ms = bus_io::now_ms();
         json!({
             "claude": self.claude_json(now_ms),
+            "claude-gpt": statusline_json(&self.claude_gpt, "Claude GPT", now_ms),
             "codex": match &self.codex {
                 None => unknown("No Codex turn has reported rate limits since Bus started"),
                 Some(snapshot) => json!({
@@ -243,12 +248,12 @@ impl Usage {
     }
 
     fn merge_claude(&mut self, record: Observation, observed_by_agent: AgentId) {
-        let snapshot = if record.manifest.provider == Provider::ClaudeArgon {
-            &mut self.claude_argon
-        } else {
-            &mut self.claude
+        let slot = match record.manifest.provider {
+            Provider::ClaudeArgon => &mut self.claude_argon,
+            Provider::ClaudeGpt => &mut self.claude_gpt,
+            _ => &mut self.claude,
         };
-        merge_snapshot(snapshot, self.started_at_ms, record, observed_by_agent);
+        merge_snapshot(slot, self.started_at_ms, record, observed_by_agent);
     }
 
     pub(crate) fn refresh_agy(&mut self, agent: &RoomAgent, spool: &Path) {

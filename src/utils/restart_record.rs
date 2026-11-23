@@ -282,6 +282,7 @@ pub(crate) fn identity_json() -> String {
     serde_json::json!({
         "sha": env!("BUS_BUILD_SHA"),
         "providers": ["claude", "claude-ds", "claude-argon", "codex", "cursor", "grok", "kimi", "agy"],
+        "providers": ["claude", "claude-ds", "claude-gpt", "codex", "cursor", "grok", "kimi", "agy"],
     })
     .to_string()
 }
@@ -611,6 +612,7 @@ mod tests {
                 "claude",
                 "claude-ds",
                 "claude-argon",
+                "claude-gpt",
                 "codex",
                 "cursor",
                 "grok",

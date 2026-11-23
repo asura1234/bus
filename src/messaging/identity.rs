@@ -10,6 +10,7 @@ pub(crate) const fn provider_kind(provider: Provider) -> ProviderKind {
         Provider::ClaudeCode => ProviderKind::ClaudeCode,
         Provider::ClaudeDs => ProviderKind::ClaudeDs,
         Provider::ClaudeArgon => ProviderKind::ClaudeArgon,
+        Provider::ClaudeGpt => ProviderKind::ClaudeGpt,
         Provider::Cursor => ProviderKind::Cursor,
         Provider::Grok => ProviderKind::Grok,
         Provider::Kimi => ProviderKind::Kimi,

@@ -99,7 +99,7 @@ impl Worker {
     }
 
     fn prepare_unsubmitted_launch(&self, agent: &RoomAgent) -> Result<LaunchBinding, String> {
-        if agent.provider == Provider::ClaudeArgon {
+        if matches!(agent.provider, Provider::ClaudeArgon | Provider::ClaudeGpt) {
             let executable = crate::agents::providers::launch::selected_executable(
                 identity::provider_kind(agent.provider),
                 &Default::default(),

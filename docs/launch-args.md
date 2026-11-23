@@ -5,6 +5,9 @@
 See [Claude Argon setup](../orchestration/providers/claude-argon.md) to run
 the Claude Code harness against an Argon gateway.
 
+See [Claude GPT setup](../orchestration/providers/claude-gpt.md) to run
+the Claude Code harness against a local Magpie gateway.
+
 Provider add, resume and native restart share one interactive-shell launch path.
 Bus-created zsh, bash, fish and PowerShell panes retain normal prompt hooks
 (including direnv) and shell functions. Bus waits for its private primary-editor

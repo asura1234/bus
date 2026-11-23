@@ -179,7 +179,9 @@ impl BusUi {
             cwd,
             args,
             field,
+            provider_cursor,
             provider_choices,
+            prompt,
             ..
         } = form
         else {
@@ -187,8 +189,19 @@ impl BusUi {
         };
         let x = main.x + 3;
         let width = main.width.saturating_sub(6);
-        let mut y = 3;
-        let gap = agent_form_gap(main, form);
+        let choices = if *field == 1 {
+            provider_choices.as_slice()
+        } else {
+            &[]
+        };
+        let picker_rows = choices.len() as u16;
+        let gap = agent_form_gap(main, form, picker_rows);
+        // Reclaim the top spacer when the MASTER form needs it for the footer.
+        let mut y = if prompt.is_some() && picker_rows > 0 && main.height <= 15 + picker_rows {
+            2
+        } else {
+            3
+        };
         for (index, label, editor) in [
             (0, "Name", Some(name)),
             (1, "Agent", None),
@@ -219,8 +232,16 @@ impl BusUi {
                     false,
                 );
             }
-            if index == 1 && *field == 1 {
-                y += provider_choices.len() as u16;
+            if index == 1 {
+                for &kind in choices {
+                    y += 1;
+                    view.overlay_row(
+                        Rect::new(x, y, width, 1),
+                        provider(kind).to_owned(),
+                        Some(Action::Provider(kind)),
+                        *provider_cursor == kind,
+                    );
+                }
             }
             y += gap;
         }
@@ -363,24 +384,6 @@ impl BusUi {
                 index == self.suggestions.selected,
                 true,
             );
-        }
-        if let Form::Agent {
-            provider_cursor,
-            field: 1,
-            provider_choices,
-            ..
-        } = form
-        {
-            // Below the Agent field's value row.
-            let top = 6 + agent_form_gap(main, form);
-            for (index, &kind) in provider_choices.iter().enumerate() {
-                view.overlay_row(
-                    Rect::new(x, top + index as u16, width, 1),
-                    provider(kind).to_owned(),
-                    Some(Action::Provider(kind)),
-                    *provider_cursor == kind,
-                );
-            }
         }
     }
 }

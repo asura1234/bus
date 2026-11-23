@@ -24,7 +24,7 @@ fn claude_wrapper_launch_target(path: &str) -> bool {
     let file_name = std::path::Path::new(path)
         .file_name()
         .and_then(|name| name.to_str());
-    matches!(file_name, Some("claude-ds" | "claude-argon"))
+    matches!(file_name, Some("claude-ds" | "claude-argon" | "claude-gpt"))
         && !path.chars().any(char::is_control)
         && (file_name == Some(path) || std::path::Path::new(path).is_absolute())
 }
@@ -363,6 +363,13 @@ impl App {
             } else {
                 AgentStartError::InputFailed(err.to_string())
             });
+        }
+        if params.kind == "claude-gpt"
+            && std::path::Path::new(&argv[0])
+                .file_name()
+                .is_some_and(|name| name == "claude-gpt")
+        {
+            terminal.launch_argv = Some(argv.clone());
         }
         runtime.bind_kimi_code_home(kimi_code_home);
         if let Some(session) = persisted_agent_session {

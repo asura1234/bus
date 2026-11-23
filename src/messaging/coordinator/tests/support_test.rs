@@ -14,6 +14,7 @@ pub(in crate::messaging::coordinator) fn provider_binaries() -> ProviderBinaries
         "claude",
         "claude-ds",
         "claude-argon",
+        "claude-gpt",
         "codex",
         "cursor-agent",
     ] {

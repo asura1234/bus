@@ -334,6 +334,7 @@ fn agent_cli() -> Command {
                     "claude",
                     "claude-ds",
                     "claude-argon",
+                    "claude-gpt",
                     "codex",
                     "cursor",
                     "grok",

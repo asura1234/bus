@@ -28,14 +28,18 @@ fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeRes
 fn managed_resume_label(kind: crate::agents::AgentKind, argv: Option<&[String]>) -> &'static str {
     // The Claude process has a shared native kind. The recorded launch argv
     // distinguishes the wrapper until the room and callback owner are verified.
-    let label = crate::agents::providers::ProviderKind::ClaudeArgon.label();
-    if kind == crate::agents::AgentKind::Claude
-        && argv
+    if kind == crate::agents::AgentKind::Claude {
+        let executable = argv
             .and_then(|argv| argv.first())
-            .and_then(|command| std::path::Path::new(command).file_name())
-            .is_some_and(|name| name == label)
-    {
-        return label;
+            .and_then(|command| std::path::Path::new(command).file_name());
+        for provider in [
+            crate::agents::providers::ProviderKind::ClaudeArgon,
+            crate::agents::providers::ProviderKind::ClaudeGpt,
+        ] {
+            if executable.is_some_and(|name| name == provider.executable()) {
+                return provider.label();
+            }
+        }
     }
     crate::agents::agent_label(kind)
 }
@@ -161,7 +165,14 @@ impl PreparedResume {
         let provider_argv = matches!(plan.agent.as_str(), "grok" | "kimi")
             .then(|| resume_argv(plan, &extras))
             .transpose()?;
-        let (argv, env) = resume_launch_inputs(plan, extras);
+        let (mut argv, env) = resume_launch_inputs(plan, extras);
+        if plan.agent == "claude-gpt" {
+            argv[0] = crate::agents::providers::launch::selected_executable(
+                crate::agents::providers::ProviderKind::ClaudeGpt,
+                &Default::default(),
+            )?
+            .ok_or("Claude GPT resume has no selected executable")?;
+        }
         Ok(Self {
             session,
             inputs: (provider_argv.unwrap_or(argv), env),

@@ -95,7 +95,14 @@ impl Worker {
             crate::messaging::model::LaunchKind::Create,
         )?;
         state.copy_launch_ledger_from(&self.state);
-        let checked = self.ensure_provider_binary(input.room, input.provider);
+        let checked = self
+            .ensure_provider_binary(input.room, input.provider)
+            .map_err(|error| {
+                if input.provider != Provider::ClaudeGpt {
+                    return error;
+                }
+                "Bus found no executable 'claude-gpt' on PATH. Follow the wrapper setup and execute-permission steps in orchestration/providers/claude-gpt.md, then retry adding the agent.".to_owned()
+            });
         self.track_launch_result(attempt, "missing_executable", checked)?;
         let prepared = self.prepare_provider_launch(&input, id);
         let (mut prepared, hooks) =
@@ -304,7 +311,11 @@ impl Worker {
         super::launch_metrics::bind_current(&mut state, id);
         if matches!(
             provider,
-            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeArgon | Provider::Kimi
+            Provider::ClaudeCode
+                | Provider::ClaudeDs
+                | Provider::ClaudeArgon
+                | Provider::ClaudeGpt
+                | Provider::Kimi
         ) || launch::provider_kind(provider) == "fake"
         {
             state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
@@ -319,9 +330,10 @@ impl Worker {
                         | Provider::Grok
                         | Provider::Kimi
                         | Provider::Agy => crate::messaging::model::AGENT_WAITING_FOR_TERMINAL,
-                        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeArgon => {
-                            crate::messaging::model::AGENT_WAITING_FOR_HOOKS
-                        }
+                        Provider::ClaudeCode
+                        | Provider::ClaudeDs
+                        | Provider::ClaudeArgon
+                        | Provider::ClaudeGpt => crate::messaging::model::AGENT_WAITING_FOR_HOOKS,
                         #[cfg(feature = "dev-tools")]
                         Provider::Fake => crate::messaging::model::AGENT_WAITING_FOR_HOOKS,
                     }

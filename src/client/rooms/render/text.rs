@@ -154,6 +154,7 @@ pub(in crate::client::rooms) fn provider(provider: Provider) -> &'static str {
         Provider::ClaudeCode => "Claude Code",
         Provider::ClaudeDs => "Claude DS",
         Provider::ClaudeArgon => "Claude Argon",
+        Provider::ClaudeGpt => "Claude GPT",
         Provider::Cursor => "Cursor",
         Provider::Grok => "Grok",
         Provider::Kimi => "Kimi",

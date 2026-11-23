@@ -195,6 +195,10 @@ fn embedded_docs_match_the_repository_copies() {
             "providers/claude-argon.md",
             "orchestration/providers/claude-argon.md",
         ),
+        (
+            "providers/claude-gpt.md",
+            "orchestration/providers/claude-gpt.md",
+        ),
         ("providers/grok.md", "orchestration/providers/grok.md"),
         ("providers/kimi.md", "orchestration/providers/kimi.md"),
         ("how-to-bus-cli.md", "orchestration/how-to-bus-cli.md"),

@@ -7,6 +7,7 @@ pub(super) const PROVIDERS: [&str; 8] = [
     "claude",
     "claude-ds",
     "claude-argon",
+    "claude-gpt",
     "codex",
     "kimi",
     "grok",

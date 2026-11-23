@@ -15,7 +15,7 @@ use super::{
 use super::{BusUi, Effect};
 use crate::messaging::{
     coordinator::BusCommand,
-    model::{AgentId, RoomId, RoomKind},
+    model::{AgentId, Provider, RoomId, RoomKind},
 };
 use crate::{
     client::compositor::ClientShellInput,
