@@ -53,7 +53,9 @@ fn failed(ui: &mut BusUi, request: RequestId) {
 
 #[test]
 fn submission_agent_notice_does_not_warn_when_an_answered_unbound_turn_is_released() {
-    let (mut ui, _, agent, request) = submitting();
+    use crate::messaging::model::SendMode;
+
+    let (mut ui, room, agent, request) = submitting();
     let mut snapshot = (*ui.snapshot).clone();
     snapshot
         .state
@@ -65,11 +67,29 @@ fn submission_agent_notice_does_not_warn_when_an_answered_unbound_turn_is_releas
             },
         )
         .unwrap();
+    snapshot
+        .state
+        .record_send_mode(&[request], SendMode::Steer)
+        .unwrap();
     let message = snapshot.state.request(request).unwrap().prompt.id;
     snapshot
         .state
         .answer_message(message, agent, "stored answer".into(), 1001)
         .unwrap();
+    assert_eq!(
+        snapshot.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert!(snapshot
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .is_none());
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot.state.set_draft_text(room, "next work").unwrap();
+    let queued = snapshot.state.submit_draft(room, 1001).unwrap()[0];
+    assert_eq!(snapshot.state.next_queued_request(agent), None);
     snapshot.revision += 1;
     ui.receive_snapshot(Arc::new(snapshot.clone()));
 
@@ -78,6 +98,8 @@ fn submission_agent_notice_does_not_warn_when_an_answered_unbound_turn_is_releas
         Some(request)
     );
     let settled = snapshot.state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Abandoned);
+    assert_eq!(snapshot.state.next_queued_request(agent), Some(queued));
     assert_eq!(settled.reply().unwrap().text, "stored answer");
     assert_eq!(settled.completed_at_ms, Some(1001));
     assert!(settled.failure_reason.is_none());
