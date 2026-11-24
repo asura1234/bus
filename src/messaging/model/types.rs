@@ -26,8 +26,7 @@ id_type!(AgentId);
 id_type!(PromptId);
 id_type!(RequestId);
 
-/// The name every Bus-generated notice is shown under, in chat and in what
-/// agents receive.
+/// The name Bus-generated notices use in chat and in agent messages.
 pub(crate) const BUS_SENDER: &str = "bus";
 
 /// Who wrote a prompt. Bot authors keep the send-time name for history.

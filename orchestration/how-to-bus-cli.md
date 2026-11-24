@@ -73,11 +73,15 @@ even if background shells keep Working; later background results are follow-ups,
 
 ### Who to message
 
-Use the [Bus communication guide](bus-communication-guide.md). Send only the body;
-do not add a "from X", "X here" or signature line. Bus adds one sender header, `name:`;
-numeric/historical names include an ID. Agent-authored batches add position/time
-without repeating that header. New agents get protocol instructions at launch;
-upgrades do not insert task turns into existing conversations with saved instructions.
+Use the [Bus communication guide](bus-communication-guide.md). Send only the body; do not add a "from X", "X here" or signature line.
+Bus adds one sender header, `name:`; numeric/historical names include an ID. Agent-authored batches add position/time without repeating that header.
+New agents get protocol instructions at launch; upgrades do not insert task turns into existing conversations with saved instructions.
+
+For scripts, register a sender-only identity with `bus bot add --name notifications` (optionally add `--room ROOM`). Names are trimmed, case-sensitive, and unique across bots and live agents.
+Send with `bus send --room ROOM --as notifications --to worker --text 'Three new reports'`. Bots have no provider, terminal, turns or inbox. Exact bot names in `--to` are refused, including names that match aliases.
+Use `bus bot list [--json]` to inspect memberships and `bus bot delete notifications` to remove an identity. `bus state` lists bots separately.
+Removing a room clears its bots' memberships. History and message status retain the recorded bot name after deletion.
+
 #### Reach the developer from any room
 
 For a developer-only request from any room:
@@ -88,31 +92,9 @@ bus send --room ROOM --as AGENT --to you --text '[waiting-on-you] Authorize stag
 bus send --room master --as claude-orch --to human --text 'Merged PR #N.'
 ```
 
-`@you` in prose means the developer; use `--to you` in the CLI. The message
-stays in its conversation, with no agent request to wait for. Only hard blockers
-use `[waiting-on-you]` (or legacy `[waiting_on_you]`). Follow the
-[waiting-on-you guidance](bus-communication-guide.md#waiting-on-you) for
-self-contained asks, optional Feishu replies and repeat asks. Agent posts to You
-and explicit @you/blocker markers alert the TUI; peer traffic saying merely
-“waiting on you” does not page the developer. Developer sends never notify.
-
-### Send as a bot
-
-Use a bot for a script that needs a named sender. Bots have no provider, terminal,
-turns or inbox. Names are trimmed, case-sensitive and unique across agents and bots.
-
-```sh
-bus bot add --room feature-work --name notifications
-bus send --room feature-work --as notifications --to worker --text 'Three new reports'
-bus bot list --json
-bus bot delete notifications
-```
-
-`--room` on `bot add` is optional. Removing a room drops its bots' membership.
-`bus state` lists bots separately. Use the bot name in `send --as` and choose
-live agents for `--to`. An exact bot name is refused as a recipient rather than
-expanded as an alias such as `all`. Message status and room history keep the
-bot name after deletion.
+`@you` in prose means the developer; use `--to you` in the CLI. The message stays in its conversation, with no agent request to wait for.
+Only hard blockers use `[waiting-on-you]` (or legacy `[waiting_on_you]`). Follow the [waiting-on-you guidance](bus-communication-guide.md#waiting-on-you) for self-contained asks, optional Feishu replies and repeat asks.
+Agent posts to You and explicit @you/blocker markers alert the TUI. Peer traffic saying merely “waiting on you” and developer sends do not notify.
 
 ## Send work and wait for the reply
 ```sh
