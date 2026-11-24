@@ -202,7 +202,7 @@ fn launch_metrics_missing_executable_is_durable_without_a_saved_agent() {
         AddAgent {
             room,
             name: "missing".into(),
-            provider: Provider::Codex,
+            provider: Provider::ClaudeGpt,
             cwd: dir.to_string_lossy().into(),
             extra_args: String::new(),
             consent_project_hooks: true,
@@ -210,7 +210,16 @@ fn launch_metrics_missing_executable_is_durable_without_a_saved_agent() {
         None,
         &mpsc::channel().0,
     );
-    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("no executable 'claude-gpt' on PATH"),
+        "{error}"
+    );
+    assert!(
+        error.contains("orchestration/providers/claude-gpt.md"),
+        "{error}"
+    );
+    assert!(error.contains("retry adding the agent"), "{error}");
     let saved = JsonStore::new(dir.join("state.json"))
         .load()
         .unwrap()

@@ -171,6 +171,7 @@ impl Worker {
                 let provider = match required(p, "provider")? {
                     "claude" => Provider::ClaudeCode,
                     "claude-ds" => Provider::ClaudeDs,
+                    "claude-gpt" => Provider::ClaudeGpt,
                     "codex" => Provider::Codex,
                     "cursor" => Provider::Cursor,
                     "grok" => Provider::Grok,
@@ -183,7 +184,7 @@ impl Worker {
                         Provider::Fake
                     }
                     _ => return Err(
-                        "Provider must be claude, claude-ds, codex, cursor, grok, kimi, agy, or fake"
+                        "Provider must be claude, claude-ds, claude-gpt, codex, cursor, grok, kimi, agy, or fake"
                             .into(),
                     ),
                 };
@@ -659,6 +660,7 @@ fn interrupt_key(provider: Provider) -> &'static str {
     match provider {
         Provider::ClaudeCode
         | Provider::ClaudeDs
+        | Provider::ClaudeGpt
         | Provider::Codex
         | Provider::Kimi
         | Provider::Agy => "esc",
@@ -672,7 +674,9 @@ fn interrupt_key(provider: Provider) -> &'static str {
 /// Codex's `/new` asks where the new conversation runs; `/clear` does not.
 fn clear_command(provider: Provider) -> &'static str {
     match provider {
-        Provider::ClaudeCode | Provider::ClaudeDs | Provider::Codex => "/clear",
+        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt | Provider::Codex => {
+            "/clear"
+        }
         Provider::Cursor => "/new-chat",
         Provider::Grok | Provider::Kimi | Provider::Agy => "/new",
         #[cfg(feature = "dev-tools")]

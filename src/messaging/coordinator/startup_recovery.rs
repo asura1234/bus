@@ -99,6 +99,13 @@ impl Worker {
     }
 
     fn prepare_unsubmitted_launch(&self, agent: &RoomAgent) -> Result<LaunchBinding, String> {
+        if agent.provider == Provider::ClaudeGpt {
+            let executable = crate::agents::providers::launch::selected_executable(
+                Provider::ClaudeGpt,
+                &Default::default(),
+            )?;
+            return Ok((executable, None, None));
+        }
         if !matches!(agent.provider, Provider::Grok | Provider::Kimi) {
             return Ok((None, None, None));
         }
