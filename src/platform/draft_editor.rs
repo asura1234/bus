@@ -16,6 +16,9 @@ pub(crate) use fence::expired_swap_fence_committed;
 mod manual;
 #[cfg(test)]
 pub(crate) use fence::test_hooks as fence_test_hooks;
+#[cfg(test)]
+#[path = "tests/draft_editor_callback_hook_test.rs"]
+pub(crate) mod callback_test_hooks;
 
 const DIRECTORY: &str = "BUS_DRAFT_EDITOR_DIR";
 const FALLBACK: &str = "BUS_DRAFT_EDITOR_FALLBACK";
@@ -681,6 +684,8 @@ fn run_at(dir: Option<&Path>, file: &Path, fallback: &str) -> io::Result<()> {
             error: result.as_ref().err().map(ToString::to_string),
         },
     )?;
+    #[cfg(test)]
+    callback_test_hooks::after_ack(dir);
     result
 }
 

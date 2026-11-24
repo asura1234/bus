@@ -378,3 +378,81 @@ async fn editor_reentry_stalled_fence_sync_never_authorizes_fallback() {
     assert_eq!(pane.submits, [NEW]);
     assert_eq!(pane.draft, DRAFT);
 }
+
+async fn resume_pending_while_prior_restore_finishes(changed: bool) {
+    let mut pane = Pane::new();
+    fs::write(&pane.file, DRAFT).unwrap();
+    let mut original = Exchange::begin_preserving(pane.directory.clone(), WAIT).unwrap();
+    original.request_swap(NEW).unwrap();
+    test_run_at(&pane.directory, &pane.file).unwrap();
+    let backup = original.recovery().to_owned();
+    original.request_restore_after_attempt(NEW).unwrap();
+
+    let (acknowledged, resume_callback) =
+        crate::platform::draft_editor::callback_test_hooks::hold_after_ack(pane.directory.clone());
+    let directory = pane.directory.clone();
+    let file = pane.file.clone();
+    let callback = std::thread::spawn(move || test_run_at(&directory, &file).unwrap());
+    acknowledged.recv_timeout(WAIT).unwrap();
+    original.defer_cleanup();
+    drop(original);
+
+    pane.draft = NEW.into();
+    pane.paint();
+    let clock = pane.runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let generation = clock.advance(Duration::ZERO);
+    let completion = pane.queue(NEW, WAIT);
+    clock.wait_for_submission_check(generation);
+    assert!(
+        pane.writes.try_recv().is_err(),
+        "re-entry is waiting on the callback"
+    );
+    let returned = fs::read_to_string(&pane.file).unwrap();
+    assert!(returned.starts_with(DRAFT) && returned.contains("__BUS_DRAFT_END_"));
+    if changed {
+        pane.draft.clone_from(&returned);
+        pane.paint();
+    }
+    resume_callback.send(()).unwrap();
+    callback.join().unwrap();
+    clock.resume();
+
+    let result = pane.pump(completion).await;
+    if changed {
+        assert!(
+            pane.submits.is_empty(),
+            "Enter submitted the changed composer: {:?}",
+            pane.submits
+        );
+        composer_busy(result);
+        assert_eq!(pane.draft, returned);
+        assert_eq!(fs::read_to_string(&backup).unwrap(), DRAFT);
+        assert!(Exchange::has_preserved_draft(&pane.directory));
+
+        // The available composer can later return empty. That gives the
+        // existing repair path authority to restore the saved draft.
+        pane.draft.clear();
+        pane.paint();
+        let repair = pane.queue(NEW, WAIT);
+        composer_busy(pane.pump(repair).await);
+        assert_eq!(pane.draft, DRAFT);
+        assert!(!backup.exists());
+        let delivery = pane.queue(NEW, WAIT);
+        pane.pump(delivery).await.unwrap();
+    } else {
+        result.unwrap();
+    }
+    assert_eq!(pane.submits, [NEW]);
+    assert_eq!(pane.draft, DRAFT);
+}
+
+#[tokio::test]
+async fn editor_reentry_rechecks_changed_pending_before_enter() {
+    resume_pending_while_prior_restore_finishes(true).await;
+}
+
+#[tokio::test]
+async fn editor_reentry_rechecks_unchanged_pending_and_enters_once() {
+    resume_pending_while_prior_restore_finishes(false).await;
+}

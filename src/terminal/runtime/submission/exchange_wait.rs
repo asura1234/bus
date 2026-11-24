@@ -46,6 +46,8 @@ impl ObservedSubmission {
                 Err(error)
                     if error.kind() == io::ErrorKind::WouldBlock && error.get_ref().is_none() =>
                 {
+                    #[cfg(test)]
+                    self.clock.submission_checked(generation);
                     self.clock
                         .sleep(Duration::from_millis(20).min(remaining), generation);
                 }

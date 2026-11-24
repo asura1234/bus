@@ -11,6 +11,7 @@ mod exchange_wait;
 mod plain;
 mod preservation;
 mod recovery;
+mod swap_key;
 pub(crate) use preservation::{DraftPreservation, EditorSubmission};
 
 use super::submission_clock::SubmissionClock;
