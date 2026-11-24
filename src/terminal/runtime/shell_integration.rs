@@ -468,7 +468,8 @@ __bus_bind_editor() {
     done
     __bus_query+='\e[__BUS_PROMPT_TOKEN__e~'
     complete -F __bus_capture_editor '__bus_probe'
-    for __bus_map in emacs-standard vi-insertion vi-command; do
+    # vi-insert also works with the Readline bundled in macOS Bash 3.2.
+    for __bus_map in emacs-standard vi-insert vi-command; do
         bind -m "$__bus_map" '"\e[__BUS_PROMPT_TOKEN__h~":beginning-of-line'
         bind -m "$__bus_map" '"\e[__BUS_PROMPT_TOKEN__e~":end-of-line'
         bind -m "$__bus_map" '"\e[__BUS_PROMPT_TOKEN__q~":quoted-insert'

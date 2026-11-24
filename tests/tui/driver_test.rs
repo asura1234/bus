@@ -244,9 +244,13 @@ impl Session {
     }
 
     fn start(tag: &str) -> Self {
+        Self::start_with_env(tag, &[])
+    }
+
+    fn start_with_env(tag: &str, env: &[(&str, &str)]) -> Self {
         let session = Self::hold(session_name(tag));
         let runs = run_dir();
-        let (code, status) = tui(
+        let (code, status) = parse(tui_raw(
             &session.0,
             &[
                 "start",
@@ -255,7 +259,8 @@ impl Session {
                 "--run-dir",
                 runs.to_str().unwrap(),
             ],
-        );
+            env,
+        ));
         assert_eq!(code, 0, "start failed: {status}");
         assert_eq!(status["alive"], true);
         session
@@ -784,12 +789,44 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
 
 #[test]
 fn a_fake_codex_agent_gets_room_prompts_and_replies() {
-    room_prompts_reach_a_fake("codex", ".codex/hooks.json");
+    room_prompts_reach_a_fake(Session::start("codex"), "codex", ".codex/hooks.json");
 }
 
 #[test]
 fn a_fake_cursor_agent_gets_room_prompts_and_replies() {
-    room_prompts_reach_a_fake("cursor", ".cursor/hooks.json");
+    room_prompts_reach_a_fake(Session::start("cursor"), "cursor", ".cursor/hooks.json");
+}
+
+#[test]
+fn a_fake_cursor_agent_ignores_host_shell_startup() {
+    let home = run_dir().join(session_name("cursor-caller-home"));
+    std::fs::create_dir_all(&home).unwrap();
+    let rc = r#"printf 'host shell startup ran\n' > "$HOME/host-shell-startup"
+bind -v
+PS1='HOST_PROMPT> '
+"#;
+    let caller_profile = home.join(".bash_profile");
+    std::fs::write(&caller_profile, rc).unwrap();
+    std::fs::write(home.join(".bashrc"), rc).unwrap();
+    let session = Session::start_with_env(
+        "cursh",
+        &[
+            ("HOME", home.to_str().unwrap()),
+            ("BASH_ENV", caller_profile.to_str().unwrap()),
+            ("ENV", caller_profile.to_str().unwrap()),
+            (
+                "PROMPT_COMMAND",
+                "printf 'host prompt ran\\n' > \"$HOME/host-shell-startup\"",
+            ),
+        ],
+    );
+    let scratch_home = session_dir(&session.0).join("home");
+    // Model a host-wide login profile at the scratch shell's equivalent
+    // startup boundary without modifying /etc/profile.
+    std::fs::write(scratch_home.join(".bash_profile"), rc).unwrap();
+    room_prompts_reach_a_fake(session, "cursor", ".cursor/hooks.json");
+    assert!(!home.join("host-shell-startup").exists());
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 /// A fake Grok turn prints the captured completion line. Server detection, the
@@ -927,8 +964,7 @@ fn wait_grok_compactions(session: &Session, want: u64) -> u64 {
 
 /// Adds a fake `provider` worker and sends it room messages: each must be
 /// typed into its composer and settle with its reply.
-fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
-    let session = Session::start(provider);
+fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: &str) {
     session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
     let work = session_dir(&session.0).join("work");
     let added = scratch_bus(
@@ -949,6 +985,12 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
     );
     assert!(added.status.success(), "{added:?}");
     assert!(work.join(hooks).is_file());
+    let shell_marker = session_dir(&session.0).join("home/host-shell-startup");
+    assert!(
+        !shell_marker.exists(),
+        "fake {provider} sourced the injected shell profile: {:?}",
+        std::fs::read_to_string(shell_marker)
+    );
     session.ok(&[
         "wait",
         "--state",
@@ -956,44 +998,43 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
         "--timeout",
         "20s",
     ]);
+    let screen = agent_screen(&session, "c1");
+    assert!(
+        !screen.contains("invalid keymap name"),
+        "fake {provider} shell printed a Readline error: {screen}"
+    );
 
-    let send = |text: &str| -> String {
-        let sent = scratch_bus(
-            &session,
-            &["send", "--room", "bus", "--to", "c1", "--text", text],
-        );
-        let receipt = String::from_utf8_lossy(&sent.stdout).to_string();
-        assert!(sent.status.success(), "{receipt}");
-        let receipt: Value = serde_json::from_str(receipt.trim()).unwrap();
-        receipt["result"]["message_id"].to_string()
+    session.ok(&["click", "--hit", "recipients"]);
+    session.ok(&["click", "--hit", "recipient:c1"]);
+    session.ok(&["press", "esc"]);
+    session.ok(&["click", "--hit", "delivery-mode"]);
+    session.ok(&["click", "--hit", "delivery-mode:queue"]);
+    let queue = |text: &str| {
+        session.ok(&["type", text]);
+        session.ok(&["press", "enter"]);
     };
 
     // Bus types each prompt into the fake's composer; its hooks reply.
     for text in [format!("hello {provider}"), "hello again".into()] {
-        let id = send(&text);
+        // The fake may already be idle while the coordinator still considers
+        // the previous turn interruptible. An idle Ctrl+C exits fake Cursor.
+        queue(&text);
+        let expected = format!("fake reply: {text}");
+        session.ok(&["wait", "--text", &expected, "--timeout", "30s"]);
+        let id = composer_message_id(&session, &text);
         let settled = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
         assert_turn_ended(&settled);
         let screen = agent_screen(&session, "c1");
         assert!(
-            screen.contains(&format!("fake reply: {text}")),
+            screen.contains(&expected),
             "the fake {provider} should answer {text:?}: {screen}"
         );
-        // A developer send interrupts the turn the coordinator still observes,
-        // and an idle Ctrl+C quits Cursor. The request settles on the Stop hook
-        // while the status poll can still report Working, so wait for idle
-        // before the next prompt: it must start a fresh turn, not race this one.
-        session.ok(&[
-            "wait",
-            "--state",
-            "agents.*.status == idle",
-            "--timeout",
-            "20s",
-        ]);
     }
 
     // A developer message sent while the fake works interrupts that turn and
     // runs as the next turn; it never joins the turn it ends.
-    let lead = send("fake:work 6 long task");
+    let long_task = "fake:work 6 long task";
+    queue(long_task);
     session.ok(&[
         "wait",
         "--state",
@@ -1012,7 +1053,23 @@ fn room_prompts_reach_a_fake(provider: &str, hooks: &str) {
             " Generating ("
         },
     );
-    let follow = send("stop and take the next task");
+    let lead = composer_message_id(&session, long_task);
+    let (code, receipt) = parse(scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "c1",
+            "--mode",
+            "interrupt",
+            "--text",
+            "stop and take the next task",
+        ],
+    ));
+    assert_eq!(code, 0, "{receipt}");
+    let follow = receipt["result"]["message_id"].to_string();
     let (code, interrupted) = tui(
         &session.0,
         &["wait", "--message", &lead, "--timeout", "40s"],
@@ -2381,23 +2438,27 @@ fn assert_composer_mode_send(session: &Session, mode: &str, text: &str, queue: b
         "--timeout",
         "5s",
     ]);
-    let (code, history) = parse(scratch_bus(
-        session,
-        &["history", "--room", "bus", "--limit", "20"],
-    ));
-    assert_eq!(code, 0, "{history}");
-    let message = history["result"]["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|message| message["prompt"]["text"] == text)
-        .expect("the composer message was persisted")["prompt"]["id"]
-        .to_string();
+    let message = composer_message_id(session, text);
     let (code, status) = parse(scratch_bus(session, &["message", "status", &message]));
     assert_eq!(code, 0, "{status}");
     let request = &status["result"]["requests"][0];
     assert_eq!(request["queue"], queue, "{status}");
     assert!(request["interrupt"].is_null(), "{status}");
+}
+
+fn composer_message_id(session: &Session, text: &str) -> String {
+    let (code, history) = parse(scratch_bus(
+        session,
+        &["history", "--room", "bus", "--limit", "20"],
+    ));
+    assert_eq!(code, 0, "{history}");
+    history["result"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["prompt"]["text"] == text)
+        .expect("the composer message was persisted")["prompt"]["id"]
+        .to_string()
 }
 
 #[test]
