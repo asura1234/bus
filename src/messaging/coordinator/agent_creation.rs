@@ -249,10 +249,12 @@ impl Worker {
 
     /// Bus owns messaging identity and routing; providers receive capture facts.
     fn prepare_provider_launch(
-        &self,
+        &mut self,
         input: &AddAgent,
         id: AgentId,
     ) -> Result<(launch::PreparedLaunch, HookContext), String> {
+        self.transport
+            .preflight_gateway(identity::provider_kind(input.provider))?;
         let binary = self.hook_callback_binary(input.provider)?;
         let launch_id = crate::utils::time::digest(
             format!(

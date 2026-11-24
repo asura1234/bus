@@ -25,7 +25,7 @@ async fn cold_native_resume_launch_wraps_the_saved_conversation_argv() {
         "../target project/nested",
     ]
     .map(str::to_owned);
-    queue_resumed_agent_launch(None, &runtime, &native_environment(), &argv).unwrap();
+    queue_resumed_agent_launch(None, &runtime, &native_environment(), &argv, None).unwrap();
     let command = String::from_utf8(writes.try_recv().unwrap().to_vec()).unwrap();
     assert!(
         command.contains("--bus-codex-runtime"),
@@ -55,7 +55,7 @@ async fn cold_resume_preserves_profile_permission_and_foreign_provider_launches(
     ] {
         let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(120, 40, 4);
         let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
-        queue_resumed_agent_launch(None, &runtime, &native_environment(), &argv).unwrap();
+        queue_resumed_agent_launch(None, &runtime, &native_environment(), &argv, None).unwrap();
         let command = String::from_utf8(writes.try_recv().unwrap().to_vec()).unwrap();
         assert!(
             !command.contains("--bus-codex-runtime"),

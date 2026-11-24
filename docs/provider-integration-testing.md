@@ -749,6 +749,12 @@ turn did not survive the relaunch.
 
 ## Testing lessons
 
+- **2026-11-24 — Magpie-backed Claude wrappers:** Test gateway refusal on
+  Add Agent, explicit resume, and automatic restore. Use private loopback
+  endpoints for outage tests. A listening socket that never handles HTTP
+  requests exercises a busy gateway without disrupting an active service.
+  Test the real model routes separately from preflight reachability.
+
 - **2026-11-23 — Claude GPT:** Fresh Claude Code configuration can show theme,
   gateway-key and security screens before project trust. After a trust chooser
   reports `selection_pending`, observe again before submitting any key. The

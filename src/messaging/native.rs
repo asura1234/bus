@@ -27,6 +27,20 @@ pub(crate) enum NativeCall {
 pub(crate) trait Transport: Send {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError>;
 
+    #[cfg(not(test))]
+    fn preflight_gateway(
+        &mut self,
+        provider: crate::agents::providers::ProviderKind,
+    ) -> Result<(), String>;
+
+    #[cfg(test)]
+    fn preflight_gateway(
+        &mut self,
+        provider: crate::agents::providers::ProviderKind,
+    ) -> Result<(), String> {
+        crate::agents::providers::launch::preflight_gateway(provider).map(|_| ())
+    }
+
     fn submit(&mut self, method: Method) -> NativeCall {
         NativeCall::Complete(Box::new(self.request(method)))
     }
@@ -48,6 +62,25 @@ impl BusTransport {
 }
 
 impl Transport for BusTransport {
+    fn preflight_gateway(
+        &mut self,
+        provider: crate::agents::providers::ProviderKind,
+    ) -> Result<(), String> {
+        use crate::agents::providers::ProviderKind::{ClaudeArgon, ClaudeGpt};
+        if !matches!(provider, ClaudeArgon | ClaudeGpt) {
+            return Ok(());
+        }
+        match self.request(Method::AgentGatewayPreflight {
+            kind: provider.label().into(),
+        }) {
+            Ok(ResponseResult::Ok {}) => Ok(()),
+            Ok(_) => {
+                Err("Native server did not confirm Magpie preflight. Restart Bus and retry.".into())
+            }
+            Err(error) => Err(error.message),
+        }
+    }
+
     fn submit(&mut self, method: Method) -> NativeCall {
         let mut transport = self.clone();
         let (tx, rx) = std::sync::mpsc::channel();

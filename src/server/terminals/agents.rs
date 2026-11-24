@@ -3,6 +3,7 @@ pub(in crate::server) use info::startup_readiness;
 
 use std::time::{Duration, Instant};
 
+use crate::agents::providers::launch;
 use crate::protocol::api::schema::AgentStartParams;
 use crate::server::{app::App, workspaces::ids::TerminalTargetError};
 
@@ -98,6 +99,38 @@ fn agent_start_argv(
         (_, None) => {}
     }
     Ok(argv)
+}
+
+fn wrapper_start_executable(
+    kind: &str,
+    selected: Option<String>,
+) -> Result<Option<String>, AgentStartError> {
+    if !matches!(kind, "claude-argon" | "claude-gpt") {
+        return Ok(selected);
+    }
+    if let Some(path) = selected {
+        if std::path::Path::new(&path)
+            .file_name()
+            .is_some_and(|name| name == kind)
+        {
+            Ok(Some(path))
+        } else {
+            Err(AgentStartError::InvalidArgument)
+        }
+    } else {
+        Ok(Some(kind.to_owned()))
+    }
+}
+
+fn preflight_wrapper(argv: &[String]) -> Result<Option<String>, AgentStartError> {
+    let provider = std::path::Path::new(&argv[0])
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(launch::native_provider);
+    let Some(provider) = provider else {
+        return Ok(None);
+    };
+    launch::preflight_gateway(provider).map_err(AgentStartError::InputFailed)
 }
 
 impl App {
@@ -320,15 +353,11 @@ impl App {
             }
         })?;
 
+        let executable = wrapper_start_executable(&params.kind, params.executable)?;
         let args = params.args;
         let kimi_code_home = params.kimi_home.as_ref().map(std::path::PathBuf::from);
-        let mut argv = agent_start_argv(
-            kind,
-            params.executable,
-            params.grok_home,
-            params.kimi_home,
-            &args,
-        )?;
+        let mut argv =
+            agent_start_argv(kind, executable, params.grok_home, params.kimi_home, &args)?;
         let timeout = Duration::from_millis(
             params
                 .timeout_ms
@@ -337,6 +366,7 @@ impl App {
         if timeout <= AGENT_START_SETTLE_DELAY || timeout > MAX_AGENT_START_TIMEOUT {
             return Err(AgentStartError::InvalidTimeout);
         }
+        let gateway = preflight_wrapper(&argv)?;
         // One launch. The Runtime stays on the pane, so the helper's lifetime
         // channel stays open. A profile or explicit permission argv is unchanged.
         #[cfg(unix)]
@@ -354,7 +384,11 @@ impl App {
         terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         runtime.mark_agent_launch();
-        if let Err(err) = runtime.queue_shell_command(&argv, timeout) {
+        if let Err(err) = runtime.queue_shell_command_with_env(
+            &argv,
+            timeout,
+            gateway.as_deref().map(|url| (launch::ARGON_BASE_URL, url)),
+        ) {
             tracing::info!(event = "bus.agent.identity_cleared", reason = "launch_rejected",
                 terminal_id = %terminal_id, error = %err);
             terminal.clear_agent_name();

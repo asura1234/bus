@@ -809,3 +809,125 @@ async fn verified_launch_aliases_keep_literal_arguments_and_attempt_return() {
         }
     }
 }
+
+#[tokio::test]
+async fn magpie_refuses_both_native_start_methods_before_queueing_wrapper_input() {
+    use crate::agents::providers::launch::gateway_test_support::GatewayOverride;
+    use crate::protocol::api::schema::{AgentStartIfIdentityParams, AgentStartParams};
+
+    let dir = crate::utils::test_temp::unique_temp_path("magpie-native-refusal");
+    std::fs::create_dir_all(&dir).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let _gateway = GatewayOverride::set(url.clone(), None);
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::Login,
+        &dir,
+    );
+    wait_for_prompt(&runtime).await;
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    let workspace = &app.state.workspaces[0];
+    let terminal_id = workspace
+        .terminal_id(workspace.tabs[0].root_pane)
+        .unwrap()
+        .to_string();
+
+    for wrapper in ["claude-argon", "claude-gpt"] {
+        let start = AgentStartParams {
+            name: wrapper.into(),
+            kind: wrapper.into(),
+            pane_id: target.clone(),
+            args: vec![
+                "--resume".into(),
+                "00000000-0000-4000-8000-000000000001".into(),
+            ],
+            executable: None,
+            grok_home: None,
+            kimi_home: None,
+            timeout_ms: None,
+        };
+        let plain = app.handle_agent_start("add".into(), start.clone());
+        let guarded = app.handle_agent_start_if_identity(
+            "retry".into(),
+            AgentStartIfIdentityParams {
+                expected_terminal_id: terminal_id.clone(),
+                start,
+            },
+        );
+        for wire in [plain, guarded] {
+            let response: serde_json::Value = serde_json::from_str(&wire).unwrap();
+            let message = response["error"]["message"]
+                .as_str()
+                .unwrap_or_else(|| panic!("expected rejection: {wire}"));
+            assert!(
+                message.contains(&url) && message.contains("magpie serve"),
+                "{wire}"
+            );
+        }
+        assert!(app
+            .state
+            .terminals
+            .values()
+            .all(|terminal| terminal.managed_agent_kind().is_none()));
+        assert!(prompt_runtime(&app).launch_input_error().is_none());
+    }
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn magpie_native_argon_launch_binds_the_probed_url_after_shell_startup() {
+    use crate::agents::providers::launch::gateway_test_support::GatewayOverride;
+    use crate::protocol::api::schema::AgentStartParams;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = crate::utils::test_temp::unique_temp_path("magpie-native-endpoint");
+    install_fake_provider(&dir);
+    let executable = dir.join("bin/claude-argon");
+    std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' \"$CLAUDE_ARGON_BASE_URL\" > \"$HOME/endpoint\"\nprintf 'BOUND_GATEWAY_STARTED\\n'\nread -r unused\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(
+        dir.join(".zshrc"),
+        "export CLAUDE_ARGON_BASE_URL=http://127.0.0.1:1\n",
+    )
+    .unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let authority = listener.local_addr().unwrap();
+    let url = format!("http://{authority}/private-token");
+    let _gateway = GatewayOverride::set(url.clone(), None);
+    let runtime = fixture_shell(
+        "/bin/zsh",
+        crate::utils::config::ShellModeConfig::Login,
+        &dir,
+    );
+    wait_for_prompt(&runtime).await;
+    let (mut app, target) = app_with_prompt_runtime(runtime);
+    let (_, argv) = app
+        .start_agent(AgentStartParams {
+            name: "argon".into(),
+            kind: "claude-argon".into(),
+            pane_id: target,
+            args: Vec::new(),
+            executable: Some(executable.to_str().unwrap().into()),
+            grok_home: None,
+            kimi_home: None,
+            timeout_ms: None,
+        })
+        .unwrap_or_else(|error| panic!("{:?}", app.agent_start_error_body(error)));
+    wait_for_launch_input(prompt_runtime(&app)).await;
+    wait_for_text(prompt_runtime(&app), "BOUND_GATEWAY_STARTED").await;
+    assert_eq!(
+        std::fs::read_to_string(dir.join("endpoint"))
+            .unwrap()
+            .trim(),
+        url
+    );
+    assert!(argv.iter().all(|piece| !piece.contains("private-token")));
+    assert!(!prompt_runtime(&app)
+        .recent_unwrapped_text(100)
+        .contains("private-token"));
+    drop(app);
+    std::fs::remove_dir_all(dir).unwrap();
+}

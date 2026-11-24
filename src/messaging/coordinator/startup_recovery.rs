@@ -12,6 +12,7 @@ impl Worker {
         &mut self,
         agent: &RoomAgent,
         args: Vec<String>,
+        gateway: Result<(), String>,
     ) -> Result<(), String> {
         let AgentRuntimeIdentity {
             pane_id: Some(pane),
@@ -21,7 +22,9 @@ impl Worker {
         else {
             return Err("Saved launch terminal identity is incomplete; no retry was sent".into());
         };
-        let prepared = self.prepare_unsubmitted_launch(agent);
+        let prepared = self
+            .record_resume_gateway_check(agent, gateway)
+            .and_then(|()| self.prepare_unsubmitted_launch(agent));
         // A rejected preparation is an audit record only. begin_agent_launch would
         // cancel the live pending attempt and replace launch_attempt_id.
         let attempt = if prepared.is_err() {
@@ -96,6 +99,27 @@ impl Worker {
             self.report_adopted_session(agent.id, agent.provider, pane.clone(), session)?;
         }
         Ok(())
+    }
+
+    pub(super) fn record_resume_gateway_check(
+        &mut self,
+        agent: &RoomAgent,
+        gateway: Result<(), String>,
+    ) -> Result<(), String> {
+        match gateway {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let mut state = self.state.clone();
+                state
+                    .clear_missing_binary(agent.id)
+                    .map_err(|err| err.to_string())?;
+                state
+                    .set_agent_error(agent.id, Some(error.clone()))
+                    .map_err(|err| err.to_string())?;
+                self.save(state)?;
+                Err(error)
+            }
+        }
     }
 
     fn prepare_unsubmitted_launch(&self, agent: &RoomAgent) -> Result<LaunchBinding, String> {

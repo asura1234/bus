@@ -3747,6 +3747,30 @@
         {
           "properties": {
             "method": {
+              "const": "agent.gateway_preflight",
+              "type": "string"
+            },
+            "params": {
+              "properties": {
+                "kind": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.start",
               "type": "string"
             },
