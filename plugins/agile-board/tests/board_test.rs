@@ -574,6 +574,11 @@ let tickets = Array.from({ length: 12 }, (_, i) => ({
 let nowMs = 1000;
 let poll;
 let pollDelay;
+const frameCallbacks = [];
+window.requestAnimationFrame = callback => frameCallbacks.push(callback);
+function advanceFrame() {
+  for (const callback of frameCallbacks.splice(0)) callback(performance.now());
+}
 window.fetch = async url => ({
   ok: url === "/api/board?view=session",
   json: async () => ({ rooms, tickets, now_ms: nowMs })
@@ -600,6 +605,7 @@ window.addEventListener("load", async () => {
     check(section?.querySelector(".ticket-title")?.textContent === "Ticket 0",
       "initial board did not render");
     check(pollDelay === 3000, "expected a poll every 3000 ms");
+    advanceFrame();
     window.scrollTo(275, 550);
     const checkScroll = (x, y, phase) => check(
       window.scrollX === x && window.scrollY === y,
@@ -610,23 +616,42 @@ window.addEventListener("load", async () => {
     await poll();
     checkScroll(275, 550, "identical poll");
     check(board.firstElementChild === section, "identical poll rebuilt the board");
+    check(frameCallbacks.length === 0, "identical poll scheduled a scroll restore");
 
     nowMs += 3000;
     await poll();
     checkScroll(275, 550, "timestamp-only poll");
     check(board.firstElementChild === section, "timestamp-only poll rebuilt the board");
+    check(frameCallbacks.length === 0, "timestamp-only poll scheduled a scroll restore");
 
+    // Reproduce a transient zero scroll range immediately after the DOM swap.
+    const innerHTML = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+    Object.defineProperty(board, "innerHTML", {
+      configurable: true,
+      set(value) {
+        innerHTML.set.call(this, value);
+        board.style.display = "none";
+        const root = document.scrollingElement;
+        check(root.scrollHeight === root.clientHeight, "transient scroll range did not collapse");
+        requestAnimationFrame(() => { board.style.display = ""; });
+      },
+    });
     tickets = [{ ...tickets[0], title: "Inserted ticket" }, ...tickets];
     await poll();
+    delete board.innerHTML;
+    advanceFrame();
     check(board.firstElementChild !== section, "changed poll did not rebuild the board");
     check(board.querySelector(".ticket-title")?.textContent === "Inserted ticket",
       "changed ticket was not rendered");
-    checkScroll(275, 550, "changed poll");
-    check(getComputedStyle(board).overflowAnchor === "none", "board scroll anchoring is enabled");
+    checkScroll(275, 550, "changed poll after transient layout collapse");
+    for (const element of [document.documentElement, document.body, board]) {
+      check(getComputedStyle(element).overflowAnchor === "none", `${element.tagName} scroll anchoring is enabled`);
+    }
 
     rooms = [];
     tickets = [];
     await poll();
+    advanceFrame();
     const scroll = document.scrollingElement;
     const maxY = scroll.scrollHeight - scroll.clientHeight;
     check(maxY < 550, "empty board did not shrink");
