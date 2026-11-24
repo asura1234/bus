@@ -189,12 +189,15 @@ fn feishu_reply_is_developer_authored_correlated_and_gets_an_independent_turn() 
     assert_eq!(provenance.source, source);
     assert_eq!(provenance.feishu_message_id, "om_in");
     assert_eq!(provenance.raising_agent, Some(worker));
+    let message = request.prompt.id.0;
     let payload = state.render_request_payload(request_id).unwrap();
-    assert!(
-        payload.contains("in_reply_to"),
-        "the provider must receive correlation: {payload}"
+    assert_eq!(
+        payload,
+        format!(
+            "[Bus message {message} from you (room {})]\nProceed",
+            work.0
+        )
     );
-    assert!(payload.contains("Proceed"));
 }
 
 #[test]
@@ -208,10 +211,17 @@ fn feishu_replay_after_store_reload_returns_the_same_request() {
     let first = state
         .ingest_feishu_reply(event.clone(), "ou_developer", 21)
         .unwrap();
+    let IngestOutcome::Delivered { request_id, .. } = first else {
+        panic!("{first:?}");
+    };
     let root = crate::utils::test_temp::unique_temp_path("feishu-durable-dedupe");
     let store = crate::messaging::storage::state_store::JsonStore::new(root.join("state.json"));
     store.save(&state).unwrap();
     let mut reloaded = store.load().unwrap().unwrap();
+    assert_eq!(
+        reloaded.request(request_id).unwrap().prompt.in_reply_to,
+        state.request(request_id).unwrap().prompt.in_reply_to
+    );
     let count = reloaded.requests().count();
     assert_eq!(
         reloaded

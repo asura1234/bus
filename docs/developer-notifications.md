@@ -101,9 +101,10 @@ Reply ancestry (`reply_to`, then `root_id`, including accepted inbound ancestry)
 or an explicit `bus:CODE` must identify exactly one request. Conflicting references
 stay parked. There is no matching by time, display name or most recent alert.
 
-Accepted replies become developer-authored Bus messages with structured
-`in_reply_to` provenance in history and the provider payload. They queue an
-independent turn for each original or aliased source's exact recorded orchestrator.
+Accepted replies become developer-authored Bus messages. Bus records structured
+`in_reply_to` provenance in state and history. The provider receives the standard
+Bus message header followed by the authored reply. Each original or aliased
+source queues an independent turn for its exact recorded orchestrator.
 Aliases admitted after a reply receive its saved original text without a replay;
 each source has its own durable outcome, including individual target parking.
 Unknown/ambiguous replies
