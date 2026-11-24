@@ -42,10 +42,12 @@
       padding: 0;
       background: var(--bg-page);
       overflow: auto;
+      overflow-anchor: none;
     }
 
     body {
       margin: 0;
+      overflow-anchor: none;
       padding: 0;
       background: var(--bg-page);
       color: var(--text-primary);
@@ -606,14 +608,11 @@
         `;
       }).join("");
 
-      const scroll = document.scrollingElement;
-      const x = scroll.scrollLeft;
-      const y = scroll.scrollTop;
+      const x = window.scrollX;
+      const y = window.scrollY;
       container.innerHTML = roomsHtml || `<section class="room-section"><aside class="room-sidebar-cell"><h2 class="room-name">No sections</h2></aside></section>`;
-      window.scrollTo(
-        Math.min(x, scroll.scrollWidth - scroll.clientWidth),
-        Math.min(y, scroll.scrollHeight - scroll.clientHeight)
-      );
+      // Let the browser clamp to the updated scroll range after the DOM swap.
+      requestAnimationFrame(() => window.scrollTo(x, y));
       lastRenderedContent = content;
     }
 
