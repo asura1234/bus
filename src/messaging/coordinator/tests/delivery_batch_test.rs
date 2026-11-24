@@ -113,7 +113,7 @@ fn claude_coalesced_paste_with_adjacent_input_completes_every_joined_message() {
     }
 }
 
-fn claude_steer_batch_with_image() -> (Fixture, RequestId, RequestId, String) {
+fn claude_steer_batch_with_image(image_message: &str) -> (Fixture, RequestId, RequestId, String) {
     let mut fixture = Fixture::in_room(Provider::ClaudeDs, true);
     fixture.status(RuntimeStatus::Launching);
     let mut state = fixture.worker.state.clone();
@@ -133,7 +133,7 @@ fn claude_steer_batch_with_image() -> (Fixture, RequestId, RequestId, String) {
         .submit_message_from(
             room,
             Draft {
-                text: "设备前台显示「双击画布 / 开始创作」。".into(),
+                text: image_message.into(),
                 files: vec![image.clone()],
                 recipient_ids: [fixture.agent].into(),
             },
@@ -186,7 +186,8 @@ fn claude_steer_batch_with_image() -> (Fixture, RequestId, RequestId, String) {
 
 #[test]
 fn claude_steer_batch_with_image_binds_and_settles_both_requests() {
-    let (mut fixture, first, second, payload) = claude_steer_batch_with_image();
+    let (mut fixture, first, second, payload) =
+        claude_steer_batch_with_image("设备前台显示「双击画布 / 开始创作」。");
     fixture.started("batch", &payload);
     fixture.consume();
     assert!(
@@ -208,7 +209,8 @@ fn claude_steer_batch_with_image_binds_and_settles_both_requests() {
 
 #[test]
 fn claude_steer_batch_with_image_rejects_unrelated_turn_and_keeps_warning() {
-    let (mut fixture, first, second, payload) = claude_steer_batch_with_image();
+    let (mut fixture, first, second, payload) =
+        claude_steer_batch_with_image("设备前台显示「双击画布 / 开始创作」。");
     let foreign = payload.replace(
         "The worker has been idle",
         "A different worker has been idle",
@@ -224,6 +226,69 @@ fn claude_steer_batch_with_image_rejects_unrelated_turn_and_keeps_warning() {
     fixture.started("next", "A new autonomous turn.");
     fixture.consume();
     for request in [first, second] {
+        assert_eq!(fixture.request(request).phase, RequestPhase::Abandoned);
+        assert_eq!(
+            fixture.request(request).failure_reason.as_deref(),
+            Some("submission_unconfirmed")
+        );
+        assert!(fixture.reply(request).is_none());
+    }
+    assert!(fixture.error().is_some());
+}
+
+fn claude_batch_with_wrapped_inline_file(
+    evidence_reference: &str,
+) -> (Fixture, RequestId, RequestId, String) {
+    let caption = format!(
+        "设备前台显示「双击画布 / 开始创作」。`build` / channel `local`。证据 {evidence_reference}。继续。"
+    );
+    let (fixture, lead, member, payload) = claude_steer_batch_with_image(&caption);
+    let payload = payload
+        .replace("`build` / channel", "`build`\n/ channel")
+        .replace("证据 /work", "证据\n/work");
+    (fixture, lead, member, payload)
+}
+
+#[test]
+fn claude_consumed_turn_with_wrapped_inline_file_settles_each_batch_member() {
+    for evidence in ["/work/images/screenshot.png", "/work/report.md "] {
+        let (mut fixture, lead, member, payload) = claude_batch_with_wrapped_inline_file(evidence);
+        assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+        assert!(!fixture.request(lead).trusted_start_bound);
+        fixture.started("batch", &payload);
+        fixture.consume();
+        assert!(
+            fixture.request(lead).trusted_start_bound,
+            "Started must bind the full payload with the wrapped path {evidence:?}"
+        );
+        fixture.stopped("batch", "I received the screenshot.");
+        fixture.consume();
+        for request in [lead, member] {
+            assert_eq!(fixture.request(request).delivery_stage(), "replied");
+            assert_eq!(
+                fixture.reply(request).as_deref(),
+                Some("I received the screenshot.")
+            );
+            assert_eq!(fixture.request(request).reply_key(), lead);
+            assert!(fixture.request(request).failure_reason.is_none());
+        }
+        assert!(fixture.error().is_none());
+    }
+}
+
+#[test]
+fn claude_consumed_turn_with_changed_inline_png_stays_unrelated() {
+    let (mut fixture, lead, member, payload) =
+        claude_batch_with_wrapped_inline_file("/work/images/screenshot.png");
+    let foreign = payload.replace("/work/images/screenshot.png", "/work/images/different.png");
+    fixture.started("foreign", &foreign);
+    fixture.stopped("foreign", "An answer to different input.");
+    fixture.consume();
+    assert!(!fixture.request(lead).trusted_start_bound);
+
+    fixture.started("next", "A new autonomous turn.");
+    fixture.consume();
+    for request in [lead, member] {
         assert_eq!(fixture.request(request).phase, RequestPhase::Abandoned);
         assert_eq!(
             fixture.request(request).failure_reason.as_deref(),
