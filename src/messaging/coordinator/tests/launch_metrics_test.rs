@@ -24,6 +24,55 @@ impl Transport for StartupPollSample {
 }
 
 #[test]
+fn live_claude_launch_stays_launching_until_screen_status_is_known() {
+    let mut unknown = native_info("pane", "claude", "session");
+    unknown.launch_pending = false;
+    unknown.native_ready = true;
+    unknown.interactive_ready = true;
+    unknown.agent_status = schema::AgentStatus::Unknown;
+    let mut idle = unknown.clone();
+    idle.agent_status = schema::AgentStatus::Idle;
+    let mut working = idle.clone();
+    working.agent_status = schema::AgentStatus::Working;
+    let replies = [unknown.clone(), idle, working, unknown]
+        .into_iter()
+        .map(|info| Ok(ResponseResult::AgentList { agents: vec![info] }))
+        .collect();
+    let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeArgon, replies);
+    let mut state = worker.state.clone();
+    state
+        .observe_status(agent, RuntimeStatus::Launching, 1)
+        .unwrap();
+    worker.save(state).unwrap();
+    seed_launch(&mut worker, agent, u64::MAX);
+
+    for (expected, outcome) in [
+        (RuntimeStatus::Launching, "pending"),
+        (RuntimeStatus::Idle, "usable"),
+        (RuntimeStatus::Working, "usable"),
+        (RuntimeStatus::Unavailable, "usable"),
+    ] {
+        let infos = worker.poll().unwrap().unwrap();
+        let info = &infos[0];
+        let shown = worker.state.agent(agent).unwrap().shown_status();
+        let record = ledger(&worker);
+        eprintln!(
+            "agent_status={:?} native_ready={} interactive_ready={} launch_pending={} screen_detection_skipped={} outcome={} shown={shown:?}",
+            info.agent_status,
+            info.native_ready,
+            info.interactive_ready,
+            info.launch_pending,
+            info.screen_detection_skipped,
+            record["1"]["outcome"],
+        );
+        assert_eq!(record["1"]["outcome"], outcome);
+        assert_eq!(shown, expected);
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn sessionless_launch_poll_and_watchdog_share_the_readiness_deadline() {
     for (ready_at, exit_at) in [(Some(60_000), None), (None, Some(60_000)), (None, None)] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
@@ -57,8 +106,13 @@ fn sessionless_launch_poll_and_watchdog_share_the_readiness_deadline() {
         exited.launch_pending = false;
         exited.agent_status = schema::AgentStatus::Unknown;
 
+        let mut inconclusive = pending.clone();
+        inconclusive.agent = None;
+        inconclusive.launch_pending = false;
+        inconclusive.agent_status = schema::AgentStatus::Unknown;
+
         let observations = if let Some(at) = ready_at {
-            vec![(31_000, pending), (at, ready)]
+            vec![(31_000, pending), (32_000, inconclusive), (at, ready)]
         } else if let Some(at) = exit_at {
             vec![(31_000, pending), (at, exited)]
         } else {
@@ -91,6 +145,20 @@ fn sessionless_launch_poll_and_watchdog_share_the_readiness_deadline() {
                 "elapsed={elapsed}"
             );
             assert_eq!(ledger(&worker)["1"]["deadline_at_ms"], start + 90_000);
+            if elapsed == 32_000 {
+                assert_eq!(
+                    worker.state.agent(agent).unwrap().shown_status(),
+                    RuntimeStatus::Launching,
+                    "the omitted launch row still has its verified pane"
+                );
+            }
+            if exit_at == Some(elapsed) {
+                assert_eq!(
+                    worker.state.agent(agent).unwrap().shown_status(),
+                    RuntimeStatus::Unavailable,
+                    "confirmed provider exit must surface on this poll"
+                );
+            }
         }
         let request = worker.state.request(request).unwrap();
         assert_eq!(

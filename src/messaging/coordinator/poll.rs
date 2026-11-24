@@ -4,7 +4,7 @@ use super::{
     io, resume, schema, AgentId, BTreeMap, BusState, Duration, Path, PathBuf, ResponseResult,
     RoomAgent, RuntimeStatus, Worker,
 };
-use crate::messaging::model::DeliveryEpoch;
+use crate::messaging::model::{DeliveryEpoch, LaunchOutcome};
 
 impl Worker {
     pub(super) fn poll(&mut self) -> Result<Option<Vec<schema::AgentInfo>>, String> {
@@ -61,6 +61,18 @@ impl Worker {
             }
             confirm_interactive_agent(&mut state, agent, info)?;
             super::launch_metrics::observe(&mut state, previous_agent, info, observed_at_ms)?;
+            // SessionStart may clear native launch_pending before the screen
+            // publishes a status. Keep the owned launch visible while pending.
+            let status = if status == RuntimeStatus::Unavailable
+                && !missing
+                && exit_evidence != Some(true)
+                && (info.is_some() || exit_evidence == Some(false))
+                && pending_launch(&state, agent, info)
+            {
+                RuntimeStatus::Launching
+            } else {
+                status
+            };
             // Missing screen facts cannot refresh an inconclusive status clock.
             if status != agent.status || !info.is_some_and(inconclusive_screen) {
                 state
@@ -470,6 +482,20 @@ fn inconclusive_screen(info: &schema::AgentInfo) -> bool {
         && info.native_ready
         && info.interactive_ready
         && !info.launch_pending
+}
+
+fn pending_launch(state: &BusState, agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> bool {
+    !agent.deletion_pending
+        && !agent.session_binding_invalidated
+        && info.is_none_or(|info| super::startup::explicit_startup_error(agent, info).is_none())
+        && state
+            .current_launch_attempt(agent.id)
+            .is_some_and(|attempt| {
+                attempt.outcome == LaunchOutcome::Pending
+                    && attempt.launch_id.is_some()
+                    && attempt.launch_id == agent.runtime_identity.launch_id
+                    && attempt.terminal_id == agent.runtime_identity.terminal_id
+            })
 }
 
 fn polled_status(agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> RuntimeStatus {
