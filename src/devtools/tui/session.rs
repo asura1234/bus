@@ -215,6 +215,17 @@ impl SessionPaths {
         ] {
             create_private_dir(&dir)?;
         }
+        #[cfg(unix)]
+        {
+            // macOS otherwise defaults panes to login shells, which source
+            // /etc/profile even with our private HOME and environment.
+            let config = self.data_dir().join("herdr-config");
+            create_private_dir(&config)?;
+            std::fs::write(
+                config.join("config.toml"),
+                "[terminal]\nshell_mode = \"non_login\"\n",
+            )?;
+        }
         Ok(())
     }
 
@@ -730,7 +741,11 @@ pub(super) fn scratch_env(
         ),
     ]);
     #[cfg(unix)]
-    env.push(("SHELL".into(), "/bin/bash".into()));
+    env.extend([
+        ("SHELL".into(), "/bin/bash".into()),
+        // Without INPUTRC, Readline can fall back to the host's /etc/inputrc.
+        ("INPUTRC".into(), "/dev/null".into()),
+    ]);
     env
 }
 
