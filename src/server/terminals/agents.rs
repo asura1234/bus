@@ -364,10 +364,11 @@ impl App {
                 AgentStartError::InputFailed(err.to_string())
             });
         }
-        if params.kind == "claude-gpt"
+        // Sessionless restore needs the wrapper identity before a session exists.
+        if matches!(params.kind.as_str(), "claude-argon" | "claude-gpt")
             && std::path::Path::new(&argv[0])
                 .file_name()
-                .is_some_and(|name| name == "claude-gpt")
+                .is_some_and(|name| name == params.kind.as_str())
         {
             terminal.launch_argv = Some(argv.clone());
         }
