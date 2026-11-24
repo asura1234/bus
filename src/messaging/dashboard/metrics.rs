@@ -3,7 +3,7 @@ use crate::messaging::model::{AgentId, BusState, Request, RequestPhase, RoomId};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub(super) const PROVIDERS: [&str; 8] = [
+pub(super) const PROVIDERS: [&str; 9] = [
     "claude",
     "claude-ds",
     "claude-argon",
