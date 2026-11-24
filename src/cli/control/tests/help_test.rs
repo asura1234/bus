@@ -1,6 +1,30 @@
 use super::parse;
 
 #[test]
+fn bot_identity_cli_exposes_add_list_and_delete() {
+    use serde_json::json;
+
+    for (args, method, params) in [
+        (
+            &["bot", "add", "--room", "work", "--name", "watcher"][..],
+            "bot.add",
+            json!({"name":"watcher","room":"work"}),
+        ),
+        (&["bot", "list"][..], "bot.list", json!({})),
+        (&["bot", "list", "--json"][..], "bot.list", json!({})),
+        (
+            &["bot", "delete", "watcher"][..],
+            "bot.delete",
+            json!({"name":"watcher"}),
+        ),
+    ] {
+        let args: Vec<_> = args.iter().map(ToString::to_string).collect();
+        let parsed = parse::parse(&args, "bot-test").unwrap();
+        assert_eq!((parsed.method, parsed.params), (method, params));
+    }
+}
+
+#[test]
 fn reply_help_explains_settlement_without_requester_wakes() {
     for command in ["send", "wait"] {
         let args = [command, "--help"].map(String::from);
