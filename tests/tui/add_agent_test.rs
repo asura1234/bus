@@ -169,7 +169,7 @@ fn unavailable_provider_closes_and_reports_failure_in_the_room() {
 #[test]
 fn slow_add_closes_immediately_and_keeps_the_room_editable() {
     let session = Session::start("add-slow");
-    fs::write(home(&session).join(".bash_profile"), "/bin/sleep 9\n").unwrap();
+    fs::write(home(&session).join(".bashrc"), "/bin/sleep 9\n").unwrap();
     form(&session, "slow-worker", "claude", "~/");
     session.ok(&["press", "Enter"]);
     let immediate = screen(&session);
@@ -192,7 +192,7 @@ fn slow_add_closes_immediately_and_keeps_the_room_editable() {
 #[test]
 fn native_startup_deadline_is_visible_in_the_room() {
     let session = Session::start("add-time");
-    fs::write(home(&session).join(".bash_profile"), "/bin/sleep 36\n").unwrap();
+    fs::write(home(&session).join(".bashrc"), "/bin/sleep 36\n").unwrap();
     form(&session, "deadline-worker", "claude", "~/");
     session.ok(&["press", "Enter"]);
     let immediate = screen(&session);

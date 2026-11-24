@@ -75,6 +75,10 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
     let inherited: Vec<(String, OsString)> = [
         ("PATH", "/usr/bin"),
         ("HOME", "/Users/me"),
+        ("BASH_ENV", "/Users/me/.bash_env"),
+        ("ENV", "/Users/me/.shrc"),
+        ("INPUTRC", "/Users/me/.inputrc"),
+        ("PROMPT_COMMAND", "hostname"),
         ("LC_ALL", "C"),
         ("LC_TERMINAL", "iTerm2"),
         ("LC_TERMINAL_VERSION", "3.7.3"),
@@ -103,6 +107,11 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
     assert!(get("TMUX").is_none());
     // The developer's home and their terminal's identity stay out of the scratch Bus.
     assert_eq!(get("HOME"), Some(OsString::from("/tmp/bus-tui/s1/home")));
+    assert!(get("BASH_ENV").is_none());
+    assert!(get("ENV").is_none());
+    assert!(get("PROMPT_COMMAND").is_none());
+    #[cfg(unix)]
+    assert_eq!(get("INPUTRC"), Some(OsString::from("/dev/null")));
     assert_eq!(get("LC_ALL"), Some(OsString::from("C")));
     assert!(get("LC_TERMINAL").is_none());
     assert!(get("LC_TERMINAL_VERSION").is_none());
