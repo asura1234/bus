@@ -314,7 +314,7 @@ pub(crate) fn claude_text_matches(mut actual: &str, expected: &str) -> bool {
         if expected[..index].ends_with('\\')
             || !(token.starts_with("/ ")
                 || escaped_png_token(token)
-                || unquoted_absolute_file_token(token))
+                || unquoted_file_before_ideographic_full_stop(token))
         {
             continue;
         }
@@ -330,12 +330,13 @@ pub(crate) fn claude_text_matches(mut actual: &str, expected: &str) -> bool {
     actual == &expected[copied..]
 }
 
-fn unquoted_absolute_file_token(text: &str) -> bool {
-    let path = text
-        .split(|c: char| c.is_ascii_whitespace() || c == '。')
-        .next()
-        .unwrap_or_default();
-    is_unquoted_absolute_path(path)
+fn unquoted_file_before_ideographic_full_stop(text: &str) -> bool {
+    let Some(end) = text.find(|c: char| c.is_ascii_whitespace() || c == '。') else {
+        return false;
+    };
+    let (path, ending) = text.split_at(end);
+    ending.strip_prefix(' ').unwrap_or(ending).starts_with('。')
+        && is_unquoted_absolute_path(path)
         && Path::new(path)
             .extension()
             .and_then(|extension| extension.to_str())
