@@ -517,8 +517,12 @@
     function formatShortPull(url) {
       if (!url) return "";
       const m = String(url).match(/\/(?:pull|merge_requests)\/(\d+)/i);
-      if (m) return "MR #" + m[1];
-      return "MR / PR";
+      if (!m) return "MR / PR";
+      let prefix = "MR";
+      try {
+        if (new URL(url).hostname === "github.com") prefix = "PR";
+      } catch (_) {}
+      return `${prefix} #${m[1]}`;
     }
 
     async function fetchBoard() {

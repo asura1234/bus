@@ -553,7 +553,8 @@ window.addEventListener("DOMContentLoaded", () => {{
 #[test]
 fn headless_page_preserves_scroll_across_polls() {
     // Stub fetch and advance the page's scheduled poll explicitly so browser timing cannot race the assertions.
-    assert_headless_board_probe(r#"<script>
+    assert_headless_board_probe(
+        r#"<script>
 let rooms = [{ id: 1, name: "Test room" }];
 let tickets = Array.from({ length: 12 }, (_, i) => ({
   room_id: 1,
@@ -624,12 +625,14 @@ window.addEventListener("load", async () => {
     result.textContent = error.message;
   }
 });
-</script>"#);
+</script>"#,
+    );
 }
 
 #[test]
 fn headless_page_counts_visible_tickets_across_sections() {
-    assert_headless_board_probe(r#"<script>
+    assert_headless_board_probe(
+        r#"<script>
 const rooms = [
   { id: 1, name: "First" },
   { id: 2, name: "Second" },
@@ -679,7 +682,63 @@ window.addEventListener("load", async () => {
     result.textContent = error.message;
   }
 });
-</script>"#);
+</script>"#,
+    );
+}
+
+#[test]
+fn headless_page_labels_pull_requests_by_host() {
+    assert_headless_board_probe(
+        r#"<script>
+const rooms = [{ id: 1, name: "Requests" }];
+const cases = [
+  ["https://github.com/example/platform/pull/41?tab=files", "PR #41"],
+  ["https://codeup.aliyun.com/example/platform/merge_requests/42", "MR #42"],
+  ["https://gitlab.com/example/platform/-/merge_requests/43", "MR #43"],
+  ["https://forge.example.com/example/platform/-/merge_requests/44", "MR #44"],
+  ["https://github.com.example.com/example/platform/pull/45", "MR #45"],
+  ["https://example.com/changes/46", "MR / PR"]
+];
+const tickets = cases.map(([mr_url], index) => ({
+  room_id: 1, column: "review", title: `Ticket ${index + 1}`, mr_url
+}));
+let poll;
+window.setInterval = callback => { poll = callback; };
+window.fetch = async url => ({
+  ok: url === "/api/board?view=session",
+  json: async () => ({ rooms, tickets })
+});
+
+function checkLinks(expected) {
+  const links = [...document.querySelectorAll(".ticket-mr-row .mr-link")];
+  if (links.length !== expected.length) throw new Error(`Expected ${expected.length} links, got ${links.length}`);
+  expected.forEach(([url, label], index) => {
+    const link = links[index];
+    if (link.getAttribute("href") !== url || link.textContent !== `${label} ↗`) {
+      throw new Error(`Expected ${label} ↗ for ${url}, got ${link.textContent} for ${link.href}`);
+    }
+  });
+}
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    checkLinks(cases);
+
+    const changedUrl = "https://gitlab.com/example/platform/-/merge_requests/41";
+    tickets[0] = { ...tickets[0], mr_url: changedUrl };
+    await poll();
+    checkLinks([[changedUrl, "MR #41"], ...cases.slice(1)]);
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>"#,
+    );
 }
 
 fn assert_headless_board_probe(fixture: &str) {
