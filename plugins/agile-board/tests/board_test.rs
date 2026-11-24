@@ -788,9 +788,28 @@ window.addEventListener("load", async () => {
       if (labels.join() !== expected.join()) throw new Error(`Expected ${expected}, got ${labels}`);
     };
     checkAges(["12 min", "2500 min"]);
-    if (!ages[0].parentElement.querySelector(".mr-link") || cards[1].querySelector(".mr-link")) {
-      throw new Error("Expected ages in card footers with and without MR links");
-    }
+    cards.forEach((card, i) => {
+      const footer = card.lastElementChild;
+      const age = ages[i];
+      const link = footer.querySelector(".mr-link");
+      if (age.parentElement !== footer || Boolean(link) !== (i === 0)) {
+        throw new Error("Expected ages in card footers with and without MR links");
+      }
+      const cardRect = card.getBoundingClientRect();
+      const style = getComputedStyle(card);
+      const contentRight = cardRect.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight);
+      const ageRect = age.getBoundingClientRect();
+      if (Math.abs(ageRect.right - contentRight) > 1) {
+        throw new Error(`Ticket ${i + 1}: age right edge ${ageRect.right} does not match ${contentRight}`);
+      }
+      if (link) {
+        const linkRect = link.getBoundingClientRect();
+        const contentLeft = cardRect.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+        if (Math.abs(linkRect.left - contentLeft) > 1 || ageRect.top >= linkRect.bottom) {
+          throw new Error("Expected the MR link at the left of the same footer row");
+        }
+      }
+    });
     if (Number(ages[0].dataset.createdAtMs) !== tickets[0].created_at_ms) {
       throw new Error("Age label is missing its creation timestamp");
     }
