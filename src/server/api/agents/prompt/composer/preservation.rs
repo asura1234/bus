@@ -579,11 +579,20 @@ fn exact_codex_editor_line(screen: &str, y: u16, literal: &str, expected: &str) 
     let [_, spacer, footer] = &rows[region] else {
         return false;
     };
+    // The general region reader can choose a prompt-like continuation.
+    // An edit needs a unique prompt across the complete frame.
+    let apparent_prompts = rows.iter().enumerate().filter_map(|(index, row)| {
+        row.trim()
+            .trim_matches(['│', '┃', '║'])
+            .trim_start()
+            .starts_with(['❯', '›', '>', '→'])
+            .then_some(index)
+    });
     start == usize::from(y)
+        && apparent_prompts.eq(std::iter::once(start))
         && spacer.trim().is_empty()
         && (footer.trim_start().starts_with("GPT-") || footer.trim_start().starts_with("gpt-"))
         && literal
-            .trim_start_matches([' ', '\0'])
             .strip_prefix('›')
             .and_then(|text| text.strip_prefix([' ', '\0']))
             == Some(expected)

@@ -53,13 +53,14 @@ impl Pane {
     }
 
     fn paint(&self) {
+        let (row, col) = self.draft.rsplit_once('\n').map_or_else(
+            || (1, self.draft.chars().count() + 3),
+            |(_, last)| (self.draft.lines().count(), last.chars().count() + 1),
+        );
+        let draft = self.draft.replace('\n', "\r\n");
+        let col = col - self.caret_left;
         self.runtime.test_process_pty_bytes(
-            format!(
-                "\x1b[2J\x1b[H› {}\r\n\r\n GPT-6 · /repo\x1b[1;{}H",
-                self.draft,
-                self.draft.chars().count() + 3 - self.caret_left,
-            )
-            .as_bytes(),
+            format!("\x1b[2J\x1b[H› {draft}\r\n\r\n  GPT-6 · /repo\x1b[{row};{col}H").as_bytes(),
         );
     }
 
@@ -495,4 +496,38 @@ async fn editor_reentry_edited_marked_draft_receives_no_keys() {
     // Moving the caret back must not hide a trailing edit from the guard.
     resume_pending_while_prior_restore_finishes(true, Some(|text| (format!("{text} "), 1))).await;
     resume_pending_while_prior_restore_finishes(true, Some(|text| (text.to_owned(), 1))).await;
+}
+
+#[tokio::test]
+async fn editor_reentry_indented_prompt_continuation_receives_no_keys() {
+    resume_pending_while_prior_restore_finishes(
+        true,
+        Some(|marked| (format!("developer-added first line\n  › {marked}"), 0)),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn editor_reentry_two_indented_prompt_continuations_receive_no_keys() {
+    resume_pending_while_prior_restore_finishes(
+        true,
+        Some(|marked| {
+            (
+                format!(
+                    "developer-added first line\n  › developer-added second line\n  › {marked}"
+                ),
+                0,
+            )
+        }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn editor_reentry_multiple_canonical_prompts_receive_no_keys() {
+    resume_pending_while_prior_restore_finishes(
+        true,
+        Some(|marked| (format!("developer-added first line\n› {marked}"), 0)),
+    )
+    .await;
 }
