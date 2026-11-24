@@ -247,6 +247,13 @@ impl PaneTerminal {
         self.ghostty.cursor_state()
     }
 
+    /// Native write authorization uses the active caret, without the UI's
+    /// cursor-position settling or scrollback viewport.
+    pub(crate) fn active_literal_line(&self) -> Option<(u16, String)> {
+        let core = self.ghostty.core.lock().ok()?;
+        core.terminal.active_literal_line().ok()?
+    }
+
     pub fn synchronized_output_active(&self) -> bool {
         self.ghostty.synchronized_output_active()
     }

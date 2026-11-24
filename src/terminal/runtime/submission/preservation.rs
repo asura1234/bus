@@ -1,6 +1,8 @@
 //! Transfer a developer draft only while pane input is exclusively reserved.
-use super::{InputObservation, ObservedSubmission, PromptNotShown};
-use crate::platform::draft_editor::Exchange;
+use super::{
+    copy::RESTORE_BUDGET, swap_key::SwapKey, InputObservation, ObservedSubmission, PromptNotShown,
+};
+use crate::platform::draft_editor::{expired_swap_fence_committed, Exchange, SwapCancellation};
 use crate::protocol::api::submission::{confirmation_budget, CLEAR_KEY_DELAY, WITHDRAW_GRACE};
 use bytes::Bytes;
 use std::{io, path::PathBuf, time::Duration};
@@ -166,7 +168,7 @@ impl ObservedSubmission {
             DraftPreservation::Copy {
                 snapshot,
                 restore_bytes,
-            } => self.preserve_copy(snapshot, restore_bytes, text, delay, lease),
+            } => self.preserve_copy(snapshot, restore_bytes, text, delay, &screen, lease),
         }
     }
 
@@ -181,29 +183,28 @@ impl ObservedSubmission {
             // that attempt; opening the editor would replace it.
             InputObservation::Pending => {
                 if self.inspect.confirm_consumption() {
-                    let exchange = Exchange::begin_restoration(
-                        editor.directory.clone(),
-                        self.clock.remaining(self.hard_deadline),
-                    )
-                    .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
-                    return self.submit_editor_attempt(&exchange, editor, delay, lease);
+                    let exchange = self.begin_editor_restore(&editor.directory)?;
+                    return self.submit_editor_attempt(&exchange, editor, delay, lease, true);
                 }
-                let submitted = self.swap_key(lease, self.enter.clone(), true);
-                lease.restored();
+                let submitted = self.swap_key(lease, SwapKey::Resume(None));
+                if submitted.is_ok() {
+                    lease.restored();
+                }
                 return submitted;
             }
             InputObservation::Empty => {}
-            // Developer text after the interrupted swap stays put.
+            InputObservation::Other => {
+                if self.repair_marked_draft(&editor, lease).is_ok() {
+                    lease.restored();
+                }
+                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+            }
             _ => {
                 lease.restored();
                 return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
         }
-        let exchange = Exchange::begin_restoration(
-            editor.directory.clone(),
-            self.clock.remaining(self.hard_deadline),
-        )
-        .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
+        let exchange = self.begin_editor_restore(&editor.directory)?;
         self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true, lease)
             .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
         lease.restored();
@@ -240,7 +241,7 @@ impl ObservedSubmission {
             .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?
     }
 
-    fn wait_transfer_until(
+    pub(super) fn wait_transfer_until(
         &self,
         deadline: std::time::Instant,
         mut ready: impl FnMut() -> io::Result<bool>,
@@ -375,7 +376,7 @@ impl ObservedSubmission {
             tracing::warn!(event = "bus.draft.copy_loss", %error, "Could not save native recovery backup");
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
-        if let Err(error) = self.swap_key(lease, key.clone(), false) {
+        if let Err(error) = self.swap_key(lease, SwapKey::Transfer(key.clone())) {
             let _ = exchange.remove_recovery();
             let path = exchange.path().to_owned();
             drop(exchange);
@@ -385,16 +386,14 @@ impl ObservedSubmission {
             tracing::error!(event = "bus.draft.recovery_required", directory = %path.display(), %error, "Draft restoration was not proven; recoverable draft retained");
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
-        if let Err(error) =
-            self.wait_transfer_until(self.clock.now() + FALLBACK_HANDOFF_BUDGET, || {
-                Ok(
-                    self.observe("await_native_stash") == InputObservation::Empty
-                        && self
-                            .inspect
-                            .native_stash_visible(&self.terminal.active_ansi()),
-                )
-            })
-        {
+        if let Err(error) = self.wait_transfer_until(self.clock.now() + RESTORE_BUDGET, || {
+            Ok(
+                self.observe("await_native_stash") == InputObservation::Empty
+                    && self
+                        .inspect
+                        .native_stash_visible(&self.terminal.active_ansi()),
+            )
+        }) {
             let _ = exchange.remove_recovery();
             let path = exchange.path().to_owned();
             drop(exchange);
@@ -477,73 +476,8 @@ impl ObservedSubmission {
         key: &Bytes,
         lease: &crate::terminal::runtime::draft_input::DraftInputLease,
     ) -> io::Result<()> {
-        self.swap_key(lease, key.clone(), false)?;
+        self.swap_key(lease, SwapKey::Transfer(key.clone()))?;
         self.wait_transfer(|| exchange.acknowledged())
-    }
-
-    fn swap_key(
-        &self,
-        lease: &crate::terminal::runtime::draft_input::DraftInputLease,
-        key: Bytes,
-        submit: bool,
-    ) -> io::Result<()> {
-        let deadline = if submit {
-            self.deadline.get()
-        } else {
-            self.hard_deadline
-        };
-        let guard = self
-            .content_lock
-            .lock()
-            .map_err(|_| io::Error::other("terminal content lock poisoned"))?;
-        let completion = lease.with_uninvalidated(|| {
-            let screen = self
-                .terminal
-                .active_ansi_if_complete()
-                .filter(|screen| self.inspect.submission_available(screen))
-                .ok_or_else(|| io::Error::other("Native input is blocked"))?;
-            if self.clock.now() >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Draft transfer expired",
-                ));
-            }
-            let key = if submit {
-                self.inspect.editor_submit_key(&screen, &key)
-            } else {
-                key
-            };
-            if submit {
-                if self.inspect.confirm_consumption() {
-                    self.observe("legacy_editor_enter_ownership");
-                    self.enter_content_seq
-                        .set(self.content_seq.load(std::sync::atomic::Ordering::Acquire));
-                }
-                self.diagnostics.enter(&key, self.clock.now());
-            }
-            let (text, enter) = if submit {
-                (Bytes::new(), key)
-            } else {
-                (key, Bytes::new())
-            };
-            self.io.queue_input_write_scoped(
-                text,
-                enter,
-                Duration::ZERO,
-                Some(deadline),
-                &self.scope,
-            )
-        })?;
-        drop(guard);
-        let result = completion
-            .recv_timeout(self.clock.remaining(deadline))
-            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
-        if submit {
-            self.diagnostics.entered(&result, self.clock.now());
-            result.map_err(Self::uncertain_submission)
-        } else {
-            result
-        }
     }
 
     fn remove_marker(
@@ -562,7 +496,7 @@ impl ObservedSubmission {
         for _ in exchange.marker().bytes() {
             keys.extend_from_slice(backspace);
         }
-        self.swap_key(lease, Bytes::from(keys), false)?;
+        self.swap_key(lease, SwapKey::Transfer(Bytes::from(keys)))?;
         self.wait_transfer(|| {
             Ok(self
                 .terminal
@@ -634,62 +568,86 @@ impl ObservedSubmission {
             .inspect
             .editor_submission()
             .ok_or_else(|| io::Error::other("Native editor input is unavailable"))?;
-        let exchange = match Exchange::begin_preserving(
-            directory.clone(),
-            self.clock.remaining(self.hard_deadline),
-        ) {
+        let optional_editor = !self.inspect.always_use_editor();
+        let mut exchange = match self.begin_editor_swap(&directory) {
             Ok(exchange) => exchange,
             Err(error) => {
-                if !self.inspect.always_use_editor() {
+                if optional_editor
+                    && error.kind() != io::ErrorKind::TimedOut
+                    && (expired_swap_fence_committed(&error)
+                        || Exchange::permits_copy_fallback(&directory))
+                {
                     if let Some(fallback) =
                         self.fallback_copy_after_handoff_failure(text, delay, lease)
                     {
                         return fallback;
                     }
+                    lease.restored();
+                } else if !optional_editor {
+                    lease.restored();
                 }
-                lease.restored();
                 tracing::warn!(event = "bus.draft.exchange_wait", directory = %directory.display(), %error, "Draft transfer is unavailable; delivery remains queued");
                 return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
         };
         if let Err(error) = exchange.request_swap(&editor.text) {
             drop(exchange);
-            if !self.inspect.always_use_editor() {
+            if optional_editor && Exchange::permits_copy_fallback(&directory) {
                 if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease)
                 {
                     return fallback;
                 }
+            }
+            if error.kind() == io::ErrorKind::WouldBlock {
+                return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
             lease.restored();
             return Err(error);
         }
-        let handoff_deadline = if self.inspect.always_use_editor() {
-            self.hard_deadline
-        } else {
+        let handoff_deadline = if optional_editor {
             self.clock.now() + FALLBACK_HANDOFF_BUDGET
+        } else {
+            self.hard_deadline
         };
+        let mut cancelled = false;
         let captured = self
-            .swap_key(lease, key.clone(), false)
+            .swap_key(lease, SwapKey::Transfer(key.clone()))
             .and_then(|()| self.wait_transfer_until(handoff_deadline, || exchange.acknowledged()))
-            .and_then(|()| self.remove_marker(&exchange, &backspace, lease));
-        if let Err(error) = captured {
-            let has_preserved = Exchange::has_preserved_draft(exchange.path());
-            if !self.inspect.always_use_editor() && !has_preserved {
-                let _ = exchange.remove_recovery();
-                let path = exchange.path().to_owned();
-                drop(exchange);
-                if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease)
-                {
-                    return fallback;
+            .or_else(|error| {
+                if !optional_editor {
+                    return Err(error);
                 }
-                lease.restored();
-                tracing::error!(event = "bus.draft.recovery_required", directory = %path.display(), %error, "Draft restoration was not proven; recoverable draft retained");
-                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                #[cfg(test)]
+                super::editor_fallback_hook::pause(exchange.path());
+                self.wait_transfer(|| match exchange.try_cancel_swap()? {
+                    SwapCancellation::Contended => Ok(false),
+                    SwapCancellation::Preserved => exchange.acknowledged(),
+                    SwapCancellation::Cancelled => {
+                        cancelled = true;
+                        Ok(true)
+                    }
+                })
+            });
+        if cancelled {
+            drop(exchange);
+            if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease) {
+                return fallback;
             }
-            if !has_preserved {
+            lease.restored();
+            return Err(io::Error::other(PromptNotShown::ComposerBusy));
+        }
+        if let Err(error) = captured.and_then(|()| self.remove_marker(&exchange, &backspace, lease))
+        {
+            if optional_editor {
+                exchange.defer_cleanup();
+            } else if !Exchange::has_preserved_draft(exchange.path()) {
                 lease.restored();
             }
-            self.recovery_log(&exchange, &error);
+            if exchange.recovery().exists() {
+                self.recovery_log(&exchange, &error);
+            } else {
+                tracing::warn!(event = "bus.draft.exchange_wait", directory = %directory.display(), %error, "Draft editor handoff is unresolved; delivery remains queued");
+            }
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.submit_editor_attempt(
@@ -701,6 +659,7 @@ impl ObservedSubmission {
             },
             delay,
             lease,
+            false,
         )
     }
 
@@ -710,6 +669,7 @@ impl ObservedSubmission {
         editor: EditorSubmission,
         delay: Duration,
         lease: &crate::terminal::runtime::draft_input::DraftInputLease,
+        resuming: bool,
     ) -> io::Result<()> {
         // This receipt records installed composer input, not a native turn.
         // Keep its recovery ownership until exact restoration is proven;
@@ -719,7 +679,17 @@ impl ObservedSubmission {
             self.diagnostics.retain_editor_input(self.clock.now());
         }
         self.reset_confirmation(delay);
-        let submitted = self.swap_key(lease, self.enter.clone(), true);
+        let key = if resuming {
+            SwapKey::Resume(Some(exchange.marker()))
+        } else {
+            SwapKey::Enter
+        };
+        let submitted = self.swap_key(lease, key);
+        if resuming && submitted.as_ref().is_err_and(PromptNotShown::composer_busy) {
+            // The callback may have returned the developer's draft while we
+            // waited. Leave that composer and its durable recovery untouched.
+            return submitted;
+        }
         if submitted.is_ok() {
             self.diagnostics.ownership_verified();
         }

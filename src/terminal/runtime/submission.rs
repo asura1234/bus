@@ -1,10 +1,18 @@
 //! Save the native draft, submit guarded owned input, then restore it.
 mod consumption;
 mod copy;
+#[cfg(test)]
+pub(crate) use copy::test_hooks as copy_recovery_test_hooks;
 mod diagnostics;
+#[cfg(test)]
+#[path = "tests/editor_fallback_hook_test.rs"]
+pub(crate) mod editor_fallback_hook;
+mod exchange_wait;
+mod marked_repair;
 mod plain;
 mod preservation;
 mod recovery;
+mod swap_key;
 pub(crate) use preservation::{DraftPreservation, EditorSubmission};
 
 use super::submission_clock::SubmissionClock;
@@ -141,6 +149,9 @@ pub(crate) trait SubmissionInspector: Send {
     ) -> Option<(String, Option<Bytes>)> {
         None
     }
+    fn copy_recovery_directory(&self) -> Option<&std::path::Path> {
+        None
+    }
     fn draft_ready(&self, screen: &str, cursor: Option<(u16, u16)>, pristine: bool) -> bool {
         self.observe_with_launch(screen, cursor, pristine) == InputObservation::Empty
     }
@@ -188,7 +199,34 @@ pub(crate) trait SubmissionInspector: Send {
     fn native_stash_visible(&self, _screen: &str) -> bool {
         false
     }
+    fn mark_occupied_stash_for_copy(&self, _screen: &str) -> bool {
+        false
+    }
+    fn copy_stash_key(&self) -> Option<Bytes> {
+        None
+    }
+    /// Return a recovery snapshot and whether the live readback allows a native move.
+    fn copy_stash_readback(
+        &self,
+        _screen: &str,
+        _cursor: Option<(u16, u16)>,
+    ) -> Option<(String, bool)> {
+        None
+    }
+    fn copy_stash_payload_is_distinct(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> bool {
+        false
+    }
     fn native_draft_restored(&self, _screen: &str) -> bool {
+        false
+    }
+    /// A literal, complete editor line with its cursor at the end.
+    fn matches_exact_editor_line(
+        &self,
+        _screen: &str,
+        _row: u16,
+        _literal: &str,
+        _text: &str,
+    ) -> bool {
         false
     }
     fn restoration_marker_visible(&self, _screen: &str, _marker: &str) -> bool {
@@ -421,6 +459,9 @@ impl SubmissionHandle {
                     .diagnostics
                     .finish(&result, submission.clock.now());
                 let _ = tx.send(result);
+                // Copy recovery diagnostics can wait on the logging sink.
+                // The input lease and the completion both precede emission.
+                submission.diagnostics.copy_recovery.emit();
             })
         });
         Ok(scope.completion(rx))

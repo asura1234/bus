@@ -11,13 +11,24 @@ use std::{
     time::Duration,
 };
 
+mod fence;
+pub(crate) use fence::expired_swap_fence_committed;
 mod manual;
+mod marked;
+#[cfg(test)]
+pub(crate) use fence::test_hooks as fence_test_hooks;
+pub(crate) use marked::MarkedDraft;
+#[cfg(test)]
+#[path = "tests/draft_editor_callback_hook_test.rs"]
+pub(crate) mod callback_test_hooks;
 
 const DIRECTORY: &str = "BUS_DRAFT_EDITOR_DIR";
 const FALLBACK: &str = "BUS_DRAFT_EDITOR_FALLBACK";
 const REQUEST: &str = "request.json";
 const ACK: &str = "ack.json";
 const PRESERVED: &str = "preserved.json";
+pub(crate) const TRANSFER_MARKER_PREFIX: &str = "__BUS_DRAFT_END_";
+const LOCK: &str = "exchange.lock";
 pub(crate) const MAX_BYTES: u64 = 2 * 1024 * 1024;
 // JSON may encode a single input byte as six bytes (for example, \u0000).
 const MAX_RECORD_BYTES: u64 = MAX_BYTES * 6 + 4096;
@@ -29,6 +40,7 @@ enum Operation {
     Restore,
     Verify,
     Cancelled,
+    ExpiredSwap,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -54,11 +66,18 @@ struct PreservedDraft {
     attempt: String,
 }
 
+pub(crate) enum SwapCancellation {
+    Contended,
+    Preserved,
+    Cancelled,
+}
+
 pub(crate) struct Exchange {
     dir: PathBuf,
     recovery: PathBuf,
     marker: String,
     request: Mutex<Request>,
+    defer_cleanup: bool,
 }
 
 pub(crate) fn directory(pane: &str) -> PathBuf {
@@ -156,8 +175,9 @@ impl Exchange {
     /// Resume a durable developer backup, never a Bus-paste withdrawal proof.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn begin_restoration(dir: PathBuf, timeout: Duration) -> io::Result<Self> {
+        let expires_ms = new_expiry(timeout)?;
         private_dir(&dir)?;
-        let _lock = lock(&dir)?;
+        let _lock = try_lock(&dir)?;
         let saved: PreservedDraft =
             serde_json::from_slice(&read_regular(&dir.join(PRESERVED), MAX_RECORD_BYTES)?)?;
         if !valid_token(&saved.token) || saved.attempt.len() as u64 > MAX_BYTES {
@@ -179,29 +199,32 @@ impl Exchange {
         let request = Request {
             token: saved.token.clone(),
             sequence: previous.map_or(0, |request| request.sequence.saturating_add(1)),
-            expires_ms: crate::utils::time::now_ms()
-                .saturating_add(timeout.as_millis().min(u128::from(u64::MAX)) as u64),
+            expires_ms,
             operation: Operation::Restore,
             verify_text: Some(saved.attempt),
         };
+        check_expiry(&request)?;
         write_json(&dir.join(REQUEST), &request)?;
         Ok(Self {
             dir,
             recovery,
             marker: marker(&saved.token),
             request: Mutex::new(request),
+            defer_cleanup: false,
         })
     }
 
     fn begin_inner(dir: PathBuf, timeout: Duration) -> io::Result<Self> {
+        let started = std::time::Instant::now();
+        let expires_ms = new_expiry(timeout)?;
         private_dir(&dir)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
         }
-        let _lock = lock(&dir)?;
-        if Self::has_preserved_draft(&dir) {
+        let _lock = try_lock(&dir)?;
+        if dir.join(PRESERVED).try_exists()? {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "A developer draft needs restoration",
@@ -215,15 +238,30 @@ impl Exchange {
                     && name.ends_with(".txt")
             })
         });
-        if read_request(&dir)?.is_some_and(|request| {
-            (request.operation != Operation::Cancelled || !orphaned)
-                && (request.expires_ms > crate::utils::time::now_ms()
-                    || request.operation != Operation::Idle && !has_ack(&dir, &request))
-        }) {
-            return Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "A draft exchange already owns this pane",
-            ));
+        if let Some(request) = read_request(&dir)? {
+            let expired = request.expires_ms <= crate::utils::time::now_ms();
+            let unacknowledged = request.operation != Operation::Idle && !has_ack(&dir, &request);
+            if request.operation == Operation::ExpiredSwap
+                || expired && unacknowledged && request.operation == Operation::Swap
+            {
+                // The callback must publish PRESERVED before replacing native
+                // text. Retain the lock through publication so a delayed Ctrl+G
+                // can only see an expired request or a committed fence.
+                return Err(fence::publish(
+                    dir,
+                    request,
+                    _lock,
+                    timeout.saturating_sub(started.elapsed()),
+                ));
+            }
+            if (request.operation != Operation::Cancelled || !orphaned)
+                && (!expired || unacknowledged)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "A draft exchange already owns this pane",
+                ));
+            }
         }
         for entry in fs::read_dir(&dir)? {
             let entry = entry?;
@@ -256,17 +294,18 @@ impl Exchange {
         let request = Request {
             token: token.clone(),
             sequence: 0,
-            expires_ms: crate::utils::time::now_ms()
-                .saturating_add(timeout.as_millis().min(u128::from(u64::MAX)) as u64),
+            expires_ms,
             operation: Operation::Idle,
             verify_text: None,
         };
+        check_expiry(&request)?;
         write_json(&dir.join(REQUEST), &request)?;
         Ok(Self {
             recovery: recovery(&dir, &token),
             marker: marker(&token),
             dir,
             request: Mutex::new(request),
+            defer_cleanup: false,
         })
     }
 
@@ -306,7 +345,7 @@ impl Exchange {
         operation: Operation,
         verify_text: Option<String>,
     ) -> io::Result<()> {
-        let _lock = lock(&self.dir)?;
+        let _lock = try_lock(&self.dir)?;
         let mut current = self
             .request
             .lock()
@@ -336,8 +375,63 @@ impl Exchange {
         acknowledgement(&self.dir, &request)
     }
 
+    /// The callback holds this lock from reading the request through publishing
+    /// the backup and replacing the editor file. Only a cancelled swap permits
+    /// a screen snapshot: an installed swap can render Bus's payload as a draft.
+    pub(crate) fn try_cancel_swap(&mut self) -> io::Result<SwapCancellation> {
+        let _lock = match crate::platform::fs::lock_file(&self.dir.join(LOCK)) {
+            Ok(lock) => lock,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                return Ok(SwapCancellation::Contended)
+            }
+            Err(error) => return Err(error),
+        };
+        let current = self
+            .request
+            .get_mut()
+            .map_err(|_| io::Error::other("Draft exchange lock poisoned"))?;
+        if read_request(&self.dir)?.as_ref() != Some(current) {
+            return Err(io::Error::other("Draft exchange ownership changed"));
+        }
+        if self.dir.join(PRESERVED).try_exists()? {
+            return Ok(SwapCancellation::Preserved);
+        }
+        let cancelled = Request {
+            operation: Operation::Cancelled,
+            verify_text: None,
+            ..current.clone()
+        };
+        if has_ack(&self.dir, current) {
+            // A completed callback with no preserved record refused the swap.
+            fs::remove_file(self.dir.join(REQUEST))?;
+        } else {
+            write_json(&self.dir.join(REQUEST), &cancelled)?;
+        }
+        *current = cancelled;
+        Ok(SwapCancellation::Cancelled)
+    }
+
+    pub(crate) fn permits_copy_fallback(dir: &Path) -> bool {
+        let _lock = match crate::platform::fs::lock_file(&dir.join(LOCK)) {
+            Ok(lock) => lock,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return matches!(dir.try_exists(), Ok(false));
+            }
+            Err(_) => return false,
+        };
+        matches!(dir.join(PRESERVED).try_exists(), Ok(false))
+            && read_request(dir)
+                .is_ok_and(|request| request.is_none_or(|r| r.operation == Operation::Cancelled))
+    }
+
+    pub(crate) fn defer_cleanup(&mut self) {
+        // A callback can still own the file lock at the caller's deadline.
+        // Leave the expiring request and any recovery record for that callback.
+        self.defer_cleanup = true;
+    }
+
     pub(crate) fn save_recovery(&self, text: &str) -> io::Result<()> {
-        let _lock = lock(&self.dir)?;
+        let _lock = try_lock(&self.dir)?;
         let request = self
             .request
             .lock()
@@ -357,7 +451,7 @@ impl Exchange {
 
     /// The caller must prove restoration before releasing the recovery copy.
     pub(crate) fn remove_recovery(&self) -> io::Result<()> {
-        let _lock = lock(&self.dir)?;
+        let _lock = try_lock(&self.dir)?;
         if self
             .recovery
             .file_name()
@@ -385,7 +479,17 @@ impl Exchange {
 
 impl Drop for Exchange {
     fn drop(&mut self) {
-        let Ok(_lock) = lock(&self.dir) else { return };
+        if self.defer_cleanup
+            || self
+                .request
+                .get_mut()
+                .is_ok_and(|current| current.operation == Operation::Cancelled)
+        {
+            return;
+        }
+        let Ok(_lock) = try_lock(&self.dir) else {
+            return;
+        };
         let Ok(current) = self.request.lock() else {
             return;
         };
@@ -425,7 +529,7 @@ fn read_regular(path: &Path, maximum: u64) -> io::Result<Vec<u8>> {
     fs::read(path)
 }
 fn marker(token: &str) -> String {
-    format!("__BUS_DRAFT_END_{token}__")
+    format!("{TRANSFER_MARKER_PREFIX}{token}__")
 }
 
 fn private_dir(path: &Path) -> io::Result<()> {
@@ -444,16 +548,25 @@ fn private_dir(path: &Path) -> io::Result<()> {
     }
 }
 
-fn lock(dir: &Path) -> io::Result<File> {
-    let path = dir.join("exchange.lock");
-    let file = match crate::platform::create_private_state_file(&path) {
-        Ok(file) => file,
+fn open_lock(dir: &Path) -> io::Result<File> {
+    let path = dir.join(LOCK);
+    match crate::platform::create_private_state_file(&path) {
+        Ok(file) => Ok(file),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            OpenOptions::new().read(true).write(true).open(path)?
+            OpenOptions::new().read(true).write(true).open(path)
         }
-        Err(error) => return Err(error),
-    };
-    file.lock()?;
+        Err(error) => Err(error),
+    }
+}
+
+// The pane cannot wait for a native callback that may be stalled in I/O.
+// Only the callback itself takes a blocking lock.
+fn try_lock(dir: &Path) -> io::Result<File> {
+    let file = open_lock(dir)?;
+    file.try_lock().map_err(|error| match error {
+        fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
+        fs::TryLockError::Error(error) => error,
+    })?;
     Ok(file)
 }
 
@@ -479,6 +592,17 @@ fn valid_token(token: &str) -> bool {
 
 fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
     crate::platform::atomic_write(path, &serde_json::to_vec(value)?)
+}
+
+fn new_expiry(timeout: Duration) -> io::Result<u64> {
+    if timeout.is_zero() {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Draft exchange expired",
+        ));
+    }
+    Ok(crate::utils::time::now_ms()
+        .saturating_add(timeout.as_millis().min(u128::from(u64::MAX)) as u64))
 }
 
 fn check_expiry(request: &Request) -> io::Result<()> {
@@ -533,12 +657,16 @@ fn run_at(dir: Option<&Path>, file: &Path, fallback: &str) -> io::Result<()> {
     if !dir.exists() {
         return manual::manual_editor(file, fallback);
     }
-    let guard = lock(dir)?;
+    let guard = open_lock(dir)?;
+    guard.lock()?;
     let Some(request) = read_request(dir)? else {
         drop(guard);
         return manual::manual_editor(file, fallback);
     };
-    if request.operation == Operation::Cancelled {
+    if matches!(
+        request.operation,
+        Operation::Cancelled | Operation::ExpiredSwap
+    ) {
         fs::remove_file(dir.join(REQUEST))?;
         return Err(io::Error::other(
             "Draft exchange was cancelled; editor file was preserved",
@@ -559,6 +687,8 @@ fn run_at(dir: Option<&Path>, file: &Path, fallback: &str) -> io::Result<()> {
             error: result.as_ref().err().map(ToString::to_string),
         },
     )?;
+    #[cfg(test)]
+    callback_test_hooks::after_ack(dir);
     result
 }
 
@@ -624,7 +754,7 @@ fn exchange_replacement(
             original.extend_from_slice(marker(&request.token).as_bytes());
             Ok(original)
         }
-        Operation::Idle | Operation::Cancelled => {
+        Operation::Idle | Operation::Cancelled | Operation::ExpiredSwap => {
             Err(io::Error::other("No draft operation requested"))
         }
     }
