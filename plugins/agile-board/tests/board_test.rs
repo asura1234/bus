@@ -9,6 +9,7 @@ use agile_board::{
 use std::{
     io::{Read, Write},
     net::TcpStream,
+    path::PathBuf,
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -19,6 +20,16 @@ use std::{
 
 fn bin() -> String {
     env!("CARGO_BIN_EXE_agile-board").to_string()
+}
+
+fn headless_chrome() -> Option<PathBuf> {
+    let mac = PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+    if mac.is_file() {
+        return Some(mac);
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .flat_map(|dir| ["chromium", "google-chrome"].map(|name| dir.join(name)))
+        .find(|path| path.is_file())
 }
 
 #[test]
@@ -466,15 +477,7 @@ fn cli_and_http_page_contract_round_trip() {
 
     // If headless Chrome/Chromium is available, verify in a real browser engine that scrolling
     // window to x=600, y=1200 keeps `.sticky-header-band` top ~ 0 and `.room-sidebar-cell` left ~ 0
-    let chrome_candidates = [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "chromium",
-        "google-chrome",
-    ];
-    if let Some(chrome) = chrome_candidates
-        .into_iter()
-        .find(|c| std::path::Path::new(c).exists())
-    {
+    if let Some(chrome) = headless_chrome() {
         let mut state = BoardState::default();
         mock::seed_mock_state(&mut state, 1_795_440_000_000).unwrap();
         let payload = serde_json::json!({
@@ -526,7 +529,7 @@ window.addEventListener("DOMContentLoaded", () => {{
         std::fs::write(&probe_path, probe_html).unwrap();
 
         for win_size in ["600,500", "1728,1117"] {
-            let out = Command::new(chrome)
+            let out = Command::new(&chrome)
                 .args([
                     "--headless=new",
                     "--disable-gpu",
@@ -545,4 +548,117 @@ window.addEventListener("DOMContentLoaded", () => {{
             }
         }
     }
+}
+
+#[test]
+fn headless_page_preserves_scroll_across_polls() {
+    let Some(chrome) = headless_chrome() else {
+        eprintln!("Skipping browser probe: Chrome or Chromium is unavailable");
+        return;
+    };
+    // Stub fetch and advance the page's scheduled poll explicitly so browser timing cannot race the assertions.
+    let fixture = r#"<script>
+let rooms = [{ id: 1, name: "Test room" }];
+let tickets = Array.from({ length: 12 }, (_, i) => ({
+  room_id: 1,
+  column: "todo",
+  title: `Ticket ${i}`
+}));
+let nowMs = 1000;
+let poll;
+let pollDelay;
+window.fetch = async url => ({
+  ok: url === "/api/board?view=session",
+  json: async () => ({ rooms, tickets, now_ms: nowMs })
+});
+window.setInterval = (callback, delay) => {
+  poll = callback;
+  pollDelay = delay;
+};
+
+function check(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "scroll-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    const board = document.getElementById("board-container");
+    const section = board.firstElementChild;
+    check(section?.querySelector(".ticket-title")?.textContent === "Ticket 0",
+      "initial board did not render");
+    check(pollDelay === 3000, "expected a poll every 3000 ms");
+    window.scrollTo(275, 550);
+    const checkScroll = (x, y, phase) => check(
+      window.scrollX === x && window.scrollY === y,
+      `${phase}: expected scroll (${x}, ${y}), got (${window.scrollX}, ${window.scrollY})`
+    );
+    checkScroll(275, 550, "initial scroll");
+
+    await poll();
+    checkScroll(275, 550, "identical poll");
+    check(board.firstElementChild === section, "identical poll rebuilt the board");
+
+    nowMs += 3000;
+    await poll();
+    checkScroll(275, 550, "timestamp-only poll");
+    check(board.firstElementChild === section, "timestamp-only poll rebuilt the board");
+
+    tickets = [{ ...tickets[0], title: "Inserted ticket" }, ...tickets];
+    await poll();
+    check(board.firstElementChild !== section, "changed poll did not rebuild the board");
+    check(board.querySelector(".ticket-title")?.textContent === "Inserted ticket",
+      "changed ticket was not rendered");
+    checkScroll(275, 550, "changed poll");
+    check(getComputedStyle(board).overflowAnchor === "none", "board scroll anchoring is enabled");
+
+    rooms = [];
+    tickets = [];
+    await poll();
+    const scroll = document.scrollingElement;
+    const maxY = scroll.scrollHeight - scroll.clientHeight;
+    check(maxY < 550, "empty board did not shrink");
+    checkScroll(275, maxY, "empty poll");
+    check(board.querySelector(".room-name")?.textContent === "No sections", "empty board did not render");
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>
+<script>"#;
+    let tmp = tempfile::tempdir().unwrap();
+    let probe_path = tmp.path().join("scroll-probe.html");
+    let probe_html = server::PAGE_HTML.replacen("<script>", fixture, 1);
+    std::fs::write(&probe_path, probe_html).unwrap();
+    let out = Command::new(chrome)
+        .args([
+            "--headless=new",
+            "--disable-gpu",
+            "--window-size=600,500",
+            "--dump-dom",
+        ])
+        .arg(format!(
+            "--user-data-dir={}",
+            tmp.path().join("profile").display()
+        ))
+        .arg(format!("file://{}", probe_path.display()))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "Chrome failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dom = String::from_utf8_lossy(&out.stdout);
+    let result = dom
+        .lines()
+        .find(|line| line.contains(r#"<pre id="scroll-probe-result""#));
+    assert!(
+        result.is_some_and(|line| line.contains(">PASS</pre>")),
+        "unexpected scroll probe result: {result:?}"
+    );
 }

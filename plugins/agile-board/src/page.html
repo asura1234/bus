@@ -261,6 +261,7 @@
       gap: 0;
       width: 100%;
       min-height: calc(100vh - 84px);
+      overflow-anchor: none;
       background: linear-gradient(
         to right,
         var(--bg-sidebar) 0,
@@ -499,7 +500,7 @@
     ];
 
     let currentView = "session";
-    let latestPayload = null;
+    let lastRenderedContent = null;
 
     function escapeHtml(str) {
       if (str === null || str === undefined) return "";
@@ -524,8 +525,7 @@
           cache: "no-store"
         });
         if (!res.ok) return;
-        latestPayload = await res.json();
-        renderAll(latestPayload);
+        renderAll(await res.json());
       } catch (_) {}
     }
 
@@ -533,13 +533,11 @@
       const container = document.getElementById("board-container");
       const rooms = data.rooms || [];
       const tickets = data.tickets || [];
+      // The API clock changes every poll. Only rooms and filtered tickets feed the renderer.
+      const content = JSON.stringify([rooms, tickets]);
+      if (content === lastRenderedContent) return;
 
-      if (rooms.length === 0) {
-        container.innerHTML = `<section class="room-section"><aside class="room-sidebar-cell"><h2 class="room-name">No sections</h2></aside></section>`;
-        return;
-      }
-
-      container.innerHTML = rooms.map(room => {
+      const roomsHtml = rooms.map(room => {
         const roomTickets = tickets.filter(t => t.room_id === room.id);
         const colsHtml = COLUMNS.map(col => {
           const colTickets = roomTickets.filter(t => t.column === col.key);
@@ -563,6 +561,16 @@
           </section>
         `;
       }).join("");
+
+      const scroll = document.scrollingElement;
+      const x = scroll.scrollLeft;
+      const y = scroll.scrollTop;
+      container.innerHTML = roomsHtml || `<section class="room-section"><aside class="room-sidebar-cell"><h2 class="room-name">No sections</h2></aside></section>`;
+      window.scrollTo(
+        Math.min(x, scroll.scrollWidth - scroll.clientWidth),
+        Math.min(y, scroll.scrollHeight - scroll.clientHeight)
+      );
+      lastRenderedContent = content;
     }
 
     function renderTicketCard(t) {
