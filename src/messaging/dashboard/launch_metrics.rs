@@ -1,5 +1,6 @@
 //! Launch rates over durable attempts; reading never settles pending records.
-use super::metrics::{HourKey, Metric, PROVIDERS};
+use super::metrics::{HourKey, Metric};
+use crate::agents::providers::SUPPORTED_PROVIDERS;
 use crate::messaging::model::{BusState, LaunchAttempt, LaunchKind, LaunchOutcome};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -133,9 +134,9 @@ pub(super) fn snapshot_since(
     since_ms: Option<u64>,
 ) -> Dashboard {
     let mut all = Builder::default();
-    let mut providers: BTreeMap<String, Builder> = PROVIDERS
+    let mut providers: BTreeMap<String, Builder> = SUPPORTED_PROVIDERS
         .into_iter()
-        .map(|p| (p.into(), Builder::default()))
+        .map(|provider| (provider.label().into(), Builder::default()))
         .collect();
     let mut failures = Vec::new();
     for attempt in state.launch_attempts() {

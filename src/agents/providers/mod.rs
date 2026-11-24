@@ -46,6 +46,18 @@ pub(crate) enum ProviderKind {
     Fake,
 }
 
+pub(crate) const SUPPORTED_PROVIDERS: [ProviderKind; 9] = [
+    ProviderKind::ClaudeCode,
+    ProviderKind::ClaudeDs,
+    ProviderKind::ClaudeArgon,
+    ProviderKind::ClaudeGpt,
+    ProviderKind::Codex,
+    ProviderKind::Cursor,
+    ProviderKind::Grok,
+    ProviderKind::Kimi,
+    ProviderKind::Agy,
+];
+
 impl ProviderKind {
     /// Canonical CLI/session label. Claude's persisted spelling remains
     /// `claude_code`; its CLI/session label has always been `claude`.

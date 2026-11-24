@@ -279,10 +279,10 @@ pub(crate) fn parse_identity(stdout: &str) -> Result<Identity, String> {
 }
 
 pub(crate) fn identity_json() -> String {
+    let providers = crate::agents::providers::SUPPORTED_PROVIDERS.map(|provider| provider.label());
     serde_json::json!({
         "sha": env!("BUS_BUILD_SHA"),
-        "providers": ["claude", "claude-ds", "claude-argon", "codex", "cursor", "grok", "kimi", "agy"],
-        "providers": ["claude", "claude-ds", "claude-gpt", "codex", "cursor", "grok", "kimi", "agy"],
+        "providers": providers,
     })
     .to_string()
 }
