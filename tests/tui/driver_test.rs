@@ -2502,6 +2502,7 @@ fn composer_mode_dropdown_keeps_controls_separate_at_narrow_width() {
         "{frame}"
     );
     session.ok(&["click", "--hit", "delivery-mode"]);
+    session.ok(&["wait", "--text", "Queue"]);
     session.ok(&["click", "--hit", "delivery-mode:queue"]);
     session.ok(&["press", "f4"]);
     session.ok(&["wait", "--text", "● Queue"]);
