@@ -255,13 +255,17 @@ fn image_line_text(line: &str, unquoted_png: bool) -> Option<&str> {
 /// Measured with Claude Code 2.1.310. Keep prose, relative paths, whitespace
 /// and quote-bearing lines literal; durable callbacks cannot rely on stat.
 fn is_unquoted_png_path(line: &str) -> bool {
-    Path::new(line).is_absolute()
-        && !line
-            .chars()
-            .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
+    is_unquoted_absolute_path(line)
         && Path::new(line)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+}
+
+fn is_unquoted_absolute_path(text: &str) -> bool {
+    Path::new(text).is_absolute()
+        && !text
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
 }
 
 /// A pasted macOS screenshot is one shell word: backslash-escaped ASCII
@@ -300,15 +304,17 @@ fn backslash_escapes_only_spaces(line: &str) -> bool {
     true
 }
 
-/// When lifting images, Claude can move an inline escaped PNG token or a
-/// standalone slash onto a new line. Match that one separator change while
-/// requiring the token and surrounding text to stay exact.
+/// When lifting images, Claude can move an inline file path or a standalone
+/// slash onto a new line. Match only the observed separator changes and keep
+/// the token and surrounding text exact.
 pub(crate) fn claude_text_matches(mut actual: &str, expected: &str) -> bool {
     let mut copied = 0;
     for (index, _) in expected.match_indices(" /") {
         let token = &expected[index + 1..];
         if expected[..index].ends_with('\\')
-            || !(token.starts_with("/ ") || escaped_png_token(token))
+            || !(token.starts_with("/ ")
+                || escaped_png_token(token)
+                || unquoted_absolute_file_token(token))
         {
             continue;
         }
@@ -322,6 +328,20 @@ pub(crate) fn claude_text_matches(mut actual: &str, expected: &str) -> bool {
         copied = index + 1;
     }
     actual == &expected[copied..]
+}
+
+fn unquoted_absolute_file_token(text: &str) -> bool {
+    let path = text
+        .split(|c: char| c.is_ascii_whitespace() || c == '。')
+        .next()
+        .unwrap_or_default();
+    is_unquoted_absolute_path(path)
+        && Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                !extension.is_empty() && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            })
 }
 
 fn escaped_png_token(text: &str) -> bool {
