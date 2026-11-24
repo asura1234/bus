@@ -23,13 +23,14 @@ struct Transfer {
 }
 
 async fn transfer(hidden: Option<&str>, visible: &str, promote_on_clear: bool) -> Transfer {
-    transfer_with_setup(hidden, visible, promote_on_clear, |_| {}).await
+    transfer_with_setup(hidden, visible, promote_on_clear, false, |_| {}).await
 }
 
 async fn transfer_with_setup(
     hidden: Option<&str>,
     visible: &str,
     promote_on_clear: bool,
+    delay_stash: bool,
     setup: impl FnOnce(&Path),
 ) -> Transfer {
     let mut fake = FakeClaudeComposer::new();
@@ -43,6 +44,9 @@ async fn transfer_with_setup(
     paint(&runtime, &fake.shown(), fake.stashed().is_some(), "");
     let directory = crate::utils::test_temp::unique_temp_path("claude-occupied-stash");
     setup(&directory);
+    if delay_stash {
+        runtime.test_set_input_recovery_directory(directory.join("held-input"));
+    }
     let (messages, events) = mpsc::channel();
     let dispatch = tracing::Dispatch::new(
         tracing_subscriber::fmt()
@@ -86,6 +90,11 @@ async fn transfer_with_setup(
         tokio::select! {
             biased;
             Some(bytes) = writes.recv() => {
+                if delay_stash && keys.is_empty() {
+                    assert_eq!(bytes.as_ref(), b"\x13");
+                    runtime.try_send_developer_bytes(Bytes::from_static(b"-2")).unwrap();
+                    tokio::time::sleep(Duration::from_millis(558)).await;
+                }
                 if let Some(text) = fake.input(&bytes) {
                     submitted.push(text);
                 }
@@ -224,7 +233,7 @@ async fn claude_occupied_stash_copy_refuses_lossy_continuation_whitespace() {
 
 #[tokio::test]
 async fn claude_occupied_stash_copy_reused_record_requires_a_durable_receipt() {
-    let transfer = transfer_with_setup(Some(HIDDEN), VISIBLE, false, |directory| {
+    let transfer = transfer_with_setup(Some(HIDDEN), VISIBLE, false, false, |directory| {
         crate::platform::fs::private_dir(directory).unwrap();
         let path = record_path(directory, HIDDEN);
         // This file has the right contents but has never been synced.
@@ -255,4 +264,20 @@ async fn claude_occupied_stash_copy_reused_record_requires_a_durable_receipt() {
     backup(&transfer, VISIBLE);
     backup(&transfer, HIDDEN);
     remove_directory(transfer.directory);
+}
+
+#[tokio::test]
+async fn claude_occupied_stash_copy_late_native_stash_replays_buffered_edit() {
+    const ORIGINAL: &str = "fake:draft-bytes ACTIVE CLAUDE-1";
+    let mut transfer = transfer_with_setup(None, ORIGINAL, false, true, |_| {}).await;
+    assert_eq!(transfer.submitted, [MESSAGE]);
+    assert_eq!(transfer.fake.body(), "fake:draft-bytes ACTIVE CLAUDE-1-2");
+    assert!(!transfer.fake.body().contains("__BUS_DRAFT_END_"));
+    assert!(transfer.fake.input(b"-END").is_none());
+    assert_eq!(
+        transfer.fake.input(b"\r").as_deref(),
+        Some("fake:draft-bytes ACTIVE CLAUDE-1-2-END")
+    );
+    transfer.result.unwrap();
+    std::fs::remove_dir_all(transfer.directory).unwrap();
 }

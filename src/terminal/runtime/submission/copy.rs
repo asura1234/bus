@@ -16,7 +16,7 @@ pub(crate) use recovery::test_hooks;
 pub(super) use recovery::CallerDiagnostics;
 use recovery::Outcome;
 
-const RESTORE_BUDGET: Duration = Duration::from_secs(1);
+pub(super) const RESTORE_BUDGET: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy)]
 enum Readback {

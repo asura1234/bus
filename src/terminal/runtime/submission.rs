@@ -7,6 +7,7 @@ mod diagnostics;
 #[cfg(test)]
 #[path = "tests/editor_fallback_hook_test.rs"]
 pub(crate) mod editor_fallback_hook;
+mod exchange_wait;
 mod plain;
 mod preservation;
 mod recovery;

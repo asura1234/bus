@@ -11,7 +11,11 @@ use std::{
     time::Duration,
 };
 
+mod fence;
+pub(crate) use fence::expired_swap_fence_committed;
 mod manual;
+#[cfg(test)]
+pub(crate) use fence::test_hooks as fence_test_hooks;
 
 const DIRECTORY: &str = "BUS_DRAFT_EDITOR_DIR";
 const FALLBACK: &str = "BUS_DRAFT_EDITOR_FALLBACK";
@@ -205,6 +209,7 @@ impl Exchange {
     }
 
     fn begin_inner(dir: PathBuf, timeout: Duration) -> io::Result<Self> {
+        let started = std::time::Instant::now();
         let expires_ms = new_expiry(timeout)?;
         private_dir(&dir)?;
         #[cfg(unix)]
@@ -230,18 +235,18 @@ impl Exchange {
         if let Some(request) = read_request(&dir)? {
             let expired = request.expires_ms <= crate::utils::time::now_ms();
             let unacknowledged = request.operation != Operation::Idle && !has_ack(&dir, &request);
-            if expired && unacknowledged && request.operation == Operation::Swap {
+            if request.operation == Operation::ExpiredSwap
+                || expired && unacknowledged && request.operation == Operation::Swap
+            {
                 // The callback must publish PRESERVED before replacing native
-                // text. Fence this request rather than giving a delayed Ctrl+G
-                // a new swap to consume. Copy fallback can now use the pane.
-                write_json(
-                    &dir.join(REQUEST),
-                    &Request {
-                        operation: Operation::ExpiredSwap,
-                        verify_text: None,
-                        ..request.clone()
-                    },
-                )?;
+                // text. Retain the lock through publication so a delayed Ctrl+G
+                // can only see an expired request or a committed fence.
+                return Err(fence::publish(
+                    dir,
+                    request,
+                    _lock,
+                    timeout.saturating_sub(started.elapsed()),
+                ));
             }
             if (request.operation != Operation::Cancelled || !orphaned)
                 && (!expired || unacknowledged)
@@ -409,11 +414,8 @@ impl Exchange {
             Err(_) => return false,
         };
         matches!(dir.join(PRESERVED).try_exists(), Ok(false))
-            && read_request(dir).is_ok_and(|request| {
-                request.is_none_or(|r| {
-                    matches!(r.operation, Operation::Cancelled | Operation::ExpiredSwap)
-                })
-            })
+            && read_request(dir)
+                .is_ok_and(|request| request.is_none_or(|r| r.operation == Operation::Cancelled))
     }
 
     pub(crate) fn defer_cleanup(&mut self) {

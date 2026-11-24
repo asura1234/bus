@@ -1,6 +1,6 @@
 //! Transfer a developer draft only while pane input is exclusively reserved.
-use super::{InputObservation, ObservedSubmission, PromptNotShown};
-use crate::platform::draft_editor::{Exchange, SwapCancellation};
+use super::{copy::RESTORE_BUDGET, InputObservation, ObservedSubmission, PromptNotShown};
+use crate::platform::draft_editor::{expired_swap_fence_committed, Exchange, SwapCancellation};
 use crate::protocol::api::submission::{confirmation_budget, CLEAR_KEY_DELAY, WITHDRAW_GRACE};
 use bytes::Bytes;
 use std::{io, path::PathBuf, time::Duration};
@@ -181,11 +181,7 @@ impl ObservedSubmission {
             // that attempt; opening the editor would replace it.
             InputObservation::Pending => {
                 if self.inspect.confirm_consumption() {
-                    let exchange = Exchange::begin_restoration(
-                        editor.directory.clone(),
-                        self.clock.remaining(self.hard_deadline),
-                    )
-                    .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
+                    let exchange = self.begin_editor_restore(&editor.directory)?;
                     return self.submit_editor_attempt(&exchange, editor, delay, lease);
                 }
                 let submitted = self.swap_key(lease, self.enter.clone(), true);
@@ -199,11 +195,7 @@ impl ObservedSubmission {
                 return Err(io::Error::other(PromptNotShown::ComposerBusy));
             }
         }
-        let exchange = Exchange::begin_restoration(
-            editor.directory.clone(),
-            self.clock.remaining(self.hard_deadline),
-        )
-        .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
+        let exchange = self.begin_editor_restore(&editor.directory)?;
         self.restore_editor_transfer(&exchange, &editor.key, &editor.backspace, true, lease)
             .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))?;
         lease.restored();
@@ -385,16 +377,14 @@ impl ObservedSubmission {
             tracing::error!(event = "bus.draft.recovery_required", directory = %path.display(), %error, "Draft restoration was not proven; recoverable draft retained");
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
-        if let Err(error) =
-            self.wait_transfer_until(self.clock.now() + FALLBACK_HANDOFF_BUDGET, || {
-                Ok(
-                    self.observe("await_native_stash") == InputObservation::Empty
-                        && self
-                            .inspect
-                            .native_stash_visible(&self.terminal.active_ansi()),
-                )
-            })
-        {
+        if let Err(error) = self.wait_transfer_until(self.clock.now() + RESTORE_BUDGET, || {
+            Ok(
+                self.observe("await_native_stash") == InputObservation::Empty
+                    && self
+                        .inspect
+                        .native_stash_visible(&self.terminal.active_ansi()),
+            )
+        }) {
             let _ = exchange.remove_recovery();
             let path = exchange.path().to_owned();
             drop(exchange);
@@ -635,13 +625,14 @@ impl ObservedSubmission {
             .editor_submission()
             .ok_or_else(|| io::Error::other("Native editor input is unavailable"))?;
         let optional_editor = !self.inspect.always_use_editor();
-        let mut exchange = match Exchange::begin_preserving(
-            directory.clone(),
-            self.clock.remaining(self.hard_deadline),
-        ) {
+        let mut exchange = match self.begin_editor_swap(&directory) {
             Ok(exchange) => exchange,
             Err(error) => {
-                if optional_editor && Exchange::permits_copy_fallback(&directory) {
+                if optional_editor
+                    && error.kind() != io::ErrorKind::TimedOut
+                    && (expired_swap_fence_committed(&error)
+                        || Exchange::permits_copy_fallback(&directory))
+                {
                     if let Some(fallback) =
                         self.fallback_copy_after_handoff_failure(text, delay, lease)
                     {

@@ -36,6 +36,7 @@ impl Pane {
         let root = crate::utils::test_temp::unique_temp_path("editor-reentry");
         fs::create_dir_all(&root).unwrap();
         let (runtime, writes) = TerminalRuntime::test_with_channel_capacity(120, 30, 16);
+        runtime.test_set_input_recovery_directory(root.join("held-input"));
         let pane = Self {
             runtime,
             writes,
@@ -106,6 +107,7 @@ impl Pane {
             "\r" => self.submits.push(std::mem::take(&mut self.draft)),
             "\x01" => {}
             "\x0b" | "\x15" => self.draft.clear(),
+            "-2" => self.draft.push_str(text),
             text if text.bytes().all(|byte| byte == 0x7f) => {
                 let marker = self.draft.find("__BUS_DRAFT_END_").unwrap();
                 assert_eq!(self.draft.len() - marker, text.len());
@@ -192,18 +194,53 @@ async fn contended_reentry(saved: bool) {
         pane.draft.clear();
         pane.paint();
     }
-    let reentry = pane.queue(NEW, SHORT);
+    let retry_log = pane.root.join("retry-events.log");
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(File::create(&retry_log).unwrap())
+        .finish();
+    let reentry = tracing::subscriber::with_default(subscriber, || pane.queue(NEW, SHORT));
+    if saved {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            reentry.try_recv().is_err(),
+            "restoration must honor the wait budget"
+        );
+        pane.runtime
+            .try_send_developer_bytes(Bytes::from_static(b"-2"))
+            .unwrap();
+    }
     let refused = reentry.recv_timeout(SHORT + Duration::from_millis(500));
-    drop(callback);
-    assert!(
-        !matches!(refused, Err(RecvTimeoutError::Timeout)),
-        "re-entry held the pane lease past its deadline while the callback held the lock"
-    );
+    if matches!(refused, Err(RecvTimeoutError::Timeout)) {
+        drop(callback);
+        panic!("re-entry held the pane lease past its deadline while the callback held the lock");
+    }
     composer_busy(refused.unwrap());
     assert!(
         pane.writes.try_recv().is_err(),
         "refusal writes no native keys"
     );
+    pane.runtime
+        .try_send_developer_bytes(Bytes::from_static(b"\x0c"))
+        .unwrap();
+    assert_eq!(
+        pane.next_write().await.as_ref(),
+        b"\x0c",
+        "the pane lease was released"
+    );
+    drop(callback);
+
+    if saved {
+        let path = fs::read_to_string(retry_log)
+            .unwrap()
+            .lines()
+            .find(|line| line.contains("bus.draft.input_recovery_required"))
+            .and_then(|line| line.split_once("recovery="))
+            .map(|(_, path)| PathBuf::from(path.trim()))
+            .expect("the refused restore records the buffered input's recovery file");
+        assert_eq!(fs::read(&path).unwrap(), b"-2");
+        fs::remove_file(path).unwrap();
+    }
     if let Some((record, bytes, backup)) = recovery {
         assert_eq!(fs::read(&record).unwrap(), bytes);
         assert_eq!(fs::read_to_string(&backup).unwrap(), DRAFT);
@@ -263,6 +300,81 @@ async fn editor_reentry_expired_uncommitted_swap_allows_copy_and_fences_late_cal
             chunk = pane.next_write() => pane.emulate(chunk),
         }
     }
+    assert_eq!(pane.submits, [NEW]);
+    assert_eq!(pane.draft, DRAFT);
+}
+
+#[tokio::test]
+async fn editor_reentry_within_budget_restores_and_replays_developer_edit() {
+    let mut pane = Pane::new();
+    fs::write(&pane.file, DRAFT).unwrap();
+    let original = Exchange::begin_preserving(pane.directory.clone(), WAIT).unwrap();
+    original.request_swap(OLD).unwrap();
+    test_run_at(&pane.directory, &pane.file).unwrap();
+    drop(original);
+    pane.draft.clear();
+    pane.paint();
+
+    let callback = pane.hold_callback_lock();
+    let reply = pane.queue(NEW, WAIT);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let early = reply.try_recv();
+    if early.is_ok() {
+        drop(callback);
+        panic!("restoration refused a callback that was still within its deadline");
+    }
+    pane.runtime
+        .try_send_developer_bytes(Bytes::from_static(b"-2"))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(458)).await;
+    assert!(
+        pane.writes.try_recv().is_err(),
+        "the edit must wait for the native draft"
+    );
+    drop(callback);
+    composer_busy(pane.pump(reply).await);
+    while let Ok(key) = pane.writes.try_recv() {
+        pane.emulate(key);
+    }
+    assert_eq!(pane.draft, "developer draft-1-2");
+    assert!(!pane.draft.contains("__BUS_DRAFT_END_") && pane.submits.is_empty());
+}
+
+#[tokio::test]
+async fn editor_reentry_stalled_fence_sync_never_authorizes_fallback() {
+    let mut pane = Pane::new();
+    let mut exchange = Exchange::begin_preserving(pane.directory.clone(), WAIT).unwrap();
+    exchange.request_swap(OLD).unwrap();
+    exchange.defer_cleanup();
+    drop(exchange);
+    pane.expire_pending_swap();
+
+    let (sync_started, resume) =
+        crate::platform::draft_editor::fence_test_hooks::stall(pane.directory.clone());
+    let reply = pane.queue(NEW, SHORT);
+    sync_started.recv_timeout(WAIT).unwrap();
+    assert!(
+        pane.writes.try_recv().is_err(),
+        "no copy while the fence is only renamed"
+    );
+    fs::write(&pane.file, DRAFT).unwrap();
+    let directory = pane.directory.clone();
+    let file = pane.file.clone();
+    let (done, callback) = std::sync::mpsc::channel();
+    std::thread::spawn(move || done.send(test_run_at(&directory, &file)).unwrap());
+    let result = reply.recv_timeout(SHORT + Duration::from_millis(400));
+    let waiting = callback.try_recv().is_err();
+    assert!(
+        pane.writes.try_recv().is_err(),
+        "no native input during publication"
+    );
+    resume.send(()).unwrap();
+    assert!(waiting && callback.recv_timeout(WAIT).unwrap().is_err());
+    assert_eq!(fs::read_to_string(&pane.file).unwrap(), DRAFT);
+    composer_busy(result.expect("a stalled directory sync held the pane past its deadline"));
+
+    let retry = pane.queue(NEW, WAIT);
+    pane.pump(retry).await.unwrap();
     assert_eq!(pane.submits, [NEW]);
     assert_eq!(pane.draft, DRAFT);
 }

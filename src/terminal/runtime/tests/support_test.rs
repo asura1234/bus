@@ -135,6 +135,10 @@ impl TerminalRuntime {
         }
     }
 
+    pub(crate) fn test_set_input_recovery_directory(&self, path: std::path::PathBuf) {
+        self.draft_input.lock().unwrap().test_recovery_directory = Some(path);
+    }
+
     pub(crate) fn test_submission_clock(&self) -> Option<super::SubmissionClock> {
         match &self.io {
             PaneRuntimeIo::TestChannel { clock, .. } => Some(clock.clone()),

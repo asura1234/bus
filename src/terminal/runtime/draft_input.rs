@@ -18,6 +18,8 @@ pub(super) struct DraftInput {
     working_started: Option<Instant>,
     completed_turn: Option<(Instant, Instant)>,
     claude_prompt: Option<ClaudePrompt>,
+    #[cfg(test)]
+    pub(super) test_recovery_directory: Option<std::path::PathBuf>,
     // Shared with the runtime launch window. AtomicBool's Default is false,
     // which would hide the placeholder, so this Default starts it true.
     launch_window: Arc<AtomicBool>,
@@ -38,6 +40,8 @@ impl Default for DraftInput {
             working_started: None,
             completed_turn: None,
             claude_prompt: None,
+            #[cfg(test)]
+            test_recovery_directory: None,
             launch_window: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -264,12 +268,9 @@ impl DraftInputLease {
     }
 }
 
-fn recover_input(bytes: &[u8]) {
+fn recover_input(bytes: &[u8], directory: std::path::PathBuf) {
     use std::io::Write;
     let saved = (|| -> io::Result<std::path::PathBuf> {
-        let directory = crate::utils::paths::data_dir()
-            .join("private")
-            .join("drafts");
         std::fs::create_dir_all(&directory)?;
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -305,8 +306,17 @@ impl Drop for DraftInputLease {
         if bytes.is_empty() {
             return;
         }
+        let recovery_directory = || {
+            #[cfg(test)]
+            if let Some(path) = &state.test_recovery_directory {
+                return path.clone();
+            }
+            crate::utils::paths::data_dir()
+                .join("private")
+                .join("drafts")
+        };
         if !self.replay_safe.get() {
-            recover_input(&bytes);
+            recover_input(&bytes, recovery_directory());
             return;
         }
         // Queue while holding the same lock as incoming keys: replay is after
@@ -323,7 +333,7 @@ impl Drop for DraftInputLease {
                 let _ = completion.into_receiver();
             }
             Err(error) => {
-                recover_input(&bytes);
+                recover_input(&bytes, recovery_directory());
                 tracing::error!(event = "bus.draft.input_replay_failed", %error, "Could not replay buffered pane input");
             }
         }
