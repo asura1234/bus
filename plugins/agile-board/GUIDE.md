@@ -53,18 +53,18 @@ Inside each section, the seven columns run horizontally:
 | Column | Meaning | Allowed Outgoing Transitions |
 |---|---|---|
 | `todo` | Work held or deferred | `investigation`, `blocked` |
-| `blocked` | Needs a decision or external context (**universal escape hatch**, highlighted with a translucent red tint overlay on the column surface and a stronger red header) | Any column (`todo`, `investigation`, `implementation`, `testing`, `review`, `done`) |
+| `blocked` | Needs a developer decision or missing information or context | Any column (`todo`, `investigation`, `implementation`, `testing`, `review`, `done`) |
 | `investigation` | Root-cause analysis or design exploration | `implementation`, `blocked`, plus `done` **only if** `--investigation-only` |
 | `implementation` | Active implementation | `testing`, `blocked` |
-| `testing` | Verification and test execution | `review`, `implementation`, `blocked` |
-| `review` | Code review | `done`, `implementation`, `blocked` |
-| `done` | Completed | `blocked` |
+| `testing` | Work is implemented and undergoing verification, including time spent waiting for a build, test, gate, or merge window | `review`, `implementation`, `blocked` |
+| `review` | Independent review in progress | `done`, `implementation`, `blocked` |
+| `done` | MR/PR has merged, or an investigation-only ticket has concluded | `blocked` |
 
 ### Transition Rules
 
 - **Standard flow:** `todo -> investigation -> implementation -> testing -> review -> done` (with rework loops `testing -> implementation` and `review -> implementation`).
 - **Investigation-only rule:** Tickets created with `--investigation-only` may transition directly `investigation -> done`. Normal tickets attempting `investigation -> done` are refused with exit code `3` and a message listing the allowed targets (`[implementation, blocked]`).
-- **Universal `blocked` escape hatch:** Any ticket may move to `blocked` from any column, and from `blocked` to any column. Record the blocking question or needed context in `--description` or `--note`.
+- **Universal `blocked` escape hatch:** Any ticket may move to `blocked` from any column, and from `blocked` to any column. Use it only for a decision or missing context. Record what is needed in `--description` or `--note`.
 
 ---
 
@@ -106,7 +106,7 @@ agile-board --data-dir "$DATA_DIR" ticket add \
 # 3. Advance the ticket across columns
 agile-board --data-dir "$DATA_DIR" ticket move T-1 --column implementation --note "Added snapshot guard"
 agile-board --data-dir "$DATA_DIR" ticket move T-1 --column testing --note "Regression suite green"
-agile-board --data-dir "$DATA_DIR" ticket move T-1 --column review --note "Ready for review"
+agile-board --data-dir "$DATA_DIR" ticket move T-1 --column review --note "Independent review started"
 agile-board --data-dir "$DATA_DIR" ticket move T-1 --column done --note "Merged #500"
 
 # 4. Create an investigation-only ticket and move it directly to done

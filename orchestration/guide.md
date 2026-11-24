@@ -147,12 +147,14 @@ Map each MR work item's status to the board's seven columns:
 | Status / phase | Board column | Allowed next columns |
 |---|---|---|
 | Deferred or held before kickoff | `todo` | `investigation`, `blocked` |
-| Waiting on a developer decision or external dependency | `blocked` | Any column (`todo`, `investigation`, `implementation`, `testing`, `review`, `done`) |
+| Needs a developer decision or missing information or context | `blocked` | Any column (`todo`, `investigation`, `implementation`, `testing`, `review`, `done`) |
 | Root-cause analysis, enumeration or spike | `investigation` | `implementation`, `blocked` (and `done` only if created with `--investigation-only`) |
 | Coding or addressing review/test findings | `implementation` | `testing`, `blocked` |
-| Gate, unit/integration or E2E verification | `testing` | `review`, `implementation`, `blocked` |
-| Peer or bot code review | `review` | `done`, `implementation`, `blocked` |
+| Implementation complete and in verification, including waiting for a build, test, gate, or merge window | `testing` | `review`, `implementation`, `blocked` |
+| Independent peer or bot review in progress | `review` | `done`, `implementation`, `blocked` |
 | MR merged (or `--investigation-only` concluded) | `done` | `blocked` |
+
+Use `blocked` only when a decision or missing context prevents work from proceeding.
 
 ## Open peer messaging
 
