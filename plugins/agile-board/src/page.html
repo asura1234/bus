@@ -498,6 +498,8 @@
       { key: "review", label: "review" },
       { key: "done", label: "done" }
     ];
+    const columnHeaders = new Map(Array.from(document.querySelectorAll(".column-header"),
+      header => [header.dataset.col, header]));
 
     let currentView = "session";
     let lastRenderedContent = null;
@@ -529,10 +531,23 @@
       } catch (_) {}
     }
 
+    function updateColumnTotals(tickets) {
+      const totals = new Map();
+      for (const { column } of tickets) {
+        totals.set(column, (totals.get(column) || 0) + 1);
+      }
+      for (const { key, label } of COLUMNS) {
+        const header = columnHeaders.get(key);
+        const text = `${label} ${totals.get(key) || 0}`;
+        if (header.textContent !== text) header.textContent = text;
+      }
+    }
+
     function renderAll(data) {
       const container = document.getElementById("board-container");
       const rooms = data.rooms || [];
       const tickets = data.tickets || [];
+      updateColumnTotals(tickets);
       // The API clock changes every poll. Only rooms and filtered tickets feed the renderer.
       const content = JSON.stringify([rooms, tickets]);
       if (content === lastRenderedContent) return;

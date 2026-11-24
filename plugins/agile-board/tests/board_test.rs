@@ -552,12 +552,8 @@ window.addEventListener("DOMContentLoaded", () => {{
 
 #[test]
 fn headless_page_preserves_scroll_across_polls() {
-    let Some(chrome) = headless_chrome() else {
-        eprintln!("Skipping browser probe: Chrome or Chromium is unavailable");
-        return;
-    };
     // Stub fetch and advance the page's scheduled poll explicitly so browser timing cannot race the assertions.
-    let fixture = r#"<script>
+    assert_headless_board_probe(r#"<script>
 let rooms = [{ id: 1, name: "Test room" }];
 let tickets = Array.from({ length: 12 }, (_, i) => ({
   room_id: 1,
@@ -582,7 +578,7 @@ function check(condition, message) {
 
 window.addEventListener("load", async () => {
   const result = document.createElement("pre");
-  result.id = "scroll-probe-result";
+  result.id = "board-probe-result";
   result.hidden = true;
   document.body.appendChild(result);
   try {
@@ -628,11 +624,72 @@ window.addEventListener("load", async () => {
     result.textContent = error.message;
   }
 });
-</script>
-<script>"#;
+</script>"#);
+}
+
+#[test]
+fn headless_page_counts_visible_tickets_across_sections() {
+    assert_headless_board_probe(r#"<script>
+const rooms = [
+  { id: 1, name: "First" },
+  { id: 2, name: "Second" },
+  { id: 3, name: "Empty" }
+];
+let tickets = [
+  { room_id: 1, column: "todo", title: "First todo" },
+  { room_id: 2, column: "todo", title: "Second todo" },
+  { room_id: 2, column: "testing", title: "Second testing" }
+];
+const olderTicket = { room_id: 1, column: "done", title: "Outside the view" };
+let poll;
+window.setInterval = callback => { poll = callback; };
+window.fetch = async url => ({
+  ok: url === "/api/board?view=session",
+  json: async () => ({ rooms, tickets, all_tickets: [...tickets, olderTicket] })
+});
+
+function checkTotals(expected, phase) {
+  const labels = [...document.querySelectorAll(".column-header")].map(header => header.textContent);
+  const expectedLabels = ["todo", "blocked", "investigation", "implementation", "testing", "review", "done"]
+    .map((column, index) => `${column} ${expected[index]}`);
+  if (labels.join() !== expectedLabels.join()) {
+    throw new Error(`${phase}: expected ${expectedLabels.join(", ")}, got ${labels.join(", ")}`);
+  }
+}
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    checkTotals([2, 0, 0, 0, 1, 0, 0], "initial totals");
+    await poll();
+    checkTotals([2, 0, 0, 0, 1, 0, 0], "identical poll");
+
+    tickets = [tickets[0], { ...tickets[1], column: "testing" }, tickets[2]];
+    await poll();
+    checkTotals([1, 0, 0, 0, 2, 0, 0], "changed poll");
+
+    tickets = [];
+    await poll();
+    checkTotals([0, 0, 0, 0, 0, 0, 0], "empty poll");
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>"#);
+}
+
+fn assert_headless_board_probe(fixture: &str) {
+    let Some(chrome) = headless_chrome() else {
+        eprintln!("Skipping browser probe: Chrome or Chromium is unavailable");
+        return;
+    };
     let tmp = tempfile::tempdir().unwrap();
-    let probe_path = tmp.path().join("scroll-probe.html");
-    let probe_html = server::PAGE_HTML.replacen("<script>", fixture, 1);
+    let probe_path = tmp.path().join("board-probe.html");
+    let probe_html = server::PAGE_HTML.replacen("<script>", &format!("{fixture}\n<script>"), 1);
     std::fs::write(&probe_path, probe_html).unwrap();
     let out = Command::new(chrome)
         .args([
@@ -656,9 +713,9 @@ window.addEventListener("load", async () => {
     let dom = String::from_utf8_lossy(&out.stdout);
     let result = dom
         .lines()
-        .find(|line| line.contains(r#"<pre id="scroll-probe-result""#));
+        .find(|line| line.contains(r#"<pre id="board-probe-result""#));
     assert!(
         result.is_some_and(|line| line.contains(">PASS</pre>")),
-        "unexpected scroll probe result: {result:?}"
+        "unexpected board probe result: {result:?}"
     );
 }
