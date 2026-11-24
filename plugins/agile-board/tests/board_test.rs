@@ -569,8 +569,10 @@ window.fetch = async url => ({
   json: async () => ({ rooms, tickets, now_ms: nowMs })
 });
 window.setInterval = (callback, delay) => {
-  poll = callback;
-  pollDelay = delay;
+  if (callback.name === "fetchBoard") {
+    poll = callback;
+    pollDelay = delay;
+  }
 };
 
 function check(condition, message) {
@@ -645,7 +647,7 @@ let tickets = [
 ];
 const olderTicket = { room_id: 1, column: "done", title: "Outside the view" };
 let poll;
-window.setInterval = callback => { poll = callback; };
+window.setInterval = (callback, delay) => { if (delay === 3000) poll = callback; };
 window.fetch = async url => ({
   ok: url === "/api/board?view=session",
   json: async () => ({ rooms, tickets, all_tickets: [...tickets, olderTicket] })
@@ -704,7 +706,7 @@ const tickets = cases.map(([mr_url], index) => ({
   room_id: 1, column: "review", title: `Ticket ${index + 1}`, mr_url
 }));
 let poll;
-window.setInterval = callback => { poll = callback; };
+window.setInterval = (callback, delay) => { if (delay === 3000) poll = callback; };
 window.fetch = async url => ({
   ok: url === "/api/board?view=session",
   json: async () => ({ rooms, tickets })
@@ -733,6 +735,66 @@ window.addEventListener("load", async () => {
     tickets[0] = { ...tickets[0], mr_url: changedUrl };
     await poll();
     checkLinks([[changedUrl, "MR #41"], ...cases.slice(1)]);
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>"#,
+    );
+}
+
+#[test]
+fn headless_page_ticks_ticket_age_without_rebuilding() {
+    assert_headless_board_probe(
+        r#"<script>
+const rooms = [{ id: 1, name: "Requests" }];
+let now = 1760000000000;
+Date.now = () => now;
+const tickets = [
+  { room_id: 1, column: "review", title: "Recent", created_at_ms: now - 12.75 * 60000,
+    mr_url: "https://github.com/example/platform/pull/41" },
+  { room_id: 1, column: "review", title: "Older", created_at_ms: now - 2500.75 * 60000 }
+];
+const intervals = new Map();
+window.setInterval = (callback, delay) => { intervals.set(delay, callback); };
+window.fetch = async url => ({
+  ok: url === "/api/board?view=session",
+  json: async () => ({ rooms, tickets, now_ms: now })
+});
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    const board = document.getElementById("board-container");
+    const section = board.firstElementChild;
+    const cards = [...section.querySelectorAll(".ticket-card")];
+    const ages = cards.map(card => card.querySelector(".ticket-age"));
+    const checkAges = expected => {
+      const labels = ages.map(age => age?.textContent);
+      if (labels.join() !== expected.join()) throw new Error(`Expected ${expected}, got ${labels}`);
+    };
+    checkAges(["12 min", "2500 min"]);
+    if (!ages[0].parentElement.querySelector(".mr-link") || cards[1].querySelector(".mr-link")) {
+      throw new Error("Expected ages in card footers with and without MR links");
+    }
+    if (Number(ages[0].dataset.createdAtMs) !== tickets[0].created_at_ms) {
+      throw new Error("Age label is missing its creation timestamp");
+    }
+    const tick = intervals.get(30000);
+    if (!tick) throw new Error("Expected a 30000-ms age ticker");
+    now += 30000;
+    tick();
+    checkAges(["13 min", "2501 min"]);
+    if (board.firstElementChild !== section || cards.some((card, i) => !card.contains(ages[i]))) {
+      throw new Error("The age tick rebuilt ticket markup");
+    }
+    await intervals.get(3000)();
+    checkAges(["13 min", "2501 min"]);
+    if (board.firstElementChild !== section) throw new Error("A clock-only poll rebuilt the board");
     result.textContent = "PASS";
   } catch (error) {
     result.textContent = error.message;

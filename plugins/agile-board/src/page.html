@@ -407,9 +407,17 @@
       padding-top: 4px;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
+      gap: 4px 6px;
       font-family: var(--font-mono);
       font-size: 10.5px;
+    }
+
+    .ticket-age {
+      color: var(--text-secondary);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
     }
 
     .mr-link {
@@ -550,6 +558,18 @@
       }
     }
 
+    function formatTicketAge(createdAt, now) {
+      return `${Math.max(0, Math.floor((now - createdAt) / 60000))} min`;
+    }
+
+    function updateTicketAges() {
+      const now = Date.now();
+      for (const label of document.querySelectorAll("#board-container .ticket-age")) {
+        const text = formatTicketAge(Number(label.dataset.createdAtMs), now);
+        if (label.textContent !== text) label.textContent = text;
+      }
+    }
+
     function renderAll(data) {
       const container = document.getElementById("board-container");
       const rooms = data.rooms || [];
@@ -559,13 +579,14 @@
       const content = JSON.stringify([rooms, tickets]);
       if (content === lastRenderedContent) return;
 
+      const now = Date.now();
       const roomsHtml = rooms.map(room => {
         const roomTickets = tickets.filter(t => t.room_id === room.id);
         const colsHtml = COLUMNS.map(col => {
           const colTickets = roomTickets.filter(t => t.column === col.key);
           const cardsHtml = colTickets.length === 0
             ? `<div class="empty-col">—</div>`
-            : colTickets.map(t => renderTicketCard(t)).join("");
+            : colTickets.map(t => renderTicketCard(t, now)).join("");
 
           return `
             <div class="kanban-column" data-col="${col.key}">
@@ -595,13 +616,16 @@
       lastRenderedContent = content;
     }
 
-    function renderTicketCard(t) {
+    function renderTicketCard(t, now) {
       const descHtml = t.description_html || escapeHtml(t.description || "");
       const mrHtml = t.mr_url
-        ? `<div class="ticket-mr-row">
-             <a class="mr-link" href="${escapeHtml(t.mr_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(formatShortPull(t.mr_url))} ↗</a>
-           </div>`
+        ? `<a class="mr-link" href="${escapeHtml(t.mr_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(formatShortPull(t.mr_url))} ↗</a>`
         : "";
+      const createdAt = t.created_at_ms;
+      const ageHtml = Number.isFinite(createdAt)
+        ? `<span class="ticket-age" data-created-at-ms="${createdAt}">${formatTicketAge(createdAt, now)}</span>`
+        : "";
+      const footer = mrHtml || ageHtml ? `<div class="ticket-mr-row">${mrHtml}${ageHtml}</div>` : "";
 
       return `
         <article class="ticket-card">
@@ -609,7 +633,7 @@
             <div class="ticket-title">${escapeHtml(t.title)}</div>
             ${descHtml ? `<div class="ticket-description">${descHtml}</div>` : ""}
           </div>
-          ${mrHtml}
+          ${footer}
         </article>
       `;
     }
@@ -661,6 +685,7 @@
 
     fetchBoard();
     setInterval(fetchBoard, 3000);
+    setInterval(updateTicketAges, 30000);
   </script>
 </body>
 </html>
