@@ -72,6 +72,7 @@ pub(super) fn cli() -> Command {
     let command = command
         .subcommand(room_cli())
         .subcommand(agent_cli())
+        .subcommand(bot_cli())
         .subcommand(
             subcommand("send")
                 .arg(
@@ -232,6 +233,7 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         "ui" => parse_ui(args)?,
         "room" => parse_room(args)?,
         "agent" => parse_agent(args)?,
+        "bot" => parse_bot(args)?,
         "send" => {
             let (params, send_follow) = parse_send(args)?;
             follow = send_follow;
@@ -282,6 +284,34 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         wait_for_message: name == "wait",
         follow,
     })
+}
+
+fn bot_cli() -> Command {
+    subcommand("bot")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            subcommand("add")
+                .arg(option("name"))
+                .arg(value_arg("room").long("room")),
+        )
+        .subcommand(subcommand("list").arg(flag("json")))
+        .subcommand(subcommand("delete").arg(value_arg("name").required(true)))
+}
+
+fn parse_bot(args: &ArgMatches) -> Result<(&'static str, Value), String> {
+    match args.subcommand() {
+        Some(("add", args)) => {
+            let mut params = json!({"name":required(args, "name")?});
+            if let Some(room) = args.get_one::<String>("room") {
+                params["room"] = json!(room);
+            }
+            Ok(("bot.add", params))
+        }
+        Some(("list", _)) => Ok(("bot.list", json!({}))),
+        Some(("delete", args)) => Ok(("bot.delete", json!({"name":required(args, "name")?}))),
+        _ => Err("unknown bot command".into()),
+    }
 }
 
 fn parse_message(args: &ArgMatches) -> Result<(&'static str, Value), String> {

@@ -39,6 +39,8 @@ pub(crate) enum ModelError {
         agent: AgentId,
         room: RoomId,
     },
+    BotNameTaken(String),
+    UnknownBot(String),
     OrchestratorOutsideMaster(AgentId),
     NotOrchestratable(RoomId),
     RoomAlreadyOrchestrated {
@@ -72,6 +74,11 @@ impl std::fmt::Display for ModelError {
                 "Agent name {name:?} is already used by agent {} in room {}; choose a unique name across all rooms",
                 agent.0, room.0
             ),
+            Self::BotNameTaken(name) => write!(
+                formatter,
+                "Name {name:?} is already used by bot {name:?}; choose a unique name across all rooms"
+            ),
+            Self::UnknownBot(name) => write!(formatter, "No bot matches {name:?}"),
             Self::OrchestratorOutsideMaster(agent) => write!(
                 formatter,
                 "Agent {} is not in the MASTER room; only MASTER agents orchestrate rooms",

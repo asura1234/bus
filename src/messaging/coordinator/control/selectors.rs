@@ -15,6 +15,11 @@ impl Worker {
         if let Some(id) = self.exact_agent(selector) {
             return Ok(id);
         }
+        if recipient_alias && self.state.bot(selector).is_some() {
+            return Err(format!(
+                "Bot {selector:?} cannot receive messages; use a live agent as --to"
+            ));
+        }
         if let Some(message) = self.retired_send_target(selector, recipient_alias) {
             return Err(message);
         }
@@ -62,7 +67,7 @@ impl Worker {
         selector: &str,
         recipient_alias: bool,
     ) -> Option<String> {
-        if self.exact_agent(selector).is_some() {
+        if self.exact_agent(selector).is_some() || self.state.bot(selector).is_some() {
             return None;
         }
         if let Ok(raw) = selector.parse::<u64>() {
@@ -112,7 +117,7 @@ impl Worker {
         self.resolve_agent(None, None, selector, false)
     }
 
-    fn exact_agent(&self, selector: &str) -> Option<AgentId> {
+    pub(super) fn exact_agent(&self, selector: &str) -> Option<AgentId> {
         selector
             .parse::<u64>()
             .ok()

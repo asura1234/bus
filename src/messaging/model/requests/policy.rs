@@ -9,7 +9,7 @@ impl BusState {
         generated: bool,
     ) -> bool {
         !generated
-            && matches!(author, Author::Agent(_))
+            && matches!(author, Author::Agent(_) | Author::Bot(_))
             && self
                 .agents
                 .get(&agent)

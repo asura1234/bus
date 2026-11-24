@@ -1,4 +1,4 @@
-//! Agent names are unique among current agents throughout a Bus session.
+//! Agent and bot names share one session-wide namespace.
 use super::{state::normalized_name, AgentId, Author, BusState, ModelError};
 use std::collections::BTreeSet;
 
@@ -22,13 +22,20 @@ impl BusState {
                 room: agent.room_id,
             });
         }
+        if self.bot(&name).is_some() {
+            return Err(ModelError::BotNameTaken(name));
+        }
         Ok(name)
     }
 
     /// Repair old snapshots after journal replay, before serving any client.
     /// Reserve every original name first so generated names cannot steal one.
     pub(crate) fn upgrade_agent_names(&mut self, now_ms: u64) -> Result<(), ModelError> {
-        let mut reserved: BTreeSet<_> = self.agents().map(|a| a.name.clone()).collect();
+        let mut reserved: BTreeSet<_> = self
+            .agents()
+            .map(|a| a.name.clone())
+            .chain(self.bots.keys().cloned())
+            .collect();
         let mut seen = BTreeSet::new();
         let mut renamed = Vec::new();
         // BTreeMap order preserves the lowest-ID owner's original name.

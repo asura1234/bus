@@ -128,6 +128,7 @@ impl BusState {
     pub(crate) fn has_work(&self) -> bool {
         !self.agents.is_empty()
             || !self.retired_agents.is_empty()
+            || !self.bots.is_empty()
             || self
                 .rooms
                 .values()
@@ -272,6 +273,9 @@ impl BusState {
         }
         self.archive_room_notices(id);
         let room = self.rooms.remove(&id).expect("checked room");
+        for bot in self.bots.values_mut().filter(|bot| bot.room_id == Some(id)) {
+            bot.room_id = None;
+        }
         std::sync::Arc::make_mut(&mut self.history).insert(super::Archived::Room {
             id,
             name: room.name,

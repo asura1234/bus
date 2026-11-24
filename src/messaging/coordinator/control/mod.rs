@@ -1,5 +1,6 @@
 //! Control receipts, tiers, validation and routing on the existing single-writer coordinator.
 mod agents;
+mod bots;
 mod driver;
 mod feishu;
 mod inspect;
@@ -94,7 +95,7 @@ impl Worker {
         if params.keys().any(|key| !fields.contains(&key.as_str())) {
             return Response::failure(&request.id, "invalid_params", "Unknown parameter");
         }
-        if (request.method.ends_with(".delete")
+        if (matches!(request.method.as_str(), "room.delete" | "agent.delete")
             || request.method == "agent.setup-confirm"
             || request.method == "request.recover")
             && request.params.get("confirm") != Some(&Value::Bool(true))
@@ -252,6 +253,7 @@ impl Worker {
     ) -> Result<Value, String> {
         match method {
             "feishu.ingest" => self.control_feishu_ingest(p),
+            "bot.add" | "bot.list" | "bot.delete" => self.execute_bots(method, p),
             "agent.focus" | "room.focus" | "room.create" | "room.rename" | "room.seen"
             | "room.sound" | "room.delete" | "room.history" => {
                 self.execute_rooms(method, p, events)
@@ -392,6 +394,9 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     ),
     spec("state", "state", &[], false, Tier::Agent),
     spec("agent.list", "agent list", &["room"], false, Tier::Agent),
+    spec("bot.add", "bot add", &["name", "room"], true, Tier::Agent),
+    spec("bot.list", "bot list", &[], false, Tier::Agent),
+    spec("bot.delete", "bot delete", &["name"], true, Tier::Agent),
     spec("settings", "settings", &[], false, Tier::Agent),
     spec(
         "settings.feishu_notifications",

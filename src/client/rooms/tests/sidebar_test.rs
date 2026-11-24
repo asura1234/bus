@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn bot_identity_renders_in_chat_without_a_sidebar_row_or_pane() {
+    use crate::messaging::model::{Author, Draft};
+    use serde_json::json;
+
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut saved = serde_json::to_value(&snapshot.state).unwrap();
+    saved["bots"] = json!({"inbox-watcher":{"name":"inbox-watcher","room_id":room}});
+    snapshot.state = serde_json::from_value(saved).unwrap();
+    let author: Author = serde_json::from_value(json!({"bot":"inbox-watcher"})).unwrap();
+    snapshot
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "Three new reports".into(),
+                recipient_ids: [agent].into(),
+                ..Default::default()
+            },
+            author,
+            1,
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    assert!(room_screen(&mut ui, 120, 30).contains("inbox-watcher"));
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 120, 30));
+    ui.render(&mut buffer);
+    let sidebar = ui.view.sidebar_body;
+    assert!((sidebar.y..sidebar.bottom()).all(|y| {
+        let line: String = (sidebar.x..sidebar.right())
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        !line.contains("inbox-watcher")
+    }));
+    assert!(ui.terminal.is_none());
+    assert!(ui.target_pane.is_none());
+}
+
+#[test]
 fn unavailable_worker_shows_only_its_status_while_the_error_is_logged() {
     let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();

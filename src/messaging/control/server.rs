@@ -253,7 +253,6 @@ struct Client {
     accepted: Instant,
     /// Retained through writing/closing so slow reply readers are attributable.
     request: Option<(String, &'static str)>,
-    async_send_follower: bool,
     follower_status: Option<FollowerStatus>,
 }
 
@@ -282,7 +281,6 @@ impl Client {
             deadline: Instant::now() + IO_TIMEOUT,
             accepted: Instant::now(),
             request: None,
-            async_send_follower: false,
             follower_status: None,
         }
     }
@@ -470,10 +468,9 @@ impl Client {
             .request
             .as_ref()
             .map_or(("", "unread"), |(id, method)| (id.as_str(), *method));
-        // Cancelling a long-lived `send --async` can close a status socket
-        // while its poll is in flight. Keep partial writes and other errors
-        // at WARN so failed transfers remain visible.
-        if self.async_send_follower && reason == "BrokenPipe" && written_bytes == 0 {
+        // A client can close while the response is in flight. A partial
+        // response or any other write failure is still worth surfacing.
+        if reason == "BrokenPipe" && written_bytes == 0 {
             tracing::debug!(
                 event = "bus.control.response.failed",
                 control_request_id = id,
@@ -482,7 +479,7 @@ impl Client {
                 reason,
                 response_bytes,
                 written_bytes,
-                "Async send follower disconnected before the status response"
+                "Control client disconnected before reading the response"
             );
             return;
         }
@@ -536,7 +533,7 @@ impl Client {
                 "Method belongs to the other control endpoint",
             ));
         }
-        self.async_send_follower = request.method == "message.status"
+        let async_send_follower = request.method == "message.status"
             && matches!(
                 request
                     .params
@@ -550,7 +547,7 @@ impl Client {
         if let Some(response) = self
             .follower_status
             .as_ref()
-            .filter(|_| self.async_send_follower)
+            .filter(|_| async_send_follower)
             .and_then(|status| status.response(&request))
         {
             return self.respond(response);

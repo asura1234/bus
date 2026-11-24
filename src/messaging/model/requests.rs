@@ -673,7 +673,7 @@ impl BusState {
                 let payload = self.render_request_payload(*id)?;
                 let prompt = &self.requests.get(id)?.prompt;
                 let attribution = match prompt.author {
-                    Author::Agent(_) => String::new(),
+                    Author::Agent(_) | Author::Bot(_) => String::new(),
                     _ => format!(" from {}", self.sender_name(&prompt.author)),
                 };
                 Some(format!(
@@ -704,6 +704,7 @@ impl BusState {
         match author {
             Author::Developer => "the developer".into(),
             Author::Bus => BUS_SENDER.into(),
+            Author::Bot(name) => name.clone(),
             Author::Agent(id) => self
                 .agents
                 .get(id)

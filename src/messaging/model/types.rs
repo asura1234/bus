@@ -26,11 +26,10 @@ id_type!(AgentId);
 id_type!(PromptId);
 id_type!(RequestId);
 
-/// The name every Bus-generated notice is shown under, in chat and in what
-/// agents receive.
+/// The name Bus-generated notices use in chat and in agent messages.
 pub(crate) const BUS_SENDER: &str = "bus";
 
-/// Who wrote a prompt. Saved JSON is `"human"`, `"bus"` or `{"agent":N}`.
+/// Who wrote a prompt. Bot authors keep the send-time name for history.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Author {
@@ -38,6 +37,7 @@ pub(crate) enum Author {
     #[serde(rename = "human")]
     Developer,
     Agent(AgentId),
+    Bot(String),
     /// Bus itself, shown as the grey sender "bus": every notice Bus generates
     /// (a blocked dialog, a compaction limit, a deleted agent's
     /// open terminal) is signed this way, never with an agent's name.

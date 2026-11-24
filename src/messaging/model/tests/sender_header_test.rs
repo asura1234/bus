@@ -314,12 +314,12 @@ fn check_restart_continuation_room(in_master: bool) {
     } else {
         (work, peer)
     };
-    for sender in [Author::Developer, Author::Bus, Author::Agent(author)] {
-        let name = match sender {
-            Author::Developer => "you",
-            Author::Bus => "bus",
-            Author::Agent(_) => "builder",
-        };
+    for (sender, name) in [
+        (Author::Developer, "you"),
+        (Author::Bus, "bus"),
+        (Author::Agent(author), "builder"),
+        (Author::Bot("watcher".into()), "watcher"),
+    ] {
         let request = state
             .submit_message_from(
                 room,

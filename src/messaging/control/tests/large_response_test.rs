@@ -79,7 +79,8 @@ fn response_write_timeout_records_size_progress_and_request() {
     capture.run_filtered("info", || assert!(!client.poll(&commands, &mut next, None)));
     let log = capture.text();
     assert!(
-        log.contains("bus.control.response.failed")
+        log.trim_start().starts_with("WARN")
+            && log.contains("bus.control.response.failed")
             && log.contains("write_timeout")
             && log.contains("history-write-timeout"),
         "{log}"

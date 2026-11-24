@@ -282,7 +282,7 @@ impl BusState {
                     self.agent(id).is_none_or(|agent| agent.deletion_pending)
                 }) || self.stale_dialog_notice(request.room_id, &request.prompt)
             }
-            Author::Developer => false,
+            Author::Developer | Author::Bot(_) => false,
         }
     }
 

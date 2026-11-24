@@ -3,6 +3,7 @@ mod agent_names;
 mod agent_startup;
 mod agents;
 mod attention;
+mod bots;
 mod callbacks;
 mod compactions;
 mod developer_notifications;

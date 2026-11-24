@@ -51,13 +51,14 @@ fn read_response(mut stream: ipc::LocalStream) -> Response {
 
 #[cfg(unix)]
 #[test]
-fn abandoned_status_follower_keeps_only_unexpected_write_failures_at_warn() {
+fn control_response_broken_pipe_warns_only_after_a_partial_write() {
     for (method, follower, written, expected_level) in [
+        ("message.status", false, 0, "DEBUG"),
         ("message.status", true, 0, "DEBUG"),
-        ("message.status", false, 0, "WARN"),
+        ("state", false, 0, "DEBUG"),
+        ("unread", false, 0, "DEBUG"),
         ("message.status", true, 1, "WARN"),
-        ("state.get", true, 0, "WARN"),
-        ("unread", false, 0, "WARN"),
+        ("state", false, 1, "WARN"),
     ] {
         let dir = TestDir::new();
         storage_io::private_dir(&dir.0).unwrap();
@@ -117,7 +118,16 @@ fn abandoned_status_follower_keeps_only_unexpected_write_failures_at_warn() {
             assert!(!client.poll(&commands, &mut next, budget.as_ref()))
         });
         let log = capture.text();
+        let expected_message = if expected_level == "DEBUG" {
+            "Control client disconnected before reading the response"
+        } else {
+            "Control response could not be delivered"
+        };
         assert!(log.contains("BrokenPipe"), "{method}: {log}");
+        assert!(
+            log.contains("bus.control.response.failed"),
+            "{method}: {log}"
+        );
         assert!(
             log.contains(&format!("written_bytes={written}")),
             "{method}: {log}"
@@ -126,6 +136,7 @@ fn abandoned_status_follower_keeps_only_unexpected_write_failures_at_warn() {
             log.trim_start().starts_with(expected_level),
             "{method}: expected {expected_level}, got {log}"
         );
+        assert!(log.contains(expected_message), "{method}: {log}");
     }
 }
 

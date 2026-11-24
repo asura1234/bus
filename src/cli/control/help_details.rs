@@ -56,6 +56,8 @@ pub(super) fn default_value(path: &str, id: &str, arg: &Arg) -> Option<&'static 
     Some(match (path, id) {
         (_, "request-id") => "default: generated unique ID",
         ("agent list", "room") => "default: all rooms",
+        ("bot add", "room") => "default: no room membership",
+        ("bot list", "json") => "default: JSON",
         ("agent interrupt", "room") => "default with AGENT: target's home room",
         (p, "room") if p.starts_with("agent ") && p != "agent add" && p != "agent resume" => {
             "default: none; optional conversation context"
@@ -90,7 +92,7 @@ pub(super) fn command(path: &str) -> String {
         "" => {
             "A plain bus launch starts a new interactive session. Control commands target an\nexisting session and return JSON. Use bus <command> --help for its contract.\n--paths returns a JSON object of data/log/config/state paths without starting Bus.\nUse bus sessions and bus resume --help before selecting a saved session."
         }
-        "room" | "agent" | "message" | "request" | "ui" | "feishu" => {
+        "room" | "agent" | "bot" | "message" | "request" | "ui" | "feishu" => {
             "Choose a subcommand below, then run bus <command> <subcommand> --help.\nA bare group prints help without contacting Bus; it has no JSON result."
         }
         "state" => STATE,
@@ -103,6 +105,9 @@ pub(super) fn command(path: &str) -> String {
         "agent delete" => AGENT_DELETE,
         "agent add" => AGENT_ADD,
         "agent list" => AGENT_LIST,
+        "bot add" => "Register a session-scoped sender for bus send --as NAME. A bot cannot receive messages.\nNames are trimmed, case-sensitive and unique across agents and bots. --room is optional.\nResult: {name,room_id} (room_id is null without membership).\nErrors: command_failed for an occupied name or unavailable room.",
+        "bot list" => "Return the current bot identities in this session. Output is always JSON.\nResult: {bots:[{name,room_id},...]}. room_id is null without membership.\nErrors: common errors below.",
+        "bot delete" => "Remove an identity. Existing messages keep the bot name.\nResult: {name,deleted:true}. Errors: command_failed if no bot matches NAME.",
         "agent rename" => AGENT_RENAME,
         "agent setup-confirm" => AGENT_SETUP_CONFIRM,
         "agent resume" => AGENT_RESUME,
@@ -166,7 +171,7 @@ pub(super) fn command(path: &str) -> String {
 }
 
 const STATE: &str = r#"Read the current session snapshot without acknowledging replies.
-Result: {revision,master_room,visible_room,rooms:[...],agents:[...],usage,settings,build,launch}.
+Result: {revision,master_room,visible_room,rooms:[...],agents:[...],bots:[...],usage,settings,build,launch}.
   master_room is MASTER's ID; visible_room is null while a terminal/form is open.
   rooms: {id,name,kind,unread_count,unseen_to_developer,status,sound,sound_name,
     deletion_pending,orchestrator}. kind is master/work; orchestrator is ID/null.
@@ -178,6 +183,7 @@ Result: {revision,master_room,visible_room,rooms:[...],agents:[...],usage,settin
     deletion_pending,queue_depth,oldest_queued_age_ms,compactions:{count,last_at_ms}.
     wait_reason is null when delivery can proceed; otherwise session_hook_missing,
     prior_request_active,agent_unavailable, etc. dialog makes shown status blocked.
+  bots: {name,room_id}; room_id is null without membership.
   usage: claude/codex/cursor, status observed or unknown (never assume unused).
     Observed five_hour/weekly windows: used_percent,resets_at,window_minutes,
     read_at_ms,observed_by_agent. Codex is read after turns; Claude's status-line
@@ -433,7 +439,9 @@ members excluding the author; it is never implicit. With no --as, Bus resolves
 inherited launch/pane identity (including the caller's parent process tree).
 A renamed agent keeps its stable ID. An external developer shell remains the
 developer; an unresolved or stale caller is refused: pass --as <your name or id>.
-Explicit --as is unchanged. --reply-to also accepts an inferred agent caller.
+An ordinary send accepts --as BOT_NAME. Bots can send to agents and cannot
+receive messages or use --reply-to. Use bus bot list to see registered names.
+--reply-to accepts an explicit or inferred agent caller.
 An inferred agent send receipt includes author_id for async polling/acknowledgement.
 An exact own current/legacy sender header or short identity-only line normalizes
 into one genuine header. Ordinary sentences and forged ID/room headers retain
@@ -464,8 +472,8 @@ and never joins. The developer's messages always interrupt and cannot be
 weakened: --queue and --mode steer/queue are refused. An orchestrator may pass
 --mode; without it, delivery is today's steer-or-queue. Other agents keep that
 default and cannot interrupt. --queue equals --mode queue.
-Ordinary agent-authored requests to orchestrators get independent queued turns
-and replies, without steering or coalescing.
+Ordinary messages from agents and bots to orchestrators get independent queued
+turns and replies, without steering or coalescing.
 Other same-room working recipients of a steer delivery receive it in their
 current turn group; Claude/Codex take it into that turn, Cursor into its next
 generation answering the group. Cross-room messages wait for a new turn.
@@ -494,7 +502,7 @@ resending. command_failed covers invalid/self/empty recipients, bad attachments,
 missing --as for you, missing hooks or storage. Fix the named cause first."#;
 
 const STATUS: &str = r#"Read durable settlement once, without waiting or acknowledging delivery.
-Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],requests:
+Result: {message_id,prompt,author_name,files,complete,waiting_on_dialog:[AGENT_ID,...],requests:
   [{request_id,agent_id,agent_name,deleted,stage,reason,manual_recovery,status,detail,
   uncertain_outcome,session_id,turn_id,start_bound,dialog,turn_ended,settling,group,
   queue,latency,event_acks,events:[{key,text}],reply_ack,exit_snapshot,reply}]}.
@@ -545,7 +553,7 @@ Open and abandoned statuses themselves are successful reads (exit 0)."#;
 const WAIT: &str = r#"Poll the same durable message status used by message status (see its --help for
 the result schema/stages). Bounded wait polls every 200ms, timeout 1-600s, default
 60. --async has no deadline, backs off 200ms to 2s, and forbids explicit --timeout.
-Result: {message_id,prompt,files,complete,waiting_on_dialog:[AGENT_ID,...],
+Result: {message_id,prompt,author_name,files,complete,waiting_on_dialog:[AGENT_ID,...],
   requests:[{request_id,agent_id,agent_name,stage,reason,reply,turn_ended,settling,
   group,...}]}; reply holds raw text and received_at_ms. See message status help
   for every request field. Both stop for a dialog; send --async waits through it.

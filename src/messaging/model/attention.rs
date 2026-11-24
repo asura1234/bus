@@ -264,7 +264,7 @@ impl BusState {
             Author::Agent(id) => self
                 .agent(*id)
                 .is_some_and(|agent| agent.room_id == room && agent.orchestrates.is_some()),
-            Author::Developer => false,
+            Author::Developer | Author::Bot(_) => false,
         }
     }
 }

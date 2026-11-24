@@ -37,8 +37,8 @@ impl Worker {
                 let result = self.control_message(message)?;
                 if let Some(selector) = optional_text(p, "as")? {
                     if let Some(source) = self.state.requests_for_message(message).next() {
-                        let author = self.control_author(source.room_id, selector)?;
-                        if source.prompt.author == Author::Agent(author) {
+                        let author = self.explicit_message_author(source.room_id, selector)?;
+                        if matches!(author, Author::Agent(_)) && source.prompt.author == author {
                             let now = self.reply_waiter_now();
                             if let Ok(mut waiters) = self.reply_waiters.lock() {
                                 waiters.insert(message, now);
@@ -139,8 +139,12 @@ impl Worker {
             return self.control_reply(p);
         }
         let room = self.control_room(required(p, "room")?)?;
-        let author = self.send_author(room, p)?;
-        if let Some(error) = self.master_send_refusal(room, author) {
+        let author = self.message_author(room, p)?;
+        let agent_author = match &author {
+            Author::Agent(id) => Some(*id),
+            _ => None,
+        };
+        if let Some(error) = self.master_send_refusal(room, agent_author) {
             return Err(error);
         }
         let selected = p
@@ -156,19 +160,23 @@ impl Worker {
             .iter()
             .any(|s| crate::messaging::model::is_developer_recipient(s));
         if to_developer {
-            return self.control_send_to_developer(p, room, author, selectors.len(), files);
+            if matches!(author, Author::Bot(_)) {
+                return Err("--to you requires an agent author; bots can send to agents".into());
+            }
+            return self.control_send_to_developer(p, room, agent_author, selectors.len(), files);
         }
-        let delivery = self.send_delivery(author, p)?;
-        let recipients: AgentRecipients = if selectors == ["all"] {
-            // An agent's broadcast goes to everyone else in the room.
+        let delivery = self.send_delivery(&author, p)?;
+        let recipients: AgentRecipients = if selectors == ["all"] && self.state.bot("all").is_none()
+        {
+            // Broadcast to the room's agents, excluding the author if present.
             let recipients: AgentRecipients = self
                 .state
                 .agents()
-                .filter(|a| a.room_id == room && Some(a.id) != author)
+                .filter(|a| a.room_id == room && Some(a.id) != agent_author)
                 .map(|a| a.id)
                 .collect();
             if recipients.is_empty() {
-                return Err(if author.is_some() {
+                return Err(if agent_author.is_some() {
                     "No recipients besides the author: the room has no other agents".into()
                 } else {
                     "No recipients: the room has no agents".into()
@@ -176,14 +184,12 @@ impl Worker {
             }
             recipients
         } else {
-            let sender_room = author
-                .and_then(|id| self.state.agent(id))
-                .map_or(room, |agent| agent.room_id);
+            let sender_room = self.sender_room(&author, room);
             let recipients = selectors
                 .into_iter()
                 .map(|s| self.resolve_agent(Some(room), Some(sender_room), s, true))
                 .collect::<Result<AgentRecipients, _>>()?;
-            if author.is_some_and(|author| recipients.contains(&author)) {
+            if agent_author.is_some_and(|author| recipients.contains(&author)) {
                 return Err("An agent cannot send a message to itself".into());
             }
             recipients
@@ -204,7 +210,7 @@ impl Worker {
                     files,
                     recipient_ids: recipients.clone(),
                 },
-                author.map_or(Author::Developer, Author::Agent),
+                author,
                 now,
                 delivery.queue_only(),
             )
@@ -235,8 +241,8 @@ impl Worker {
                 "persisted",
             );
         }
-        if author.is_some() && p.get("as").is_none() && p.get("caller").is_some() {
-            receipt["author_id"] = json!(author);
+        if agent_author.is_some() && p.get("as").is_none() && p.get("caller").is_some() {
+            receipt["author_id"] = json!(agent_author);
         }
         Ok(receipt)
     }
@@ -247,7 +253,7 @@ impl Worker {
     /// orchestrator may choose `--mode`; without it, today's steer-or-queue
     /// delivery is unchanged. Other agents keep that default and cannot
     /// interrupt a turn. `--queue` stays the legacy spelling of `--mode queue`.
-    fn send_delivery(&self, author: Option<AgentId>, p: &Value) -> Result<SendMode, String> {
+    fn send_delivery(&self, author: &Author, p: &Value) -> Result<SendMode, String> {
         let explicit = p.get("mode").map(parse_send_mode).transpose()?;
         let queue = match p.get("queue") {
             None => false,
@@ -257,21 +263,21 @@ impl Worker {
         if queue && explicit.is_some() {
             return Err("--queue equals --mode queue; pass only one of them".into());
         }
-        let Some(author) = author else {
+        if *author == Author::Developer {
             if queue || matches!(explicit, Some(SendMode::Steer | SendMode::Queue)) {
                 return Err(
                     "The developer's messages always interrupt the running turn; --mode interrupt is the only choice (--queue and --mode steer/queue are refused)".into(),
                 );
             }
             return Ok(SendMode::Interrupt);
-        };
-        let orchestrator = self.state.agent(author).is_some_and(|agent| {
+        }
+        let orchestrator = matches!(author, Author::Agent(id) if self.state.agent(*id).is_some_and(|agent| {
             agent.orchestrates.is_some()
                 || self
                     .state
                     .master_room()
                     .is_some_and(|master| agent.room_id == master.id)
-        });
+        }));
         match explicit {
             Some(SendMode::Interrupt) if !orchestrator => Err(
                 "Only the developer and orchestrators choose --mode interrupt; agent messages keep their steer-or-queue delivery".into(),
@@ -334,17 +340,8 @@ impl Worker {
         }) {
             return None;
         }
-        let author = if command.params.get("as").is_some() {
-            let selector = command.params.get("as")?.as_str()?;
-            Some(self.control_author(room, selector).ok()?)
-        } else if command.params.get("caller").is_some() {
-            self.send_author(room, &command.params).ok()?
-        } else {
-            None
-        };
-        let sender_room = author
-            .and_then(|id| self.state.agent(id))
-            .map_or(room, |agent| agent.room_id);
+        let author = self.message_author(room, &command.params).ok()?;
+        let sender_room = self.sender_room(&author, room);
         for value in selected {
             let selector = value.as_str()?;
             if let Some(message) = self.retired_send_target(selector, true) {
@@ -415,9 +412,17 @@ impl Worker {
             .next()
             .ok_or("Unknown reply-to message ID")?
             .room_id;
-        let author = self
-            .send_author(room, p)?
-            .ok_or("A reply requires an agent caller; pass --as <your name or id>")?;
+        let author = match self.message_author(room, p)? {
+            Author::Agent(id) => id,
+            Author::Bot(_) => {
+                return Err(
+                    "Bots cannot answer requests; --reply-to requires an agent recipient".into(),
+                )
+            }
+            Author::Developer | Author::Bus => {
+                return Err("A reply requires an agent caller; pass --as <your name or id>".into())
+            }
+        };
         if self
             .state
             .agent(author)
@@ -592,7 +597,7 @@ impl Worker {
         if requests.is_empty() {
             if let Some(prompt) = self.state.notice(message) {
                 return Ok(
-                    json!({"message_id": message, "prompt": prompt, "files": prompt.files,
+                    json!({"message_id": message, "prompt": prompt, "author_name":self.state.author_label(&prompt.author), "files": prompt.files,
                     "complete": true, "stage": "posted", "waiting_on_dialog": [], "requests": []}),
                 );
             }
@@ -606,7 +611,7 @@ impl Worker {
                 .unwrap_or(usize::MAX)
         });
         Ok(
-            json!({"message_id":message,"prompt":requests[0].prompt,"files":requests[0].prompt.files,"complete":requests.iter().all(|r|r.settled()),"waiting_on_dialog":requests.iter().filter(|r| self.waiting_on_dialog(r)).map(|r| r.agent_id).collect::<Vec<_>>(),"requests":requests.iter().map(|r| {
+            json!({"message_id":message,"prompt":requests[0].prompt,"author_name":self.state.author_label(&requests[0].prompt.author),"files":requests[0].prompt.files,"complete":requests.iter().all(|r|r.settled()),"waiting_on_dialog":requests.iter().filter(|r| self.waiting_on_dialog(r)).map(|r| r.agent_id).collect::<Vec<_>>(),"requests":requests.iter().map(|r| {
             let agent = self.state.agent(r.agent_id);
             let outcomes = self.state.worker_outcomes_for(r);
             let worker_events = self.state.worker_events_for(r);

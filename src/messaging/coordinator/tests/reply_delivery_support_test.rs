@@ -733,6 +733,13 @@ impl Delivery {
                 "[Bus message {id} from you (room {})]",
                 request.room_id.0
             )),
+            crate::messaging::model::Author::Bot(name) => format!(
+                "{name}:\n{}",
+                with_body(format!(
+                    "[Bus message {id} from {name} (room {})]",
+                    request.room_id.0
+                ))
+            ),
             crate::messaging::model::Author::Agent(sender) => {
                 let name = state.agent_message_label(sender);
                 let room = request
@@ -1092,7 +1099,7 @@ impl Delivery {
                 let reason = match r.prompt.author {
                     Author::Agent(_) => "requester_reply",
                     Author::Developer => "shared_reply",
-                    Author::Bus => "internal_reply",
+                    Author::Bot(_) | Author::Bus => "internal_reply",
                 };
                 assert_eq!(replies[0]["reason"], reason, "{history}");
             }
