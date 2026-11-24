@@ -89,6 +89,8 @@ fn transition_matrix_enforces_normal_investigation_only_and_blocked_escape_hatch
                 description: None,
                 column: Column::Done,
                 mr_url: None,
+                author_model: None,
+                reviewer_model: None,
                 investigation_only: false,
                 note: None,
             },
@@ -104,6 +106,8 @@ fn transition_matrix_enforces_normal_investigation_only_and_blocked_escape_hatch
                 description: Some("See [Spec](https://example.com/spec).".into()),
                 column: Column::Todo,
                 mr_url: None,
+                author_model: None,
+                reviewer_model: None,
                 investigation_only: false,
                 note: None,
             },
@@ -165,6 +169,8 @@ fn transition_matrix_enforces_normal_investigation_only_and_blocked_escape_hatch
                 description: None,
                 column: Column::Investigation,
                 mr_url: None,
+                author_model: None,
+                reviewer_model: None,
                 investigation_only: true,
                 note: Some("Investigating flake".into()),
             },
@@ -212,6 +218,8 @@ fn persistence_round_trip_and_history_clear_preserve_rooms() {
                 description: Some("Initial [doc](https://example.com/doc)".into()),
                 column: Column::Investigation,
                 mr_url: None,
+                author_model: None,
+                reviewer_model: None,
                 investigation_only: false,
                 note: Some("Initial note".into()),
             },
@@ -225,6 +233,8 @@ fn persistence_round_trip_and_history_clear_preserve_rooms() {
                     "Updated [Feishu bug](https://example.feishu.cn/wiki/123)".into(),
                 ),
                 mr_url: Some("https://github.com/example/platform/pull/555".into()),
+                author_model: None,
+                reviewer_model: None,
                 note: Some("Opened PR".into()),
             },
             now + 1000,
@@ -802,6 +812,121 @@ window.addEventListener("load", async () => {
 });
 </script>"#,
     );
+}
+
+#[test]
+fn ticket_model_metadata_round_trips_without_rendering() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let out = Command::new(bin())
+            .arg("--data-dir")
+            .arg(tmp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    run(&["room", "add", "--id", "1", "--name", "Models", "--json"]);
+    let created = run(&[
+        "ticket",
+        "add",
+        "--room",
+        "Models",
+        "--title",
+        "Visible ticket",
+        "--author-model",
+        " private-author/vendor-model.v2 ",
+        "--reviewer-model",
+        "private-reviewer/initial",
+        "--json",
+    ]);
+    let created = &created["ticket"];
+    assert_eq!(created["author_model"], "private-author/vendor-model.v2");
+    assert_eq!(created["reviewer_model"], "private-reviewer/initial");
+
+    run(&[
+        "ticket",
+        "update",
+        "T-1",
+        "--reviewer-model",
+        "private-reviewer/vendor-model.v3",
+        "--json",
+    ]);
+    let models = run(&["ticket", "list", "--json"]);
+    let listed = &models["tickets"][0];
+    assert_eq!(listed["author_model"], "private-author/vendor-model.v2");
+    assert_eq!(listed["reviewer_model"], "private-reviewer/vendor-model.v3");
+    assert_eq!(listed["created_at_ms"], created["created_at_ms"]);
+    assert_eq!(listed["history"][1]["at_ms"], listed["updated_at_ms"]);
+    assert_eq!(
+        listed["history"][1]["summary"],
+        "Updated T-1 (reviewer_model)"
+    );
+
+    let payload = server::board_api_payload(tmp.path(), ViewFilter::Session, 1).unwrap();
+    assert_eq!(&payload["tickets"][0], listed);
+    assert_eq!(&payload["all_tickets"][0], listed);
+    let fixture = r#"<script>
+const payload = BOARD_PAYLOAD;
+window.fetch = async () => ({ ok: true, json: async () => payload });
+window.addEventListener("load", () => {
+  const board = document.getElementById("board-container");
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  if (board.querySelector(".ticket-title")?.textContent !== "Visible ticket") {
+    result.textContent = "Ticket did not render";
+    return;
+  }
+  const ticket = payload.tickets[0];
+  const rendered = document.body.cloneNode(true);
+  rendered.querySelectorAll("script").forEach(script => script.remove());
+  const html = rendered.outerHTML;
+  const leaks = [ticket.author_model, ticket.reviewer_model, "author_model", "reviewer_model"]
+    .some(model => html.includes(model));
+  result.textContent = leaks ? "Internal model fields appeared in the rendered DOM" : "PASS";
+});
+</script>"#;
+    assert_headless_board_probe(&fixture.replace("BOARD_PAYLOAD", &payload.to_string()));
+
+    let updated = run(&[
+        "ticket",
+        "update",
+        "T-1",
+        "--author-model",
+        "",
+        "--reviewer-model",
+        "private-reviewer/final",
+        "--json",
+    ]);
+    assert!(updated["ticket"]["author_model"].is_null());
+    assert_eq!(
+        updated["ticket"]["reviewer_model"],
+        "private-reviewer/final"
+    );
+    assert_eq!(
+        updated["ticket"]["history"][2]["summary"],
+        "Updated T-1 (author_model, reviewer_model)"
+    );
+
+    let mut legacy = listed.clone();
+    let object = legacy.as_object_mut().unwrap();
+    object.remove("author_model");
+    object.remove("reviewer_model");
+    let legacy: agile_board::model::Ticket = serde_json::from_value(legacy).unwrap();
+    let legacy = serde_json::to_value(legacy).unwrap();
+    assert!(legacy
+        .get("author_model")
+        .is_some_and(serde_json::Value::is_null));
+    assert!(legacy
+        .get("reviewer_model")
+        .is_some_and(serde_json::Value::is_null));
 }
 
 fn assert_headless_board_probe(fixture: &str) {

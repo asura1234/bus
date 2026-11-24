@@ -312,6 +312,8 @@ pub struct Ticket {
     pub column: Column,
     pub investigation_only: bool,
     pub mr_url: Option<String>,
+    pub author_model: Option<String>,
+    pub reviewer_model: Option<String>,
     pub notes: Vec<TicketNote>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -362,6 +364,8 @@ pub struct NewTicketInput {
     pub description: Option<String>,
     pub column: Column,
     pub mr_url: Option<String>,
+    pub author_model: Option<String>,
+    pub reviewer_model: Option<String>,
     pub investigation_only: bool,
     pub note: Option<String>,
 }
@@ -371,7 +375,14 @@ pub struct UpdateTicketInput {
     pub title: Option<String>,
     pub description: Option<String>,
     pub mr_url: Option<String>,
+    pub author_model: Option<String>,
+    pub reviewer_model: Option<String>,
     pub note: Option<String>,
+}
+
+fn nonempty_model(model: String) -> Option<String> {
+    let model = model.trim();
+    (!model.is_empty()).then(|| model.to_string())
 }
 
 impl BoardState {
@@ -518,6 +529,8 @@ impl BoardState {
             column: input.column,
             investigation_only: input.investigation_only,
             mr_url,
+            author_model: input.author_model.and_then(nonempty_model),
+            reviewer_model: input.reviewer_model.and_then(nonempty_model),
             notes,
             created_at_ms: at_ms,
             updated_at_ms: at_ms,
@@ -644,6 +657,14 @@ impl BoardState {
             };
             changes.push("mr_url");
         }
+        if let Some(model) = input.author_model {
+            self.tickets[idx].author_model = nonempty_model(model);
+            changes.push("author_model");
+        }
+        if let Some(model) = input.reviewer_model {
+            self.tickets[idx].reviewer_model = nonempty_model(model);
+            changes.push("reviewer_model");
+        }
         if let Some(ref text) = note_clean {
             let col = self.tickets[idx].column;
             self.tickets[idx].notes.push(TicketNote {
@@ -655,7 +676,7 @@ impl BoardState {
         }
         if changes.is_empty() {
             return Err(invalid(
-                "ticket update requires at least one of --title, --description, --mr, or --note",
+                "ticket update requires at least one of --title, --description, --mr, --author-model, --reviewer-model, or --note",
             ));
         }
 

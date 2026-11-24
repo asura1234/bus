@@ -33,6 +33,8 @@ A ticket represents a work item that results in a Merge Request / Pull Request (
 | `column` | `Column` | Current stage (`todo`, `blocked`, `investigation`, `implementation`, `testing`, `review`, `done`) |
 | `investigation_only` | `bool` | Set via `--investigation-only` at creation; allows jumping `investigation -> done` directly |
 | `mr_url` | `Option<String>` | Separate MR/PR URL rendered distinctly from the description |
+| `author_model` | `Option<String>` | Internal author model identifier (`--author-model`); not displayed on the board |
+| `reviewer_model` | `Option<String>` | Internal reviewer model identifier (`--reviewer-model`); not displayed on the board |
 | `notes` | `Vec<TicketNote>` | Timestamped transition/update notes |
 | `created_at_ms` / `updated_at_ms` | `i64` | Epoch milliseconds of creation and latest update |
 | `history` | `Vec<TicketEvent>` | Chronological audit log for the ticket |

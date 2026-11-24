@@ -8,9 +8,9 @@
 agile-board --data-dir ABSOLUTE_PATH serve [--port PORT] [--mock] [--run-for SECONDS]
 agile-board --data-dir ABSOLUTE_PATH room add --id N --name NAME [--json]
 agile-board --data-dir ABSOLUTE_PATH room list [--json]
-agile-board --data-dir ABSOLUTE_PATH ticket add --room NAME_OR_ID --title TITLE [--description MARKDOWN] [--column COLUMN] [--mr URL] [--investigation-only] [--note TEXT] [--json]
+agile-board --data-dir ABSOLUTE_PATH ticket add --room NAME_OR_ID --title TITLE [--description MARKDOWN] [--column COLUMN] [--mr URL] [--author-model MODEL] [--reviewer-model MODEL] [--investigation-only] [--note TEXT] [--json]
 agile-board --data-dir ABSOLUTE_PATH ticket move ID --column COLUMN [--note TEXT] [--json]
-agile-board --data-dir ABSOLUTE_PATH ticket update ID [--title TITLE] [--description MARKDOWN] [--mr URL] [--note TEXT] [--json]
+agile-board --data-dir ABSOLUTE_PATH ticket update ID [--title TITLE] [--description MARKDOWN] [--mr URL] [--author-model MODEL] [--reviewer-model MODEL] [--note TEXT] [--json]
 agile-board --data-dir ABSOLUTE_PATH ticket list [--room NAME_OR_ID] [--column COLUMN] [--view day|week|session] [--json]
 agile-board --data-dir ABSOLUTE_PATH history [--json]
 agile-board --data-dir ABSOLUTE_PATH history clear --confirm [--json]
@@ -30,6 +30,7 @@ agile-board --version
 - Raw HTML tags in `description` are escaped and never passed through.
 - `http://` and `https://` links (both `[label](url)` and bare URLs) render with `target="_blank" rel="noopener noreferrer"`.
 - `mr_url` (`--mr`) is stored separately and rendered as a badge using the [MR/PR link format](GUIDE.md#description-markdown-and-link-format).
+- `author_model` and `reviewer_model` are optional model identifiers in `ticket list --json`. The page does not display them. Omitting a model flag during `ticket update` preserves its value; passing an empty value clears it.
 
 ### Columns and Transition Matrix
 
