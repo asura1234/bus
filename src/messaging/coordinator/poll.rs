@@ -64,10 +64,7 @@ impl Worker {
             // SessionStart may clear native launch_pending before the screen
             // publishes a status. Keep the owned launch visible while pending.
             let status = if status == RuntimeStatus::Unavailable
-                && !missing
-                && exit_evidence != Some(true)
-                && (info.is_some() || exit_evidence == Some(false))
-                && pending_launch(&state, agent, info)
+                && info.is_some_and(|info| pending_live_launch(&state, agent, info))
             {
                 RuntimeStatus::Launching
             } else {
@@ -484,10 +481,13 @@ fn inconclusive_screen(info: &schema::AgentInfo) -> bool {
         && !info.launch_pending
 }
 
-fn pending_launch(state: &BusState, agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> bool {
-    !agent.deletion_pending
+fn pending_live_launch(state: &BusState, agent: &RoomAgent, info: &schema::AgentInfo) -> bool {
+    info.native_ready
+        && info.interactive_ready
+        && info.agent_status == schema::AgentStatus::Unknown
+        && !agent.deletion_pending
         && !agent.session_binding_invalidated
-        && info.is_none_or(|info| super::startup::explicit_startup_error(agent, info).is_none())
+        && super::startup::explicit_startup_error(agent, info).is_none()
         && state
             .current_launch_attempt(agent.id)
             .is_some_and(|attempt| {

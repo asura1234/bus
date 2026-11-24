@@ -106,13 +106,8 @@ fn sessionless_launch_poll_and_watchdog_share_the_readiness_deadline() {
         exited.launch_pending = false;
         exited.agent_status = schema::AgentStatus::Unknown;
 
-        let mut inconclusive = pending.clone();
-        inconclusive.agent = None;
-        inconclusive.launch_pending = false;
-        inconclusive.agent_status = schema::AgentStatus::Unknown;
-
         let observations = if let Some(at) = ready_at {
-            vec![(31_000, pending), (32_000, inconclusive), (at, ready)]
+            vec![(31_000, pending), (at, ready)]
         } else if let Some(at) = exit_at {
             vec![(31_000, pending), (at, exited)]
         } else {
@@ -145,13 +140,6 @@ fn sessionless_launch_poll_and_watchdog_share_the_readiness_deadline() {
                 "elapsed={elapsed}"
             );
             assert_eq!(ledger(&worker)["1"]["deadline_at_ms"], start + 90_000);
-            if elapsed == 32_000 {
-                assert_eq!(
-                    worker.state.agent(agent).unwrap().shown_status(),
-                    RuntimeStatus::Launching,
-                    "the omitted launch row still has its verified pane"
-                );
-            }
             if exit_at == Some(elapsed) {
                 assert_eq!(
                     worker.state.agent(agent).unwrap().shown_status(),
