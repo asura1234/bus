@@ -9,6 +9,7 @@ use agile_board::{
 use std::{
     io::{Read, Write},
     net::TcpStream,
+    path::PathBuf,
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -19,6 +20,16 @@ use std::{
 
 fn bin() -> String {
     env!("CARGO_BIN_EXE_agile-board").to_string()
+}
+
+fn headless_chrome() -> Option<PathBuf> {
+    let mac = PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+    if mac.is_file() {
+        return Some(mac);
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .flat_map(|dir| ["chromium", "google-chrome"].map(|name| dir.join(name)))
+        .find(|path| path.is_file())
 }
 
 #[test]
@@ -78,6 +89,8 @@ fn transition_matrix_enforces_normal_investigation_only_and_blocked_escape_hatch
                 description: None,
                 column: Column::Done,
                 mr_url: None,
+                author_model: None,
+                reviewer_model: None,
                 investigation_only: false,
                 note: None,
             },
@@ -93,6 +106,8 @@ fn transition_matrix_enforces_normal_investigation_only_and_blocked_escape_hatch
                 description: Some("See [Spec](https://example.com/spec).".into()),
                 column: Column::Todo,
                 mr_url: None,
+                author_model: None,
+                reviewer_model: None,
                 investigation_only: false,
                 note: None,
             },
@@ -154,6 +169,8 @@ fn transition_matrix_enforces_normal_investigation_only_and_blocked_escape_hatch
                 description: None,
                 column: Column::Investigation,
                 mr_url: None,
+                author_model: None,
+                reviewer_model: None,
                 investigation_only: true,
                 note: Some("Investigating flake".into()),
             },
@@ -201,6 +218,8 @@ fn persistence_round_trip_and_history_clear_preserve_rooms() {
                 description: Some("Initial [doc](https://example.com/doc)".into()),
                 column: Column::Investigation,
                 mr_url: None,
+                author_model: None,
+                reviewer_model: None,
                 investigation_only: false,
                 note: Some("Initial note".into()),
             },
@@ -214,6 +233,8 @@ fn persistence_round_trip_and_history_clear_preserve_rooms() {
                     "Updated [Feishu bug](https://example.feishu.cn/wiki/123)".into(),
                 ),
                 mr_url: Some("https://github.com/example/platform/pull/555".into()),
+                author_model: None,
+                reviewer_model: None,
                 note: Some("Opened PR".into()),
             },
             now + 1000,
@@ -466,15 +487,7 @@ fn cli_and_http_page_contract_round_trip() {
 
     // If headless Chrome/Chromium is available, verify in a real browser engine that scrolling
     // window to x=600, y=1200 keeps `.sticky-header-band` top ~ 0 and `.room-sidebar-cell` left ~ 0
-    let chrome_candidates = [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "chromium",
-        "google-chrome",
-    ];
-    if let Some(chrome) = chrome_candidates
-        .into_iter()
-        .find(|c| std::path::Path::new(c).exists())
-    {
+    if let Some(chrome) = headless_chrome() {
         let mut state = BoardState::default();
         mock::seed_mock_state(&mut state, 1_795_440_000_000).unwrap();
         let payload = serde_json::json!({
@@ -526,7 +539,7 @@ window.addEventListener("DOMContentLoaded", () => {{
         std::fs::write(&probe_path, probe_html).unwrap();
 
         for win_size in ["600,500", "1728,1117"] {
-            let out = Command::new(chrome)
+            let out = Command::new(&chrome)
                 .args([
                     "--headless=new",
                     "--disable-gpu",
@@ -545,4 +558,430 @@ window.addEventListener("DOMContentLoaded", () => {{
             }
         }
     }
+}
+
+#[test]
+fn headless_page_preserves_scroll_across_polls() {
+    // Stub fetch and advance the page's scheduled poll explicitly so browser timing cannot race the assertions.
+    assert_headless_board_probe(
+        r#"<script>
+let rooms = [{ id: 1, name: "Test room" }];
+let tickets = Array.from({ length: 12 }, (_, i) => ({
+  room_id: 1,
+  column: "todo",
+  title: `Ticket ${i}`
+}));
+let nowMs = 1000;
+let poll;
+let pollDelay;
+window.fetch = async url => ({
+  ok: url === "/api/board?view=session",
+  json: async () => ({ rooms, tickets, now_ms: nowMs })
+});
+window.setInterval = (callback, delay) => {
+  if (callback.name === "fetchBoard") {
+    poll = callback;
+    pollDelay = delay;
+  }
+};
+
+function check(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    const board = document.getElementById("board-container");
+    const section = board.firstElementChild;
+    check(section?.querySelector(".ticket-title")?.textContent === "Ticket 0",
+      "initial board did not render");
+    check(pollDelay === 3000, "expected a poll every 3000 ms");
+    window.scrollTo(275, 550);
+    const checkScroll = (x, y, phase) => check(
+      window.scrollX === x && window.scrollY === y,
+      `${phase}: expected scroll (${x}, ${y}), got (${window.scrollX}, ${window.scrollY})`
+    );
+    checkScroll(275, 550, "initial scroll");
+
+    await poll();
+    checkScroll(275, 550, "identical poll");
+    check(board.firstElementChild === section, "identical poll rebuilt the board");
+
+    nowMs += 3000;
+    await poll();
+    checkScroll(275, 550, "timestamp-only poll");
+    check(board.firstElementChild === section, "timestamp-only poll rebuilt the board");
+
+    tickets = [{ ...tickets[0], title: "Inserted ticket" }, ...tickets];
+    await poll();
+    check(board.firstElementChild !== section, "changed poll did not rebuild the board");
+    check(board.querySelector(".ticket-title")?.textContent === "Inserted ticket",
+      "changed ticket was not rendered");
+    checkScroll(275, 550, "changed poll");
+    check(getComputedStyle(board).overflowAnchor === "none", "board scroll anchoring is enabled");
+
+    rooms = [];
+    tickets = [];
+    await poll();
+    const scroll = document.scrollingElement;
+    const maxY = scroll.scrollHeight - scroll.clientHeight;
+    check(maxY < 550, "empty board did not shrink");
+    checkScroll(275, maxY, "empty poll");
+    check(board.querySelector(".room-name")?.textContent === "No sections", "empty board did not render");
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>"#,
+    );
+}
+
+#[test]
+fn headless_page_counts_visible_tickets_across_sections() {
+    assert_headless_board_probe(
+        r#"<script>
+const rooms = [
+  { id: 1, name: "First" },
+  { id: 2, name: "Second" },
+  { id: 3, name: "Empty" }
+];
+let tickets = [
+  { room_id: 1, column: "todo", title: "First todo" },
+  { room_id: 2, column: "todo", title: "Second todo" },
+  { room_id: 2, column: "testing", title: "Second testing" }
+];
+const olderTicket = { room_id: 1, column: "done", title: "Outside the view" };
+let poll;
+window.setInterval = (callback, delay) => { if (delay === 3000) poll = callback; };
+window.fetch = async url => ({
+  ok: url === "/api/board?view=session",
+  json: async () => ({ rooms, tickets, all_tickets: [...tickets, olderTicket] })
+});
+
+function checkTotals(expected, phase) {
+  const labels = [...document.querySelectorAll(".column-header")].map(header => header.textContent);
+  const expectedLabels = ["todo", "blocked", "investigation", "implementation", "testing", "review", "done"]
+    .map((column, index) => `${column} ${expected[index]}`);
+  if (labels.join() !== expectedLabels.join()) {
+    throw new Error(`${phase}: expected ${expectedLabels.join(", ")}, got ${labels.join(", ")}`);
+  }
+}
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    checkTotals([2, 0, 0, 0, 1, 0, 0], "initial totals");
+    await poll();
+    checkTotals([2, 0, 0, 0, 1, 0, 0], "identical poll");
+
+    tickets = [tickets[0], { ...tickets[1], column: "testing" }, tickets[2]];
+    await poll();
+    checkTotals([1, 0, 0, 0, 2, 0, 0], "changed poll");
+
+    tickets = [];
+    await poll();
+    checkTotals([0, 0, 0, 0, 0, 0, 0], "empty poll");
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>"#,
+    );
+}
+
+#[test]
+fn headless_page_labels_pull_requests_by_host() {
+    assert_headless_board_probe(
+        r#"<script>
+const rooms = [{ id: 1, name: "Requests" }];
+const cases = [
+  ["https://github.com/example/platform/pull/41?tab=files", "PR #41"],
+  ["https://codeup.aliyun.com/663dc7b313a39cc55c4cb5b8/mobile/libtv-app/change/1936", "MR #1936"],
+  ["https://codeup.aliyun.com/example/platform/merge_requests/42", "MR #42"],
+  ["https://gitlab.com/example/platform/-/merge_requests/43", "MR #43"],
+  ["https://forge.example.com/example/platform/-/merge_requests/44", "MR #44"],
+  ["https://github.com.example.com/example/platform/pull/45", "MR #45"],
+  ["https://example.com/change/46", "MR / PR"]
+];
+const tickets = cases.map(([mr_url], index) => ({
+  room_id: 1, column: "review", title: `Ticket ${index + 1}`, mr_url
+}));
+let poll;
+window.setInterval = (callback, delay) => { if (delay === 3000) poll = callback; };
+window.fetch = async url => ({
+  ok: url === "/api/board?view=session",
+  json: async () => ({ rooms, tickets })
+});
+
+function checkLinks(expected) {
+  const links = [...document.querySelectorAll(".ticket-mr-row .mr-link")];
+  if (links.length !== expected.length) throw new Error(`Expected ${expected.length} links, got ${links.length}`);
+  expected.forEach(([url, label], index) => {
+    const link = links[index];
+    if (link.getAttribute("href") !== url || link.textContent !== `${label} ↗`) {
+      throw new Error(`Expected ${label} ↗ for ${url}, got ${link.textContent} for ${link.href}`);
+    }
+  });
+}
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    checkLinks(cases);
+
+    const changedUrl = "https://gitlab.com/example/platform/-/merge_requests/41";
+    tickets[0] = { ...tickets[0], mr_url: changedUrl };
+    await poll();
+    checkLinks([[changedUrl, "MR #41"], ...cases.slice(1)]);
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>"#,
+    );
+}
+
+#[test]
+fn headless_page_ticks_ticket_age_without_rebuilding() {
+    assert_headless_board_probe(
+        r#"<script>
+const rooms = [{ id: 1, name: "Requests" }];
+let now = 1760000000000;
+Date.now = () => now;
+const tickets = [
+  { room_id: 1, column: "review", title: "Recent", created_at_ms: now - 12.75 * 60000,
+    mr_url: "https://github.com/example/platform/pull/41" },
+  { room_id: 1, column: "review", title: "Older", created_at_ms: now - 2500.75 * 60000 }
+];
+const intervals = new Map();
+window.setInterval = (callback, delay) => { intervals.set(delay, callback); };
+window.fetch = async url => ({
+  ok: url === "/api/board?view=session",
+  json: async () => ({ rooms, tickets, now_ms: now })
+});
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    const board = document.getElementById("board-container");
+    const section = board.firstElementChild;
+    const cards = [...section.querySelectorAll(".ticket-card")];
+    const ages = cards.map(card => card.querySelector(".ticket-age"));
+    const checkAges = expected => {
+      const labels = ages.map(age => age?.textContent);
+      if (labels.join() !== expected.join()) throw new Error(`Expected ${expected}, got ${labels}`);
+    };
+    checkAges(["12 min", "2500 min"]);
+    cards.forEach((card, i) => {
+      const footer = card.lastElementChild;
+      const age = ages[i];
+      const link = footer.querySelector(".mr-link");
+      if (age.parentElement !== footer || Boolean(link) !== (i === 0)) {
+        throw new Error("Expected ages in card footers with and without MR links");
+      }
+      const cardRect = card.getBoundingClientRect();
+      const style = getComputedStyle(card);
+      const contentRight = cardRect.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight);
+      const ageRect = age.getBoundingClientRect();
+      if (Math.abs(ageRect.right - contentRight) > 1) {
+        throw new Error(`Ticket ${i + 1}: age right edge ${ageRect.right} does not match ${contentRight}`);
+      }
+      if (link) {
+        const linkRect = link.getBoundingClientRect();
+        const contentLeft = cardRect.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+        if (Math.abs(linkRect.left - contentLeft) > 1 || ageRect.top >= linkRect.bottom) {
+          throw new Error("Expected the MR link at the left of the same footer row");
+        }
+      }
+    });
+    if (Number(ages[0].dataset.createdAtMs) !== tickets[0].created_at_ms) {
+      throw new Error("Age label is missing its creation timestamp");
+    }
+    const tick = intervals.get(30000);
+    if (!tick) throw new Error("Expected a 30000-ms age ticker");
+    now += 30000;
+    tick();
+    checkAges(["13 min", "2501 min"]);
+    if (board.firstElementChild !== section || cards.some((card, i) => !card.contains(ages[i]))) {
+      throw new Error("The age tick rebuilt ticket markup");
+    }
+    await intervals.get(3000)();
+    checkAges(["13 min", "2501 min"]);
+    if (board.firstElementChild !== section) throw new Error("A clock-only poll rebuilt the board");
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>"#,
+    );
+}
+
+#[test]
+fn ticket_model_metadata_round_trips_without_rendering() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let out = Command::new(bin())
+            .arg("--data-dir")
+            .arg(tmp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    run(&["room", "add", "--id", "1", "--name", "Models", "--json"]);
+    let created = run(&[
+        "ticket",
+        "add",
+        "--room",
+        "Models",
+        "--title",
+        "Visible ticket",
+        "--author-model",
+        " private-author/vendor-model.v2 ",
+        "--reviewer-model",
+        "private-reviewer/initial",
+        "--json",
+    ]);
+    let created = &created["ticket"];
+    assert_eq!(created["author_model"], "private-author/vendor-model.v2");
+    assert_eq!(created["reviewer_model"], "private-reviewer/initial");
+
+    run(&[
+        "ticket",
+        "update",
+        "T-1",
+        "--reviewer-model",
+        "private-reviewer/vendor-model.v3",
+        "--json",
+    ]);
+    let models = run(&["ticket", "list", "--json"]);
+    let listed = &models["tickets"][0];
+    assert_eq!(listed["author_model"], "private-author/vendor-model.v2");
+    assert_eq!(listed["reviewer_model"], "private-reviewer/vendor-model.v3");
+    assert_eq!(listed["created_at_ms"], created["created_at_ms"]);
+    assert_eq!(listed["history"][1]["at_ms"], listed["updated_at_ms"]);
+    assert_eq!(
+        listed["history"][1]["summary"],
+        "Updated T-1 (reviewer_model)"
+    );
+
+    let payload = server::board_api_payload(tmp.path(), ViewFilter::Session, 1).unwrap();
+    assert_eq!(&payload["tickets"][0], listed);
+    assert_eq!(&payload["all_tickets"][0], listed);
+    let fixture = r#"<script>
+const payload = BOARD_PAYLOAD;
+window.fetch = async () => ({ ok: true, json: async () => payload });
+window.addEventListener("load", () => {
+  const board = document.getElementById("board-container");
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  if (board.querySelector(".ticket-title")?.textContent !== "Visible ticket") {
+    result.textContent = "Ticket did not render";
+    return;
+  }
+  const ticket = payload.tickets[0];
+  const rendered = document.body.cloneNode(true);
+  rendered.querySelectorAll("script").forEach(script => script.remove());
+  const html = rendered.outerHTML;
+  const leaks = [ticket.author_model, ticket.reviewer_model, "author_model", "reviewer_model"]
+    .some(model => html.includes(model));
+  result.textContent = leaks ? "Internal model fields appeared in the rendered DOM" : "PASS";
+});
+</script>"#;
+    assert_headless_board_probe(&fixture.replace("BOARD_PAYLOAD", &payload.to_string()));
+
+    let updated = run(&[
+        "ticket",
+        "update",
+        "T-1",
+        "--author-model",
+        "",
+        "--reviewer-model",
+        "private-reviewer/final",
+        "--json",
+    ]);
+    assert!(updated["ticket"]["author_model"].is_null());
+    assert_eq!(
+        updated["ticket"]["reviewer_model"],
+        "private-reviewer/final"
+    );
+    assert_eq!(
+        updated["ticket"]["history"][2]["summary"],
+        "Updated T-1 (author_model, reviewer_model)"
+    );
+
+    let mut legacy = listed.clone();
+    let object = legacy.as_object_mut().unwrap();
+    object.remove("author_model");
+    object.remove("reviewer_model");
+    let legacy: agile_board::model::Ticket = serde_json::from_value(legacy).unwrap();
+    let legacy = serde_json::to_value(legacy).unwrap();
+    assert!(legacy
+        .get("author_model")
+        .is_some_and(serde_json::Value::is_null));
+    assert!(legacy
+        .get("reviewer_model")
+        .is_some_and(serde_json::Value::is_null));
+}
+
+fn assert_headless_board_probe(fixture: &str) {
+    let Some(chrome) = headless_chrome() else {
+        eprintln!("Skipping browser probe: Chrome or Chromium is unavailable");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let probe_path = tmp.path().join("board-probe.html");
+    let probe_html = server::PAGE_HTML.replacen("<script>", &format!("{fixture}\n<script>"), 1);
+    std::fs::write(&probe_path, probe_html).unwrap();
+    let out = Command::new(chrome)
+        .args([
+            "--headless=new",
+            "--disable-gpu",
+            "--window-size=600,500",
+            "--dump-dom",
+        ])
+        .arg(format!(
+            "--user-data-dir={}",
+            tmp.path().join("profile").display()
+        ))
+        .arg(format!("file://{}", probe_path.display()))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "Chrome failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dom = String::from_utf8_lossy(&out.stdout);
+    let result = dom
+        .lines()
+        .find(|line| line.contains(r#"<pre id="board-probe-result""#));
+    assert!(
+        result.is_some_and(|line| line.contains(">PASS</pre>")),
+        "unexpected board probe result: {result:?}"
+    );
 }

@@ -261,6 +261,7 @@
       gap: 0;
       width: 100%;
       min-height: calc(100vh - 84px);
+      overflow-anchor: none;
       background: linear-gradient(
         to right,
         var(--bg-sidebar) 0,
@@ -406,9 +407,18 @@
       padding-top: 4px;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
+      gap: 4px 6px;
       font-family: var(--font-mono);
       font-size: 10.5px;
+    }
+
+    .ticket-age {
+      margin-left: auto;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
     }
 
     .mr-link {
@@ -497,9 +507,11 @@
       { key: "review", label: "review" },
       { key: "done", label: "done" }
     ];
+    const columnHeaders = new Map(Array.from(document.querySelectorAll(".column-header"),
+      header => [header.dataset.col, header]));
 
     let currentView = "session";
-    let latestPayload = null;
+    let lastRenderedContent = null;
 
     function escapeHtml(str) {
       if (str === null || str === undefined) return "";
@@ -513,9 +525,16 @@
 
     function formatShortPull(url) {
       if (!url) return "";
-      const m = String(url).match(/\/(?:pull|merge_requests)\/(\d+)/i);
-      if (m) return "MR #" + m[1];
-      return "MR / PR";
+      let match = String(url).match(/\/(?:pull|merge_requests)\/(\d+)/i);
+      let prefix = "MR";
+      try {
+        const link = new URL(url);
+        if (link.hostname === "github.com") prefix = "PR";
+        if (link.hostname === "codeup.aliyun.com") {
+          match = link.pathname.match(/\/change\/(\d+)(?:\/|$)/i) || match;
+        }
+      } catch (_) {}
+      return match ? `${prefix} #${match[1]}` : "MR / PR";
     }
 
     async function fetchBoard() {
@@ -524,28 +543,51 @@
           cache: "no-store"
         });
         if (!res.ok) return;
-        latestPayload = await res.json();
-        renderAll(latestPayload);
+        renderAll(await res.json());
       } catch (_) {}
+    }
+
+    function updateColumnTotals(tickets) {
+      const totals = new Map();
+      for (const { column } of tickets) {
+        totals.set(column, (totals.get(column) || 0) + 1);
+      }
+      for (const { key, label } of COLUMNS) {
+        const header = columnHeaders.get(key);
+        const text = `${label} ${totals.get(key) || 0}`;
+        if (header.textContent !== text) header.textContent = text;
+      }
+    }
+
+    function formatTicketAge(createdAt, now) {
+      return `${Math.max(0, Math.floor((now - createdAt) / 60000))} min`;
+    }
+
+    function updateTicketAges() {
+      const now = Date.now();
+      for (const label of document.querySelectorAll("#board-container .ticket-age")) {
+        const text = formatTicketAge(Number(label.dataset.createdAtMs), now);
+        if (label.textContent !== text) label.textContent = text;
+      }
     }
 
     function renderAll(data) {
       const container = document.getElementById("board-container");
       const rooms = data.rooms || [];
       const tickets = data.tickets || [];
+      updateColumnTotals(tickets);
+      // The API clock changes every poll. Only rooms and filtered tickets feed the renderer.
+      const content = JSON.stringify([rooms, tickets]);
+      if (content === lastRenderedContent) return;
 
-      if (rooms.length === 0) {
-        container.innerHTML = `<section class="room-section"><aside class="room-sidebar-cell"><h2 class="room-name">No sections</h2></aside></section>`;
-        return;
-      }
-
-      container.innerHTML = rooms.map(room => {
+      const now = Date.now();
+      const roomsHtml = rooms.map(room => {
         const roomTickets = tickets.filter(t => t.room_id === room.id);
         const colsHtml = COLUMNS.map(col => {
           const colTickets = roomTickets.filter(t => t.column === col.key);
           const cardsHtml = colTickets.length === 0
             ? `<div class="empty-col">—</div>`
-            : colTickets.map(t => renderTicketCard(t)).join("");
+            : colTickets.map(t => renderTicketCard(t, now)).join("");
 
           return `
             <div class="kanban-column" data-col="${col.key}">
@@ -563,15 +605,28 @@
           </section>
         `;
       }).join("");
+
+      const scroll = document.scrollingElement;
+      const x = scroll.scrollLeft;
+      const y = scroll.scrollTop;
+      container.innerHTML = roomsHtml || `<section class="room-section"><aside class="room-sidebar-cell"><h2 class="room-name">No sections</h2></aside></section>`;
+      window.scrollTo(
+        Math.min(x, scroll.scrollWidth - scroll.clientWidth),
+        Math.min(y, scroll.scrollHeight - scroll.clientHeight)
+      );
+      lastRenderedContent = content;
     }
 
-    function renderTicketCard(t) {
+    function renderTicketCard(t, now) {
       const descHtml = t.description_html || escapeHtml(t.description || "");
       const mrHtml = t.mr_url
-        ? `<div class="ticket-mr-row">
-             <a class="mr-link" href="${escapeHtml(t.mr_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(formatShortPull(t.mr_url))} ↗</a>
-           </div>`
+        ? `<a class="mr-link" href="${escapeHtml(t.mr_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(formatShortPull(t.mr_url))} ↗</a>`
         : "";
+      const createdAt = t.created_at_ms;
+      const ageHtml = Number.isFinite(createdAt)
+        ? `<span class="ticket-age" data-created-at-ms="${createdAt}">${formatTicketAge(createdAt, now)}</span>`
+        : "";
+      const footer = mrHtml || ageHtml ? `<div class="ticket-mr-row">${mrHtml}${ageHtml}</div>` : "";
 
       return `
         <article class="ticket-card">
@@ -579,7 +634,7 @@
             <div class="ticket-title">${escapeHtml(t.title)}</div>
             ${descHtml ? `<div class="ticket-description">${descHtml}</div>` : ""}
           </div>
-          ${mrHtml}
+          ${footer}
         </article>
       `;
     }
@@ -631,6 +686,7 @@
 
     fetchBoard();
     setInterval(fetchBoard, 3000);
+    setInterval(updateTicketAges, 30000);
   </script>
 </body>
 </html>

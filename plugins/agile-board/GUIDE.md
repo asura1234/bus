@@ -33,6 +33,8 @@ A ticket represents a work item that results in a Merge Request / Pull Request (
 | `column` | `Column` | Current stage (`todo`, `blocked`, `investigation`, `implementation`, `testing`, `review`, `done`) |
 | `investigation_only` | `bool` | Set via `--investigation-only` at creation; allows jumping `investigation -> done` directly |
 | `mr_url` | `Option<String>` | Separate MR/PR URL rendered distinctly from the description |
+| `author_model` | `Option<String>` | Internal author model identifier (`--author-model`); not displayed on the board |
+| `reviewer_model` | `Option<String>` | Internal reviewer model identifier (`--reviewer-model`); not displayed on the board |
 | `notes` | `Vec<TicketNote>` | Timestamped transition/update notes |
 | `created_at_ms` / `updated_at_ms` | `i64` | Epoch milliseconds of creation and latest update |
 | `history` | `Vec<TicketEvent>` | Chronological audit log for the ticket |
@@ -43,6 +45,7 @@ A ticket represents a work item that results in a Merge Request / Pull Request (
 - Both Markdown links (`[Feishu buglist #4821](https://example.feishu.cn/wiki/wikcnBugList4821)`, `[Product Spec](https://example.com/docs/spec)`) and bare `https://...` or `http://...` URLs are rendered into safe `<a href="..." target="_blank" rel="noopener noreferrer">` links that open in a new tab.
 - Raw HTML inside `description` is escaped by the Rust `pulldown-cmark` sanitizer and never injected into the DOM. Non-HTTP(S) link schemes (such as `javascript:` or `data:`) are stripped to plain text.
 - The MR/PR link is stored separately via `--mr <URL>` and rendered as its own badge at the bottom of the card.
+- The badge shows `PR #N` for `github.com` pull links, and `MR #N` for Codeup `/change/N` and GitLab `/merge_requests/N` links. It shows `MR / PR` when the URL has no recognized change number.
 
 ---
 
@@ -53,18 +56,18 @@ Inside each section, the seven columns run horizontally:
 | Column | Meaning | Allowed Outgoing Transitions |
 |---|---|---|
 | `todo` | Work held or deferred | `investigation`, `blocked` |
-| `blocked` | Needs a decision or external context (**universal escape hatch**, highlighted with a translucent red tint overlay on the column surface and a stronger red header) | Any column (`todo`, `investigation`, `implementation`, `testing`, `review`, `done`) |
+| `blocked` | Needs a developer decision or missing information or context | Any column (`todo`, `investigation`, `implementation`, `testing`, `review`, `done`) |
 | `investigation` | Root-cause analysis or design exploration | `implementation`, `blocked`, plus `done` **only if** `--investigation-only` |
 | `implementation` | Active implementation | `testing`, `blocked` |
-| `testing` | Verification and test execution | `review`, `implementation`, `blocked` |
-| `review` | Code review | `done`, `implementation`, `blocked` |
-| `done` | Completed | `blocked` |
+| `testing` | Work is implemented and undergoing verification, including time spent waiting for a build, test, gate, or merge window | `review`, `implementation`, `blocked` |
+| `review` | Independent review in progress | `done`, `implementation`, `blocked` |
+| `done` | MR/PR has merged, or an investigation-only ticket has concluded | `blocked` |
 
 ### Transition Rules
 
 - **Standard flow:** `todo -> investigation -> implementation -> testing -> review -> done` (with rework loops `testing -> implementation` and `review -> implementation`).
 - **Investigation-only rule:** Tickets created with `--investigation-only` may transition directly `investigation -> done`. Normal tickets attempting `investigation -> done` are refused with exit code `3` and a message listing the allowed targets (`[implementation, blocked]`).
-- **Universal `blocked` escape hatch:** Any ticket may move to `blocked` from any column, and from `blocked` to any column. Record the blocking question or needed context in `--description` or `--note`.
+- **Universal `blocked` escape hatch:** Any ticket may move to `blocked` from any column, and from `blocked` to any column. Use it only for a decision or missing context. Record what is needed in `--description` or `--note`.
 
 ---
 
@@ -106,7 +109,7 @@ agile-board --data-dir "$DATA_DIR" ticket add \
 # 3. Advance the ticket across columns
 agile-board --data-dir "$DATA_DIR" ticket move T-1 --column implementation --note "Added snapshot guard"
 agile-board --data-dir "$DATA_DIR" ticket move T-1 --column testing --note "Regression suite green"
-agile-board --data-dir "$DATA_DIR" ticket move T-1 --column review --note "Ready for review"
+agile-board --data-dir "$DATA_DIR" ticket move T-1 --column review --note "Independent review started"
 agile-board --data-dir "$DATA_DIR" ticket move T-1 --column done --note "Merged #500"
 
 # 4. Create an investigation-only ticket and move it directly to done

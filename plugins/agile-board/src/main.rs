@@ -97,6 +97,12 @@ enum TicketAction {
         /// Separate MR/PR URL
         #[arg(long)]
         mr: Option<String>,
+        /// Internal model identifier for the ticket author
+        #[arg(long)]
+        author_model: Option<String>,
+        /// Internal model identifier for the ticket reviewer
+        #[arg(long)]
+        reviewer_model: Option<String>,
         /// Allow this ticket to transition directly from investigation -> done
         #[arg(long)]
         investigation_only: bool,
@@ -119,7 +125,7 @@ enum TicketAction {
         #[arg(long)]
         json: bool,
     },
-    /// Update a ticket's title, Markdown description, MR URL, or append a note
+    /// Update a ticket's title, description, MR URL, or model metadata, or append a note
     Update {
         /// Ticket short ID (e.g. T-1)
         id: String,
@@ -129,6 +135,12 @@ enum TicketAction {
         description: Option<String>,
         #[arg(long)]
         mr: Option<String>,
+        /// Internal model identifier for the ticket author
+        #[arg(long)]
+        author_model: Option<String>,
+        /// Internal model identifier for the ticket reviewer
+        #[arg(long)]
+        reviewer_model: Option<String>,
         #[arg(long, allow_hyphen_values = true)]
         note: Option<String>,
         #[arg(long)]
@@ -228,6 +240,8 @@ fn execute(cli: Cli) -> Result<Option<String>> {
                 description,
                 column,
                 mr,
+                author_model,
+                reviewer_model,
                 investigation_only,
                 note,
                 json: as_json,
@@ -240,6 +254,8 @@ fn execute(cli: Cli) -> Result<Option<String>> {
                             description,
                             column,
                             mr_url: mr,
+                            author_model,
+                            reviewer_model,
                             investigation_only,
                             note,
                         },
@@ -283,6 +299,8 @@ fn execute(cli: Cli) -> Result<Option<String>> {
                 title,
                 description,
                 mr,
+                author_model,
+                reviewer_model,
                 note,
                 json: as_json,
             } => {
@@ -293,6 +311,8 @@ fn execute(cli: Cli) -> Result<Option<String>> {
                             title,
                             description,
                             mr_url: mr,
+                            author_model,
+                            reviewer_model,
                             note,
                         },
                         now_ms,
