@@ -38,10 +38,26 @@ fn launch_metrics_data_route_counts_every_attempt_and_keeps_failure_evidence() {
         data["all"]["rates"]["launch_success"],
         json!({"numerator":3,"denominator":5,"percent":60.0})
     );
-    assert_eq!(data["providers"].as_object().unwrap().len(), 8);
-    assert_eq!(data["providers"]["claude"]["counts"]["usable"], 2);
-    assert_eq!(data["providers"]["claude-ds"]["counts"]["attempts"], 0);
-    assert_eq!(data["providers"]["agy"]["counts"]["attempts"], 0);
+    let providers = data["providers"].as_object().unwrap();
+    let expected = [
+        "agy",
+        "claude",
+        "claude-argon",
+        "claude-ds",
+        "claude-gpt",
+        "codex",
+        "cursor",
+        "grok",
+        "kimi",
+    ];
+    assert_eq!(providers.len(), expected.len());
+    for provider in expected {
+        assert!(providers.contains_key(provider), "missing {provider}");
+    }
+    assert_eq!(providers["claude"]["counts"]["usable"], 2);
+    for provider in ["agy", "claude-ds", "claude-argon", "claude-gpt"] {
+        assert_eq!(providers[provider]["counts"]["attempts"], 0, "{provider}");
+    }
     assert_eq!(data["providers"]["kimi"]["counts"]["failed"], 1);
     assert!(data["providers"]["cursor"]["rates"]["launch_success"]["percent"].is_null());
     let failures = data["failures"].as_array().unwrap();

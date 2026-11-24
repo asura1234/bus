@@ -311,7 +311,11 @@ impl Worker {
         super::launch_metrics::bind_current(&mut state, id);
         if matches!(
             provider,
-            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt | Provider::Kimi
+            Provider::ClaudeCode
+                | Provider::ClaudeDs
+                | Provider::ClaudeArgon
+                | Provider::ClaudeGpt
+                | Provider::Kimi
         ) || launch::provider_kind(provider) == "fake"
         {
             state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
@@ -326,9 +330,10 @@ impl Worker {
                         | Provider::Grok
                         | Provider::Kimi
                         | Provider::Agy => crate::messaging::model::AGENT_WAITING_FOR_TERMINAL,
-                        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => {
-                            crate::messaging::model::AGENT_WAITING_FOR_HOOKS
-                        }
+                        Provider::ClaudeCode
+                        | Provider::ClaudeDs
+                        | Provider::ClaudeArgon
+                        | Provider::ClaudeGpt => crate::messaging::model::AGENT_WAITING_FOR_HOOKS,
                         #[cfg(feature = "dev-tools")]
                         Provider::Fake => crate::messaging::model::AGENT_WAITING_FOR_HOOKS,
                     }

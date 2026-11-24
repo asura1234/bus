@@ -1,18 +1,8 @@
 //! Read-only delivery metrics over the same live/archive requests as message status.
+use crate::agents::providers::SUPPORTED_PROVIDERS;
 use crate::messaging::model::{AgentId, BusState, Request, RequestPhase, RoomId};
 use serde::Serialize;
 use std::collections::BTreeMap;
-
-pub(super) const PROVIDERS: [&str; 8] = [
-    "claude",
-    "claude-ds",
-    "claude-gpt",
-    "codex",
-    "kimi",
-    "grok",
-    "cursor",
-    "agy",
-];
 
 #[derive(Debug, Default, Serialize)]
 struct Counts {
@@ -479,9 +469,9 @@ pub(super) fn snapshot_since(
     since_ms: Option<u64>,
 ) -> Dashboard {
     let mut all = SeriesBuilder::default();
-    let mut providers: BTreeMap<_, _> = PROVIDERS
+    let mut providers: BTreeMap<_, _> = SUPPORTED_PROVIDERS
         .into_iter()
-        .map(|p| (p.to_owned(), SeriesBuilder::default()))
+        .map(|provider| (provider.label().to_owned(), SeriesBuilder::default()))
         .collect();
     let mut rooms: BTreeMap<String, GroupBuilder> = BTreeMap::new();
     let mut failures = Vec::new();

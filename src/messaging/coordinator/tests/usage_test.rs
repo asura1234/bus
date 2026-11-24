@@ -46,6 +46,16 @@ fn claude_merge_uses_newest_observation_and_expires_without_claiming_unused_quot
         40.0
     );
     assert_eq!(usage.claude_json(now + STALE_AFTER_MS)["status"], "unknown");
+    let mut argon = observation(4, now - 100);
+    argon.manifest.provider = ProviderKind::ClaudeArgon;
+    argon.windows.five_hour.as_mut().unwrap().used_percent = 70.0;
+    usage.merge_claude(argon, AgentId(4));
+    assert_eq!(
+        usage.claude_argon.as_ref().unwrap().observed_by_agent,
+        AgentId(4)
+    );
+    assert_eq!(usage.claude_json(now)["observed_by_agent"], 2);
+    assert_eq!(usage.claude_json(now)["five_hour"]["used_percent"], 20.0);
     let mut gpt = observation(3, now - 100);
     gpt.manifest.provider = ProviderKind::ClaudeGpt;
     gpt.windows.five_hour.as_mut().unwrap().used_percent = 60.0;

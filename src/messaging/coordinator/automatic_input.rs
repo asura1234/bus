@@ -33,7 +33,11 @@ impl Worker {
         }
         if !matches!(
             agent.provider,
-            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt | Provider::Codex
+            Provider::ClaudeCode
+                | Provider::ClaudeDs
+                | Provider::ClaudeArgon
+                | Provider::ClaudeGpt
+                | Provider::Codex
         ) {
             return Ok(false);
         }

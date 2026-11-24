@@ -84,7 +84,7 @@ pub(in crate::server) fn normalize_reported_agent_label(agent: &str) -> Option<S
     }
     // Claude wrappers share Claude's process kind and keep separate session
     // namespaces. Startup needs the original label to match the session report.
-    for label in ["claude-ds", "claude-gpt"] {
+    for label in ["claude-ds", "claude-argon", "claude-gpt"] {
         if trimmed.eq_ignore_ascii_case(label) {
             return Some(label.to_owned());
         }

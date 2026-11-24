@@ -278,14 +278,6 @@ pub(crate) fn parse_identity(stdout: &str) -> Result<Identity, String> {
     })
 }
 
-pub(crate) fn identity_json() -> String {
-    serde_json::json!({
-        "sha": env!("BUS_BUILD_SHA"),
-        "providers": ["claude", "claude-ds", "claude-gpt", "codex", "cursor", "grok", "kimi", "agy"],
-    })
-    .to_string()
-}
-
 pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -600,24 +592,6 @@ mod tests {
         assert_eq!(who_label(Some("9"), Some("ada")), "agent:9 user:ada");
         assert_eq!(who_label(None, None), "unknown");
         assert_eq!(who_label(Some(""), Some("ada")), "user:ada");
-    }
-
-    #[test]
-    fn identity_includes_every_supported_provider() {
-        let identity = parse_identity(&identity_json()).unwrap();
-        assert_eq!(
-            identity.providers,
-            [
-                "claude",
-                "claude-ds",
-                "claude-gpt",
-                "codex",
-                "cursor",
-                "grok",
-                "kimi",
-                "agy"
-            ]
-        );
     }
 
     #[test]

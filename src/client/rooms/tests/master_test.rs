@@ -1048,7 +1048,8 @@ fn an_agent_waiting_on_a_dialog_reads_blocked_on_its_row_and_its_room() {
 
 #[test]
 fn master_and_work_room_forms_offer_codex_and_submit_its_role() {
-    let _path = crate::utils::env::PathOverride::set("");
+    let empty_path = crate::utils::test_temp::unique_temp_path("bus-codex-provider-menu");
+    let _path = crate::utils::env::PathOverride::set(&empty_path);
     let (mut ui, master, _, other, _) = master_fixture();
     // The offered providers are the form's clickable provider rows.
     let choices = |ui: &mut BusUi| {
@@ -1130,6 +1131,36 @@ fn master_and_work_room_forms_offer_codex_and_submit_its_role() {
         &p.command,
         BusCommand::AddAgent(input) if input.provider == Provider::Codex
     )));
+}
+
+#[test]
+fn short_master_provider_picker_keeps_its_footer_visible() {
+    let bin = crate::utils::test_temp::unique_temp_path("bus-master-provider-picker");
+    std::fs::create_dir(&bin).unwrap();
+    let wrapper = bin.join("claude-argon");
+    std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let _path = crate::utils::env::PathOverride::set(&bin);
+    let (mut ui, master, _, _, _) = master_fixture();
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Field(1));
+    let screen = room_screen(&mut ui, 100, 23);
+    for label in ["Claude Argon", "Cancel (Esc)", "Add (Enter)"] {
+        assert!(screen.contains(label), "{screen}");
+    }
+    for action in [render::Action::Cancel, render::Action::Add] {
+        assert!(ui
+            .view
+            .hits
+            .iter()
+            .any(|hit| hit.action == action && hit.rect.bottom() <= 23));
+    }
+    std::fs::remove_dir_all(bin).unwrap();
 }
 
 #[test]

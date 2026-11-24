@@ -162,6 +162,49 @@ fn claude_ds_resume_uses_resume_and_the_wrapper_command() {
 }
 
 #[test]
+fn claude_argon_registers_a_distinct_claude_wrapper() {
+    let provider = ProviderKind::ClaudeArgon;
+    let label = "claude-argon";
+    assert_eq!(provider.label(), label);
+    assert_eq!(provider.executable(), label);
+    assert_eq!(launch::native_provider(label), Some(provider));
+    assert_eq!(
+        launch::selected_executable(provider, &Default::default()).unwrap(),
+        Some(label.into())
+    );
+    assert!(provider.uses_claude_harness());
+    assert!(provider.observes_label("claude"));
+    assert_eq!(identify_agent(label), Some(AgentKind::Claude));
+    assert_eq!(
+        HookContract::for_provider(provider),
+        HookContract::for_provider(ProviderKind::ClaudeCode)
+    );
+
+    let session =
+        catalog::session_ref_from_report("herdr:claude-argon", label, Some("session".into()), None)
+            .expect("the wrapper retains its own session namespace");
+    let plan = catalog::plan("herdr:claude-argon", label, &session).unwrap();
+    assert_eq!(plan.argv, argv(&[label, "--resume", "session"]));
+}
+
+#[test]
+fn claude_argon_launch_and_recovery_require_executable_permissions() {
+    let bin = crate::utils::test_temp::unique_temp_path("bus-claude-argon-permissions");
+    std::fs::create_dir(&bin).unwrap();
+    let _path = crate::utils::env::PathOverride::set(&bin);
+    let provider = ProviderKind::ClaudeArgon;
+    let name = provider.executable();
+    let wrapper = bin.join(name);
+    std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+    for (mode, expected) in [(0o644, false), (0o755, true)] {
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(launch::binary_available(provider), expected);
+        assert_eq!(launch::executable_available(name), expected);
+    }
+    std::fs::remove_dir_all(bin).unwrap();
+}
+
+#[test]
 fn claude_gpt_registers_a_distinct_claude_wrapper() {
     let provider = ProviderKind::ClaudeGpt;
     let label = "claude-gpt";

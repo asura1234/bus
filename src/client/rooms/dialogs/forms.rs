@@ -26,6 +26,7 @@ pub(super) enum Form {
         name: Editor,
         provider: Option<Provider>,
         provider_cursor: Provider,
+        provider_choices: Vec<Provider>,
         cwd: Editor,
         args: Box<Editor>,
         field: usize,
@@ -78,6 +79,7 @@ pub(super) fn provider_choices(orchestrator: bool) -> Vec<Provider> {
         &[
             Provider::ClaudeCode,
             Provider::ClaudeDs,
+            Provider::ClaudeArgon,
             Provider::ClaudeGpt,
             Provider::Codex,
             Provider::Cursor,
@@ -89,6 +91,7 @@ pub(super) fn provider_choices(orchestrator: bool) -> Vec<Provider> {
             Provider::Codex,
             Provider::ClaudeCode,
             Provider::ClaudeDs,
+            Provider::ClaudeArgon,
             Provider::ClaudeGpt,
             Provider::Cursor,
             Provider::Grok,
@@ -96,11 +99,17 @@ pub(super) fn provider_choices(orchestrator: bool) -> Vec<Provider> {
             Provider::Agy,
         ]
     };
+    let has_claude_argon =
+        crate::agents::providers::launch::binary_available(Provider::ClaudeArgon);
     let has_claude_gpt = crate::agents::providers::launch::binary_available(Provider::ClaudeGpt);
     choices
         .iter()
         .copied()
-        .filter(|choice| *choice != Provider::ClaudeGpt || has_claude_gpt)
+        .filter(|choice| match choice {
+            Provider::ClaudeArgon => has_claude_argon,
+            Provider::ClaudeGpt => has_claude_gpt,
+            _ => true,
+        })
         .collect()
 }
 

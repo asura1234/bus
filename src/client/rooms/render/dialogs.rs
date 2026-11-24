@@ -180,7 +180,8 @@ impl BusUi {
             args,
             field,
             provider_cursor,
-            orchestrates,
+            provider_choices,
+            prompt,
             ..
         } = form
         else {
@@ -188,13 +189,19 @@ impl BusUi {
         };
         let x = main.x + 3;
         let width = main.width.saturating_sub(6);
-        let mut y = 3;
         let choices = if *field == 1 {
-            super::super::forms::provider_choices(orchestrates.is_some())
+            provider_choices.as_slice()
         } else {
-            Vec::new()
+            &[]
         };
-        let gap = agent_form_gap(main, form, choices.len() as u16);
+        let picker_rows = choices.len() as u16;
+        let gap = agent_form_gap(main, form, picker_rows);
+        // Reclaim the top spacer when the MASTER form needs it for the footer.
+        let mut y = if prompt.is_some() && picker_rows > 0 && main.height <= 15 + picker_rows {
+            2
+        } else {
+            3
+        };
         for (index, label, editor) in [
             (0, "Name", Some(name)),
             (1, "Agent", None),
@@ -226,7 +233,7 @@ impl BusUi {
                 );
             }
             if index == 1 {
-                for &kind in &choices {
+                for &kind in choices {
                     y += 1;
                     view.overlay_row(
                         Rect::new(x, y, width, 1),

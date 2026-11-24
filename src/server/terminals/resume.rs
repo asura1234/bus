@@ -28,14 +28,18 @@ fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeRes
 fn managed_resume_label(kind: crate::agents::AgentKind, argv: Option<&[String]>) -> &'static str {
     // The Claude process has a shared native kind. The recorded launch argv
     // distinguishes the wrapper until the room and callback owner are verified.
-    let label = crate::agents::providers::ProviderKind::ClaudeGpt.label();
-    if kind == crate::agents::AgentKind::Claude
-        && argv
+    if kind == crate::agents::AgentKind::Claude {
+        let executable = argv
             .and_then(|argv| argv.first())
-            .and_then(|command| std::path::Path::new(command).file_name())
-            .is_some_and(|name| name == label)
-    {
-        return label;
+            .and_then(|command| std::path::Path::new(command).file_name());
+        for provider in [
+            crate::agents::providers::ProviderKind::ClaudeArgon,
+            crate::agents::providers::ProviderKind::ClaudeGpt,
+        ] {
+            if executable.is_some_and(|name| name == provider.executable()) {
+                return provider.label();
+            }
+        }
     }
     crate::agents::agent_label(kind)
 }

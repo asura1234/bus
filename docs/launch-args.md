@@ -2,6 +2,9 @@
 
 ## Interactive provider launch
 
+See [Claude Argon setup](../orchestration/providers/claude-argon.md) to run
+the Claude Code harness against an Argon gateway.
+
 See [Claude GPT setup](../orchestration/providers/claude-gpt.md) to run
 the Claude Code harness against a local Magpie gateway.
 

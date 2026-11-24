@@ -192,6 +192,10 @@ fn embedded_docs_match_the_repository_copies() {
             "orchestration/bus-communication-guide.md",
         ),
         (
+            "providers/claude-argon.md",
+            "orchestration/providers/claude-argon.md",
+        ),
+        (
             "providers/claude-gpt.md",
             "orchestration/providers/claude-gpt.md",
         ),

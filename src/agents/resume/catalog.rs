@@ -101,6 +101,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
             ]
         }
         ("herdr:claude-ds", "claude-ds", AgentSessionRefKind::Id)
+        | ("herdr:claude-argon", "claude-argon", AgentSessionRefKind::Id)
         | ("herdr:claude-gpt", "claude-gpt", AgentSessionRefKind::Id) => {
             vec![agent.into(), "--resume".into(), session_ref.value.clone()]
         }
@@ -211,6 +212,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             (source, agent),
             ("herdr:claude", "claude")
                 | ("herdr:claude-ds", "claude-ds")
+                | ("herdr:claude-argon", "claude-argon")
                 | ("herdr:claude-gpt", "claude-gpt")
                 | ("herdr:codex", "codex")
                 | ("herdr:copilot", "copilot")

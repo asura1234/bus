@@ -56,22 +56,26 @@ impl ResumeNative {
             .current_launch_attempt(self.agent)
             .expect("attempt durable before resume input");
         let agent = s.agent(self.agent).unwrap();
+        if agent.provider == Provider::ClaudeArgon {
+            assert_eq!(start.kind, "claude-argon");
+            assert_eq!(start.executable.as_deref(), Some("claude-argon"));
+        }
         if agent.provider == Provider::ClaudeGpt {
             assert_eq!(start.kind, "claude-gpt");
             let executable = Path::new(start.executable.as_deref().unwrap());
             assert!(executable.is_absolute());
             assert_eq!(executable.file_name().unwrap(), "claude-gpt");
-            if !self.recovery {
-                assert_eq!(
-                    start
-                        .args
-                        .iter()
-                        .take(2)
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                    ["--resume", CLAUDE_GPT_SESSION]
-                );
-            }
+        }
+        if matches!(agent.provider, Provider::ClaudeArgon | Provider::ClaudeGpt) && !self.recovery {
+            assert_eq!(
+                start
+                    .args
+                    .iter()
+                    .take(2)
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                ["--resume", CLAUDE_WRAPPER_SESSION]
+            );
         }
         assert_eq!(s.launch_attempts().count(), 2);
         assert_eq!(a.outcome, LaunchOutcome::Pending);
@@ -118,7 +122,39 @@ impl Transport for ResumeNative {
         })
     }
 }
-const CLAUDE_GPT_SESSION: &str = "00000000-0000-4000-8000-000000000001";
+const CLAUDE_WRAPPER_SESSION: &str = "00000000-0000-4000-8000-000000000001";
+
+#[test]
+fn claude_argon_explicit_recovery_keeps_the_wrapper_and_saved_session() {
+    let _providers = provider_binaries();
+    for recovery in [false, true] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeArgon, vec![]);
+        let mut state = worker.state.clone();
+        let mut saved_identity = state.agent(agent).unwrap().runtime_identity.clone();
+        saved_identity.session_id = Some(CLAUDE_WRAPPER_SESSION.into());
+        state
+            .set_agent_runtime_identity(agent, saved_identity)
+            .unwrap();
+        worker.save(state).unwrap();
+        prepare_resume(
+            &mut worker,
+            agent,
+            recovery.then_some(StartupRecovery::Unsubmitted { args: vec![] }),
+        );
+        worker.transport = Box::new(ResumeNative {
+            state_path: dir.join("state.json"),
+            agent,
+            terminal: if recovery { "terminal" } else { "new-terminal" },
+            pane: if recovery { "pane" } else { "new-pane" },
+            started: false,
+            recovery,
+        });
+        let result = worker.resume_room(room).unwrap();
+        assert_eq!(result["agents"][0]["outcome"], "resuming", "{result}");
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
 
 struct ClaudeGptResumeNative {
     native: ResumeNative,
@@ -143,7 +179,7 @@ fn claude_gpt_explicit_recovery_keeps_the_wrapper_and_saved_session() {
         let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeGpt, vec![]);
         let mut state = worker.state.clone();
         let mut saved_identity = state.agent(agent).unwrap().runtime_identity.clone();
-        saved_identity.session_id = Some(CLAUDE_GPT_SESSION.into());
+        saved_identity.session_id = Some(CLAUDE_WRAPPER_SESSION.into());
         state
             .set_agent_runtime_identity(agent, saved_identity)
             .unwrap();
@@ -175,7 +211,7 @@ fn claude_gpt_explicit_recovery_keeps_the_wrapper_and_saved_session() {
         assert_eq!(reports[0].agent, "claude-gpt");
         assert_eq!(
             reports[0].agent_session_id.as_deref(),
-            Some(CLAUDE_GPT_SESSION)
+            Some(CLAUDE_WRAPPER_SESSION)
         );
         drop(worker);
         std::fs::remove_dir_all(dir).unwrap();

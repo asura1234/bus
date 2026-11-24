@@ -1456,6 +1456,7 @@ async fn startup_timeout_identity_survives_restart_before_any_provider_session()
     };
     for (kind, wrapper) in [
         (AgentKind::Claude, None),
+        (AgentKind::Claude, Some("claude-argon")),
         (AgentKind::Claude, Some("claude-gpt")),
         (AgentKind::Codex, None),
         (AgentKind::Cursor, None),

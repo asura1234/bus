@@ -284,6 +284,10 @@ impl TerminalState {
                 "claude-ds",
                 Some("clear" | "resume" | "compact")
             ) | (
+                "herdr:claude-argon",
+                "claude-argon",
+                Some("clear" | "resume" | "compact")
+            ) | (
                 "herdr:claude-gpt",
                 "claude-gpt",
                 Some("clear" | "resume" | "compact")

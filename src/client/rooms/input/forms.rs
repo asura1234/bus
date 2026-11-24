@@ -1,7 +1,7 @@
 //! Form editing, orchestrator choices, path completion and submission.
 use super::super::{
     editor::Editor,
-    forms::{self, Form, Rename, RenameTarget, ORCHESTRATES_FIELD, PROMPT_FIELD},
+    forms::{Form, Rename, RenameTarget, ORCHESTRATES_FIELD, PROMPT_FIELD},
     render::Action,
     BusUi, Effect,
 };
@@ -292,11 +292,10 @@ impl BusUi {
                 provider,
                 provider_cursor,
                 field,
-                orchestrates,
+                provider_choices: choices,
                 ..
             }) = &mut self.form
             {
-                let choices = forms::provider_choices(orchestrates.is_some());
                 let index = choices
                     .iter()
                     .position(|choice| choice == provider_cursor)

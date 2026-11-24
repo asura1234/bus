@@ -17,7 +17,7 @@ fn sequence() -> u64 {
 
 fn screen(provider: Provider, draft: &str) -> String {
     let body = match provider {
-        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => {
+        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeArgon | Provider::ClaudeGpt => {
             format!("────────────────────────\r\n❯ {draft}\r\n────────────────────────")
         }
         Provider::Cursor => format!(" > {draft}\r\n / commands · @ files"),
@@ -33,7 +33,9 @@ fn kind(provider: Provider) -> AgentKind {
         | crate::agents::providers::ProviderKind::Agy => {
             panic!("This fixture covers the original providers; use dedicated Grok provider tests")
         }
-        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => AgentKind::Claude,
+        Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeArgon | Provider::ClaudeGpt => {
+            AgentKind::Claude
+        }
         Provider::Codex => AgentKind::Codex,
         Provider::Cursor => AgentKind::Cursor,
         #[cfg(feature = "dev-tools")]
@@ -642,7 +644,10 @@ impl Delivery {
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 )
             }
-            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => AgentKind::Claude,
+            Provider::ClaudeCode
+            | Provider::ClaudeDs
+            | Provider::ClaudeArgon
+            | Provider::ClaudeGpt => AgentKind::Claude,
             Provider::Codex => AgentKind::Codex,
             Provider::Cursor => AgentKind::Cursor,
             #[cfg(feature = "dev-tools")]

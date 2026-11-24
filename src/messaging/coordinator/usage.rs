@@ -58,6 +58,7 @@ impl CursorUsageSnapshot {
 pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
     pub(crate) claude: Option<UsageSnapshot>,
+    claude_argon: Option<UsageSnapshot>,
     claude_gpt: Option<UsageSnapshot>,
     agy: Option<UsageSnapshot>,
     cursor: Option<CursorUsageSnapshot>,
@@ -71,6 +72,7 @@ impl Default for Usage {
         Self {
             codex: None,
             claude: None,
+            claude_argon: None,
             claude_gpt: None,
             agy: None,
             cursor: None,
@@ -87,6 +89,7 @@ impl Usage {
         let snapshot = match agent.provider {
             Provider::Codex => self.codex.as_ref(),
             Provider::ClaudeCode | Provider::ClaudeDs => self.claude.as_ref(),
+            Provider::ClaudeArgon => self.claude_argon.as_ref(),
             Provider::ClaudeGpt => self.claude_gpt.as_ref(),
             Provider::Agy => self.agy.as_ref(),
             _ => None,
@@ -109,6 +112,7 @@ impl Usage {
         for (provider, snapshot) in [
             ("codex", &self.codex),
             ("claude", &self.claude),
+            ("claude-argon", &self.claude_argon),
             ("claude-gpt", &self.claude_gpt),
             ("agy", &self.agy),
         ] {
@@ -244,10 +248,10 @@ impl Usage {
     }
 
     fn merge_claude(&mut self, record: Observation, observed_by_agent: AgentId) {
-        let slot = if record.manifest.provider == Provider::ClaudeGpt {
-            &mut self.claude_gpt
-        } else {
-            &mut self.claude
+        let slot = match record.manifest.provider {
+            Provider::ClaudeArgon => &mut self.claude_argon,
+            Provider::ClaudeGpt => &mut self.claude_gpt,
+            _ => &mut self.claude,
         };
         merge_snapshot(slot, self.started_at_ms, record, observed_by_agent);
     }

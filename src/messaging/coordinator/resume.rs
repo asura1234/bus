@@ -102,6 +102,7 @@ fn unstarted_provider_plan(
     let provider = match facts.managed_agent.as_deref()? {
         "claude" => ProviderKind::ClaudeCode,
         "claude-ds" => ProviderKind::ClaudeDs,
+        "claude-argon" => ProviderKind::ClaudeArgon,
         "claude-gpt" => ProviderKind::ClaudeGpt,
         "cursor" => ProviderKind::Cursor,
         "grok" => ProviderKind::Grok,
@@ -150,6 +151,7 @@ fn is_unstarted(state: &BusState, agent: &RoomAgent) -> bool {
         super::Provider::Codex
             | super::Provider::ClaudeCode
             | super::Provider::ClaudeDs
+            | super::Provider::ClaudeArgon
             | super::Provider::ClaudeGpt
             | super::Provider::Cursor
             | super::Provider::Grok

@@ -223,7 +223,7 @@ retrieve the retained outcome. --confirm is required (default false)."#;
 
 const AGENT_ADD: &str = r#"Launch a worker in a work room, or an orchestrator in MASTER. Current names are
 case-sensitive, trimmed and unique session-wide; a fully deleted name is reusable.
-Providers: claude, claude-ds, claude-gpt, codex, cursor, grok, kimi, agy (agy is worker-only). --pwd is the project directory; --args is one
+Providers: claude, claude-ds, claude-argon, claude-gpt, codex, cursor, grok, kimi, agy (agy is worker-only). --pwd is the project directory; --args is one
 provider-argument string. Bus disables startup updates on launches/resumes;
 explicit Claude updater environment settings take precedence.
 Result: {agent_id:NUMBER,stage:"launching"}; launch success is not task completion.
@@ -237,7 +237,7 @@ require recreating the agent.
 
 MASTER requires --orchestrates ROOM (one orchestrator per work room, binding for
 life); --orchestrates and custom system prompts are MASTER-only. Claude Code,
-Claude DS, Claude GPT, Codex, Cursor, Grok and Kimi can orchestrate. Codex cannot
+Claude DS, Claude Argon, Claude GPT, Codex, Cursor, Grok and Kimi can orchestrate. Codex cannot
 wake on background command completion; use foreground bounded waits or ordinary
 worker messages.
 Default prompt is built in (orchestration/prompt.md); --system-prompt TEXT or

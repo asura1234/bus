@@ -133,7 +133,10 @@ pub(crate) fn resumable_options(provider: ProviderKind, args: &[String]) -> Vec<
         let name = arg.split_once('=').map_or(arg.as_str(), |(name, _)| name);
         let selector = match provider {
             ProviderKind::Codex => codex_selector && matches!(name, "--last" | "--all"),
-            ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeGpt => {
+            ProviderKind::ClaudeCode
+            | ProviderKind::ClaudeDs
+            | ProviderKind::ClaudeArgon
+            | ProviderKind::ClaudeGpt => {
                 matches!(
                     name,
                     "--resume" | "-r" | "--session-id" | "--continue" | "-c" | "--fork-session"
@@ -195,9 +198,10 @@ fn option_end(provider: ProviderKind, args: &[String], index: usize) -> Option<u
 fn arity(provider: ProviderKind, name: &str) -> Option<usize> {
     match provider {
         ProviderKind::Codex => codex_arity(name),
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeGpt => {
-            claude_arity(name)
-        }
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => claude_arity(name),
         ProviderKind::Cursor => cursor_arity(name),
         ProviderKind::Grok => super::super::grok::launch::option_arity(name),
         ProviderKind::Kimi => super::super::kimi::launch::option_arity(name),

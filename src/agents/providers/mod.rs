@@ -34,6 +34,8 @@ pub(crate) enum ProviderKind {
     /// DeepSeek wrapper around the Claude Code CLI. The terminal harness is
     /// Claude's; only the label, PATH executable, and launch command differ.
     ClaudeDs,
+    /// Argon wrapper around the Claude Code CLI.
+    ClaudeArgon,
     /// Magpie GPT wrapper around the Claude Code CLI.
     ClaudeGpt,
     Cursor,
@@ -44,6 +46,18 @@ pub(crate) enum ProviderKind {
     Fake,
 }
 
+pub(crate) const SUPPORTED_PROVIDERS: [ProviderKind; 9] = [
+    ProviderKind::ClaudeCode,
+    ProviderKind::ClaudeDs,
+    ProviderKind::ClaudeArgon,
+    ProviderKind::ClaudeGpt,
+    ProviderKind::Codex,
+    ProviderKind::Cursor,
+    ProviderKind::Grok,
+    ProviderKind::Kimi,
+    ProviderKind::Agy,
+];
+
 impl ProviderKind {
     /// Canonical CLI/session label. Claude's persisted spelling remains
     /// `claude_code`; its CLI/session label has always been `claude`.
@@ -52,6 +66,7 @@ impl ProviderKind {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
             Self::ClaudeDs => "claude-ds",
+            Self::ClaudeArgon => "claude-argon",
             Self::ClaudeGpt => "claude-gpt",
             Self::Cursor => "cursor",
             Self::Grok => "grok",
@@ -68,6 +83,7 @@ impl ProviderKind {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude",
             Self::ClaudeDs => "claude-ds",
+            Self::ClaudeArgon => "claude-argon",
             Self::ClaudeGpt => "claude-gpt",
             Self::Cursor => "cursor-agent",
             Self::Grok => "grok",
@@ -81,14 +97,20 @@ impl ProviderKind {
     /// Claude Code and its wrappers share hook parsing, screen detection,
     /// composer submission, resume, settings, and dialogs.
     pub(crate) const fn uses_claude_harness(self) -> bool {
-        matches!(self, Self::ClaudeCode | Self::ClaudeDs | Self::ClaudeGpt)
+        matches!(
+            self,
+            Self::ClaudeCode | Self::ClaudeDs | Self::ClaudeArgon | Self::ClaudeGpt
+        )
     }
 
     /// A live pane reports `claude` after the wrapper execs the Claude CLI.
     pub(crate) fn observes_label(self, label: &str) -> bool {
         label == self.label()
             || (self.uses_claude_harness()
-                && matches!(label, "claude" | "claude-ds" | "claude-gpt"))
+                && matches!(
+                    label,
+                    "claude" | "claude-ds" | "claude-argon" | "claude-gpt"
+                ))
     }
 }
 
@@ -98,9 +120,10 @@ pub(crate) fn parse(
 ) -> Result<spool::Parsed, String> {
     match provider {
         ProviderKind::Codex => codex::hooks::parse(value),
-        ProviderKind::ClaudeCode | ProviderKind::ClaudeDs | ProviderKind::ClaudeGpt => {
-            claude_code::hooks::parse(value)
-        }
+        ProviderKind::ClaudeCode
+        | ProviderKind::ClaudeDs
+        | ProviderKind::ClaudeArgon
+        | ProviderKind::ClaudeGpt => claude_code::hooks::parse(value),
         ProviderKind::Cursor => cursor::hooks::parse(value),
         ProviderKind::Grok => grok::hooks::parse(value),
         ProviderKind::Kimi => kimi::hooks::parse(value),

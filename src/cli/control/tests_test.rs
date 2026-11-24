@@ -593,6 +593,7 @@ fn agent_add_maps_launch_options_and_explicit_hook_consent() {
     for provider in [
         "claude",
         "claude-ds",
+        "claude-argon",
         "claude-gpt",
         "codex",
         "cursor",

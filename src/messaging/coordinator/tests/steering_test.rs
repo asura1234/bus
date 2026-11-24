@@ -306,7 +306,10 @@ impl Fixture {
             Provider::Grok => {
                 json!({"hookEventName":"user_prompt_submit","sessionId":"session","promptId":turn,"prompt":prompt})
             }
-            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => {
+            Provider::ClaudeCode
+            | Provider::ClaudeDs
+            | Provider::ClaudeArgon
+            | Provider::ClaudeGpt => {
                 json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":turn,"prompt":prompt})
             }
             Provider::Codex => {
@@ -377,7 +380,7 @@ impl Fixture {
                     "transcriptPath": transcript,
                 }));
             }
-            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => self.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":[],"session_crons":[]})),
+            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeArgon | Provider::ClaudeGpt => self.record(json!({"hook_event_name":"Stop","session_id":"session","prompt_id":turn,"last_assistant_message":text,"background_tasks":[],"session_crons":[]})),
             Provider::Codex => self.record(json!({"hook_event_name":"Stop","session_id":"session","turn_id":turn,"last_assistant_message":text,"transcript_path":"/tmp/rollout.jsonl"})),
             Provider::Cursor => {
                 self.record(json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":turn,"text":text}));
