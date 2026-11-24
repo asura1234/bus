@@ -36,15 +36,7 @@ fn gateway_url(provider: ProviderKind) -> Option<String> {
         _ => return None,
     };
     #[cfg(test)]
-    if let Some(url) = super::gateway_test_support::URLS.with_borrow(|urls| {
-        urls.as_ref().map(|urls| {
-            urls.argon_override
-                .as_ref()
-                .filter(|url| argon && !url.is_empty())
-                .unwrap_or(&urls.default)
-                .clone()
-        })
-    }) {
+    if let Some(url) = super::gateway_test_support::override_url(argon) {
         return Some(url);
     }
     let configured = argon.then(|| std::env::var_os(ARGON_BASE_URL)).flatten();

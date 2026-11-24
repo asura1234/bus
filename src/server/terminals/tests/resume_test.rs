@@ -1648,7 +1648,7 @@ fn startup_timeout_ends_launching_and_restores_grok_short_options() {
 
 #[test]
 fn magpie_unreachable_gateway_rejects_native_restore_for_both_wrappers() {
-    use super::{AgentResumePlan, LaunchExtras, PreparedResume};
+    use super::{prepare_native_resume_for_test, AgentResumePlan};
     use crate::agents::providers::launch::gateway_test_support::GatewayOverride;
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1661,7 +1661,7 @@ fn magpie_unreachable_gateway_rejects_native_restore_for_both_wrappers() {
             argv: vec![agent.into()],
             dedupe_key: agent.into(),
         };
-        let error = match PreparedResume::new(&plan, LaunchExtras::default()) {
+        let error = match prepare_native_resume_for_test(&plan) {
             Ok(_) => panic!("{agent} prepared a native resume with no Magpie listener"),
             Err(error) => error,
         };

@@ -1,12 +1,12 @@
 use std::cell::RefCell;
 
 thread_local! {
-    pub(super) static URLS: RefCell<Option<GatewayUrls>> = const { RefCell::new(None) };
+    static URLS: RefCell<Option<GatewayUrls>> = const { RefCell::new(None) };
 }
 
-pub(crate) struct GatewayUrls {
-    pub(super) default: String,
-    pub(super) argon_override: Option<String>,
+struct GatewayUrls {
+    default: String,
+    argon_override: Option<String>,
 }
 
 pub(crate) struct GatewayOverride(Option<GatewayUrls>);
@@ -24,4 +24,16 @@ impl Drop for GatewayOverride {
     fn drop(&mut self) {
         URLS.replace(self.0.take());
     }
+}
+
+pub(super) fn override_url(argon: bool) -> Option<String> {
+    URLS.with_borrow(|urls| {
+        urls.as_ref().map(|urls| {
+            urls.argon_override
+                .as_ref()
+                .filter(|url| argon && !url.is_empty())
+                .unwrap_or(&urls.default)
+                .clone()
+        })
+    })
 }

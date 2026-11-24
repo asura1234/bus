@@ -797,6 +797,11 @@ fn native_resume_launch_inputs_for_test(
 }
 
 #[cfg(test)]
+fn prepare_native_resume_for_test(plan: &AgentResumePlan) -> Result<(), String> {
+    PreparedResume::new(plan, LaunchExtras::default()).map(|_| ())
+}
+
+#[cfg(test)]
 fn native_resume_is_empty_for_test(
     terminal: &crate::terminal::TerminalState,
     plan: &crate::agents::resume::catalog::AgentResumePlan,
