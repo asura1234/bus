@@ -111,6 +111,7 @@ impl AbortedMatcher {
 enum NativeDraft {
     Captured(String),
     ExistingStash,
+    OccupiedCopy,
 }
 
 impl PreservingComposer {
@@ -152,6 +153,15 @@ impl PreservingComposer {
     pub(super) fn with_bracketed_paste(mut self, bracketed_paste: bool) -> Self {
         self.bracketed_paste = bracketed_paste;
         self
+    }
+
+    fn copy_lost_stash_marker(&self, screen: &str) -> bool {
+        self.kind == AgentKind::Claude
+            && self
+                .native_draft
+                .lock()
+                .is_ok_and(|draft| matches!(draft.as_ref(), Some(NativeDraft::OccupiedCopy)))
+            && !native_stash_present(screen)
     }
 
     fn copy_draft(&self, body: String) -> DraftPreservation {
@@ -265,11 +275,14 @@ impl SubmissionInspector for PreservingComposer {
         });
         Some((body, restore))
     }
+    fn copy_recovery_directory(&self) -> Option<&std::path::Path> {
+        Some(&self.directory)
+    }
     fn confirm_consumption(&self) -> bool {
         self.owned.confirm_consumption()
     }
     fn recoverable_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
-        self.owned.recoverable_input(screen, cursor)
+        !self.copy_lost_stash_marker(screen) && self.owned.recoverable_input(screen, cursor)
     }
     fn owned_popup_escape(&self, screen: &str) -> Option<bytes::Bytes> {
         self.owned.owned_popup_escape(screen)
@@ -278,7 +291,9 @@ impl SubmissionInspector for PreservingComposer {
         super::submission_available(self.kind, screen)
     }
     fn paste_ready(&self, screen: &str) -> bool {
-        if !super::paste_ready(self.kind, screen, &self.expected) {
+        if self.copy_lost_stash_marker(screen)
+            || !super::paste_ready(self.kind, screen, &self.expected)
+        {
             return false;
         }
         if self.kind != AgentKind::Claude {
@@ -290,7 +305,7 @@ impl SubmissionInspector for PreservingComposer {
         let wait_for_input = match saved.as_ref() {
             Some(NativeDraft::Captured(body)) => opaque(body),
             Some(NativeDraft::ExistingStash) => true,
-            None => false,
+            Some(NativeDraft::OccupiedCopy) | None => false,
         };
         drop(saved);
         // A prior timeout may retain the native stash after its late paste is
@@ -330,7 +345,14 @@ impl SubmissionInspector for PreservingComposer {
         cursor: Option<(u16, u16)>,
         pristine: bool,
     ) -> InputObservation {
-        self.owned.observe_with_launch(screen, cursor, pristine)
+        let observation = self.owned.observe_with_launch(screen, cursor, pristine);
+        if observation == InputObservation::Pending && self.copy_lost_stash_marker(screen) {
+            // The former stash may have promoted text equal to the prompt.
+            // It cannot authorize a withdrawal or another Enter.
+            InputObservation::Other
+        } else {
+            observation
+        }
     }
 
     fn clearing(&self, index: usize) {
@@ -406,6 +428,44 @@ impl SubmissionInspector for PreservingComposer {
         native_stash_present(screen)
     }
 
+    fn mark_occupied_stash_for_copy(&self, screen: &str) -> bool {
+        if self.kind != AgentKind::Claude || !native_stash_present(screen) {
+            return false;
+        }
+        self.native_draft.lock().is_ok_and(|mut draft| {
+            *draft = Some(NativeDraft::OccupiedCopy);
+            true
+        })
+    }
+
+    fn copy_stash_key(&self) -> Option<Bytes> {
+        (self.kind == AgentKind::Claude && self.keys.len() == 3).then(|| self.keys[0].clone())
+    }
+
+    fn copy_stash_readback(
+        &self,
+        screen: &str,
+        cursor: Option<(u16, u16)>,
+    ) -> Option<(String, bool)> {
+        let parsed = super::input_with_cursor(self.kind, screen, cursor)?;
+        let rendered = rendered_claude_draft(screen);
+        // Rows can soft-wrap, and the shared parser trims indentation. Use
+        // rendered text for recovery but only trust a matching plain line
+        // to authorize moving the native object into the stash.
+        let attested = rendered.as_ref().is_some_and(|body| {
+            !body.is_empty() && !body.contains('\n') && *body == parsed && !opaque(body)
+        });
+        let snapshot = rendered
+            .filter(|body| !parsed.is_empty() || body.chars().all(char::is_whitespace))
+            .unwrap_or(parsed);
+        Some((snapshot, attested))
+    }
+
+    fn copy_stash_payload_is_distinct(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
+        super::observe_with_cursor(self.kind, screen, &self.expected, cursor)
+            == InputObservation::Other
+    }
+
     fn native_draft_restored(&self, screen: &str) -> bool {
         if native_stash_present(screen) {
             return false;
@@ -416,8 +476,16 @@ impl SubmissionInspector for PreservingComposer {
         match saved.as_ref() {
             Some(NativeDraft::Captured(draft)) => input(self.kind, screen).as_ref() == Some(draft),
             Some(NativeDraft::ExistingStash) => input(self.kind, screen).is_some(),
+            Some(NativeDraft::OccupiedCopy) => {
+                self.owned.submitted_prompt_visible(screen)
+                    || self.copy_stash_payload_is_distinct(screen, None)
+            }
             None => false,
         }
+    }
+
+    fn matches_exact_editor_line(&self, screen: &str, row: u16, literal: &str, text: &str) -> bool {
+        self.kind == AgentKind::Codex && exact_codex_editor_line(screen, row, literal, text)
     }
 
     fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
@@ -489,6 +557,62 @@ pub(super) fn native_stash_present(screen: &str) -> bool {
         .into_iter()
         .chain(below)
         .any(|row| row.trim_end().ends_with("› stashed"))
+}
+
+fn exact_codex_editor_line(screen: &str, y: u16, literal: &str, expected: &str) -> bool {
+    use unicode_width::UnicodeWidthChar;
+    // A screen cannot attest clipped or ambiguous whitespace. Only a
+    // literal one-line Codex frame with the caret at its end permits erasure.
+    if expected.is_empty()
+        || expected
+            .chars()
+            .any(|c| c.is_control() || c.width().is_none_or(|width| width == 0))
+    {
+        return false;
+    }
+    let plain = super::super::plain_screen(screen);
+    let rows: Vec<_> = plain.lines().map(str::to_owned).collect();
+    let Some(region) = crate::terminal::driver::editable_composer_region(&rows) else {
+        return false;
+    };
+    let start = region.start;
+    let [_, spacer, footer] = &rows[region] else {
+        return false;
+    };
+    // The general region reader can choose a prompt-like continuation.
+    // An edit needs a unique prompt across the complete frame.
+    let apparent_prompts = rows.iter().enumerate().filter_map(|(index, row)| {
+        row.trim()
+            .trim_matches(['│', '┃', '║'])
+            .trim_start()
+            .starts_with(['❯', '›', '>', '→'])
+            .then_some(index)
+    });
+    start == usize::from(y)
+        && apparent_prompts.eq(std::iter::once(start))
+        && spacer.trim().is_empty()
+        && (footer.trim_start().starts_with("GPT-") || footer.trim_start().starts_with("gpt-"))
+        && literal
+            .strip_prefix('›')
+            .and_then(|text| text.strip_prefix([' ', '\0']))
+            == Some(expected)
+}
+
+fn rendered_claude_draft(screen: &str) -> Option<String> {
+    let plain = super::super::plain_screen(screen);
+    let rows: Vec<_> = plain.lines().map(str::to_owned).collect();
+    let region = crate::terminal::driver::editable_composer_region(&rows)?;
+    let (prompt, continuation) = rows
+        .get(region.start..region.end.checked_sub(1)?)?
+        .split_first()?;
+    let prompt = prompt.trim_start().strip_prefix('❯')?;
+    let mut body = prompt.strip_prefix(' ').unwrap_or(prompt).to_owned();
+    for row in continuation {
+        body.push('\n');
+        // Only strip the UI's two-column continuation indent.
+        body.push_str(row.strip_prefix("  ").unwrap_or(row));
+    }
+    Some(body)
 }
 
 fn invisible_content(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>) -> bool {

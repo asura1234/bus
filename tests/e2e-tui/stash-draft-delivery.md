@@ -138,6 +138,11 @@ Preconditions: open idle `stash-claude`.
    permanent hold. The visible draft is restored and the existing native
    stash marker is still present. Manually submit the visible draft and
    decode its bytes to verify exact restoration and separation.
-3. Retrieve the hidden draft with Ctrl+S, submit it and decode exact bytes
-   → the already occupied stash was retained and the pane remains usable.
+3. After the manual Enter on VISIBLE, inspect the native composer. If HIDDEN
+   is visible, submit it directly. Use Ctrl+S only if the composer is empty
+   and the stash marker remains, then verify HIDDEN is visible before
+   submitting it. Decode the two manual replies and confirm VISIBLE and
+   HIDDEN were each submitted exactly once with their original bytes.
    Check the incoming request and its native output count, then stop scratch Bus.
+   The stock fake promotes HIDDEN on manual Enter. Real-Claude behavior is
+   未证明.

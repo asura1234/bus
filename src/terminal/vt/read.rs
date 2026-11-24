@@ -223,19 +223,54 @@ impl Terminal {
         )
     }
 
+    /// Read literal cells through the active caret on an unwrapped line.
+    pub(crate) fn active_literal_line(&self) -> Result<Option<(u16, String)>, Error> {
+        let (x, y) = (self.cursor_x()?, self.cursor_y()?);
+        let mut cell = self.grid_ref(ghostty_active_point(x, u32::from(y)))?;
+        if grid_ref_wrap_state(&cell)? != (false, false) {
+            return Ok(None);
+        }
+        let mut text = String::new();
+        for col in 0..self.cols()? {
+            cell.x = col;
+            let glyphs = grid_ref_graphemes(&cell)?;
+            if col >= x {
+                // VT formatting can trim trailing spaces. Check the actual
+                // cells so a move back cannot hide trailing edited text.
+                if !glyphs.is_empty() {
+                    return Ok(None);
+                }
+            } else if glyphs.is_empty() {
+                // Preserve the distinction between an unwritten cell and an
+                // actual space. The composer parser accepts gaps only in chrome.
+                if grid_ref_wide(&cell)? != CellWide::SpacerTail {
+                    text.push('\0');
+                }
+            } else {
+                for glyph in glyphs {
+                    let Some(character) = char::from_u32(glyph) else {
+                        return Ok(None);
+                    };
+                    text.push(character);
+                }
+            }
+        }
+        Ok(Some((y, text)))
+    }
+
     /// Read the live cursor area, excluding both scrollback and viewport offset.
     pub(crate) fn read_ansi_active(
         &self,
         start: (u16, u32),
         end: (u16, u32),
     ) -> Result<String, Error> {
-        let point = |(x, y)| ffi::GhosttyPoint {
-            tag: ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_ACTIVE,
-            value: ffi::GhosttyPointValue {
-                coordinate: ffi::GhosttyPointCoordinate { x, y },
-            },
-        };
-        self.read_formatted_selection(point(start), point(end), false, FormatterFormat::Vt, false)
+        self.read_formatted_selection(
+            ghostty_active_point(start.0, start.1),
+            ghostty_active_point(end.0, end.1),
+            false,
+            FormatterFormat::Vt,
+            false,
+        )
     }
 
     fn read_formatted_selection(
@@ -436,6 +471,15 @@ impl Terminal {
             ffi::GhosttyResult_GHOSTTY_NO_VALUE => Ok(None),
             other => Err(Error(other)),
         }
+    }
+}
+
+fn ghostty_active_point(x: u16, y: u32) -> ffi::GhosttyPoint {
+    ffi::GhosttyPoint {
+        tag: ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_ACTIVE,
+        value: ffi::GhosttyPointValue {
+            coordinate: ffi::GhosttyPointCoordinate { x, y },
+        },
     }
 }
 

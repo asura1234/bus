@@ -409,3 +409,792 @@ async fn claude_existing_stash_waits_for_rich_paste_materialization() {
         "retained-stash recovery bypassed rich-paste readiness and Enter reached the empty frame"
     );
 }
+
+const COPIED_DRAFT: &str = "developer draft";
+const INCOMING: &str = "from bus";
+
+fn queue_claude_copy(
+    runtime: &TerminalRuntime,
+    directory: std::path::PathBuf,
+    draft: &str,
+) -> crate::terminal::pty::actor::InputCompletion {
+    paint(runtime, draft, false, "");
+    runtime
+        .queue_observed_input_with_inspector(
+            Bytes::from_static(INCOMING.as_bytes()),
+            Bytes::from_static(b"\r"),
+            vec![Bytes::from_static(b"\x15")],
+            Duration::ZERO,
+            None,
+            Box::new(PreservingComposer::new(
+                AgentKind::Claude,
+                INCOMING.into(),
+                directory,
+                Vec::new(),
+            )),
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_retries_delayed_clear_before_submitting_and_restores() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-clear-retry");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let (completion, events) = captured_copy(&runtime, directory.clone());
+
+    // Ignore the first two clears. A paste here would append to the draft.
+    for _ in 0..2 {
+        assert_eq!(key(&mut writes).await.as_ref(), b"\x15");
+        clock.advance(Duration::from_millis(25));
+    }
+    let third = key(&mut writes).await;
+    if third.as_ref() != b"\x15" {
+        clock.resume();
+    }
+    assert_eq!(
+        third.as_ref(),
+        b"\x15",
+        "paste overtook the confirmed clear"
+    );
+
+    let mut composer = String::new();
+    paint(&runtime, &composer, false, "");
+    let pasted = key(&mut writes).await;
+    composer.push_str(std::str::from_utf8(&pasted).unwrap());
+    paint(&runtime, &composer, false, "");
+    assert_eq!(key(&mut writes).await.as_ref(), b"\r");
+    let submitted = std::mem::take(&mut composer);
+    assert_eq!(submitted, INCOMING);
+    clock.wait_for_enters(1);
+
+    runtime.test_process_pty_bytes(
+        "\x1b[2J\x1b[H> from bus\r\n✻ Working… (0s · esc to interrupt)\r\n".as_bytes(),
+    );
+    let generation = clock.advance(Duration::from_millis(100));
+    clock.wait_for_submission_check(generation);
+    assert!(
+        writes.try_recv().is_err(),
+        "restore must wait for an editable composer"
+    );
+    paint(&runtime, &composer, false, "");
+    assert_eq!(
+        key(&mut writes).await.as_ref(),
+        b"\x1b[200~developer draft\x1b[201~"
+    );
+    paint(&runtime, COPIED_DRAFT, false, "");
+    completion
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(writes.try_recv().is_err());
+    copy_event(&events, "bus.draft.copy_recovery_retired");
+    if directory.exists() {
+        assert!(std::fs::read_dir(&directory).unwrap().next().is_none());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_retains_draft_when_restore_lease_is_invalidated() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-restore-revoked");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let (completion, events) = captured_copy(&runtime, directory.clone());
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x15");
+    paint(&runtime, "", false, "");
+    assert_eq!(key(&mut writes).await.as_ref(), INCOMING.as_bytes());
+    paint(&runtime, INCOMING, false, "");
+    assert_eq!(key(&mut writes).await.as_ref(), b"\r");
+    clock.wait_for_enters(1);
+    runtime.invalidate_submission_ownership();
+    paint(&runtime, "", false, "");
+    completion
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        writes.try_recv().is_err(),
+        "revoked restore must never write"
+    );
+    copy_event(&events, "copy_restore_failed");
+    let files: Vec<_> = std::fs::read_dir(&directory)
+        .expect("keep the copied draft recoverable")
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "keep exactly one recovery record");
+    assert_eq!(std::fs::read_to_string(&files[0]).unwrap(), COPIED_DRAFT);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_expires_without_paste_when_clear_never_confirms() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-clear-expired");
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    let clock = runtime.test_submission_clock().unwrap();
+    clock.pause();
+    let receipt = clock.hold_next_write_completion();
+    let (completion, events) = captured_copy(&runtime, directory.clone());
+    assert_eq!(key(&mut writes).await.as_ref(), b"\x15");
+    clock.advance(Duration::from_secs(2));
+    receipt.send(()).unwrap();
+    let mut result = tokio::task::spawn_blocking(move || {
+        completion.recv_timeout(Duration::from_secs(5)).unwrap()
+    });
+    let error = tokio::select! {
+        result = &mut result => result.unwrap().unwrap_err(),
+        bytes = key(&mut writes) => {
+            clock.resume();
+            panic!("clear expiry wrote unexpected input: {bytes:?}");
+        }
+    };
+    assert!(matches!(
+        crate::terminal::runtime::PromptNotShown::classified(&error),
+        Some(crate::terminal::runtime::PromptNotShown::NotSubmitted)
+    ));
+    assert!(writes.try_recv().is_err());
+    assert!(runtime.visible_ansi().contains(COPIED_DRAFT));
+
+    copy_event(&events, "clear_incomplete");
+
+    // The queued retry sees the original draft again and clears it this
+    // time. Its verified restore also retires the earlier recovery copy.
+    let (retry, retry_events) = captured_copy(&runtime, directory.clone());
+    accept_copy_message(&runtime, &mut writes).await;
+    paint(&runtime, "", false, "");
+    assert_eq!(
+        key(&mut writes).await.as_ref(),
+        b"\x1b[200~developer draft\x1b[201~"
+    );
+    paint(&runtime, COPIED_DRAFT, false, "");
+    retry.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    copy_event(&retry_events, "bus.draft.copy_recovery_retired");
+    assert!(std::fs::read_dir(&directory).unwrap().next().is_none());
+    assert!(writes.try_recv().is_err());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+struct CopyLogWriter {
+    messages: std::sync::mpsc::Sender<String>,
+    line: Vec<u8>,
+}
+
+impl std::io::Write for CopyLogWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.line.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for CopyLogWriter {
+    fn drop(&mut self) {
+        let line = String::from_utf8_lossy(&self.line);
+        if line.contains("bus.draft.") {
+            let _ = self.messages.send(line.into_owned());
+        }
+    }
+}
+
+fn captured_copy(
+    runtime: &TerminalRuntime,
+    directory: std::path::PathBuf,
+) -> (
+    crate::terminal::pty::actor::InputCompletion,
+    std::sync::mpsc::Receiver<String>,
+) {
+    captured_copy_with_draft(runtime, directory, COPIED_DRAFT)
+}
+
+fn captured_copy_with_draft(
+    runtime: &TerminalRuntime,
+    directory: std::path::PathBuf,
+    draft: &str,
+) -> (
+    crate::terminal::pty::actor::InputCompletion,
+    std::sync::mpsc::Receiver<String>,
+) {
+    let (messages, events) = std::sync::mpsc::channel();
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || CopyLogWriter {
+                messages: messages.clone(),
+                line: Vec::new(),
+            })
+            .finish(),
+    );
+    let completion = tracing::dispatcher::with_default(&dispatch, || {
+        queue_claude_copy(runtime, directory, draft)
+    });
+    (completion, events)
+}
+
+fn copy_event(events: &std::sync::mpsc::Receiver<String>, name: &str) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while let Ok(line) =
+        events.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+    {
+        if line.contains(name) {
+            return line;
+        }
+    }
+    panic!("missing copy recovery event {name}");
+}
+
+async fn accept_copy_message(
+    runtime: &TerminalRuntime,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+) {
+    assert_eq!(key(writes).await.as_ref(), b"\x15");
+    paint(runtime, "", false, "");
+    assert_eq!(key(writes).await.as_ref(), INCOMING.as_bytes());
+    paint(runtime, INCOMING, false, "");
+    assert_eq!(key(writes).await.as_ref(), b"\r");
+    runtime.test_submission_clock().unwrap().wait_for_enters(1);
+}
+
+fn copy_record(directory: &std::path::Path, text: &str) -> std::path::PathBuf {
+    directory.join(format!(
+        "copied-{}.txt",
+        crate::utils::time::digest(text.as_bytes())
+    ))
+}
+
+fn write_private_copy(path: &std::path::Path, text: &str) {
+    use std::io::Write;
+    crate::platform::create_private_state_file(path)
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_storage_failure_still_delivers_and_restores_from_ram() {
+    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-storage-fault");
+    // A regular file as the directory yields a deterministic storage failure,
+    // even under a privileged test runner.
+    std::fs::write(&directory, "blocks recovery storage").unwrap();
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime.test_submission_clock().unwrap().pause();
+    let (completion, events) = captured_copy(&runtime, directory.clone());
+    let mut result =
+        tokio::task::spawn_blocking(move || completion.recv_timeout(Duration::from_secs(5)));
+    tokio::select! {
+        () = accept_copy_message(&runtime, &mut writes) => {}
+        done = &mut result => panic!("storage failure refused an editable pane: {:?}", done.unwrap()),
+    }
+    paint(&runtime, "", false, "");
+    assert_eq!(
+        key(&mut writes).await.as_ref(),
+        b"\x1b[200~developer draft\x1b[201~"
+    );
+    paint(&runtime, COPIED_DRAFT, false, "");
+    result.await.unwrap().unwrap().unwrap();
+    assert!(writes.try_recv().is_err());
+    let event = copy_event(&events, "bus.draft.copy_recovery_failed");
+    assert!(event.contains("snapshot_storage_failed"), "{event}");
+    std::fs::remove_file(directory).unwrap();
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_replaces_unverified_record_with_verified_alternate() {
+    for is_directory in [false, true] {
+        let directory = crate::utils::test_temp::unique_temp_path("claude-copy-conflicting-record");
+        crate::platform::fs::private_dir(&directory).unwrap();
+        let conflicting = copy_record(&directory, COPIED_DRAFT);
+        if is_directory {
+            std::fs::create_dir(&conflicting).unwrap();
+        } else {
+            write_private_copy(&conflicting, "wrong bytes");
+        }
+
+        let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        runtime.test_submission_clock().unwrap().pause();
+        let (completion, events) = captured_copy(&runtime, directory.clone());
+        accept_copy_message(&runtime, &mut writes).await;
+        runtime.invalidate_submission_ownership();
+        paint(&runtime, "", false, "");
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+
+        let event = copy_event(&events, "bus.draft.recovery_required");
+        let records: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path != &conflicting)
+            .collect();
+        assert_eq!(records.len(), 1, "no fresh recovery record for {event}");
+        assert_eq!(std::fs::read_to_string(&records[0]).unwrap(), COPIED_DRAFT);
+        assert!(event.contains(&*records[0].to_string_lossy()), "{event}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&records[0]).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert!(writes.try_recv().is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_bounds_recovery_records_and_retires_a_reused_snapshot() {
+    // Small records exercise the count cap and large ones exercise the byte cap.
+    for record_bytes in [1024, 600 * 1024] {
+        let directory = crate::utils::test_temp::unique_temp_path("claude-copy-bounded-records");
+        crate::platform::fs::private_dir(&directory).unwrap();
+        for index in 0..20 {
+            let old = format!("{index:02}{}", "x".repeat(record_bytes));
+            write_private_copy(&copy_record(&directory, &old), &old);
+        }
+        let snapshot = copy_record(&directory, COPIED_DRAFT);
+        write_private_copy(&snapshot, COPIED_DRAFT);
+
+        let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        runtime.test_submission_clock().unwrap().pause();
+        let (completion, events) = captured_copy(&runtime, directory.clone());
+        accept_copy_message(&runtime, &mut writes).await;
+        paint(&runtime, "", false, "");
+        assert_eq!(
+            key(&mut writes).await.as_ref(),
+            b"\x1b[200~developer draft\x1b[201~"
+        );
+        paint(&runtime, COPIED_DRAFT, false, "");
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        // On the old implementation storage retirement is synchronous, so the
+        // captured worker disconnects and these assertions see its settled state.
+        while events.recv_timeout(Duration::from_secs(5)).is_ok() {}
+
+        let records: Vec<_> = std::fs::read_dir(&directory).unwrap().flatten().collect();
+        let bytes: u64 = records
+            .iter()
+            .map(|entry| entry.metadata().unwrap().len())
+            .sum();
+        assert!(
+            records.len() < 16 && bytes <= 8 * 1024 * 1024,
+            "unbounded copy records: {} files, {bytes} bytes",
+            records.len()
+        );
+        assert!(
+            !snapshot.exists(),
+            "verified restoration must retire its backup"
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_verifies_collapsed_multiline_and_rejects_edited_words() {
+    const DRAFT: &str = "review the changes\n\nbefore publishing";
+    for (readback, restored) in [
+        ("review the changes before merging", false),
+        ("review the changes  before publishing", true),
+    ] {
+        let directory = crate::utils::test_temp::unique_temp_path("claude-copy-collapsed-readback");
+        let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+        let clock = runtime.test_submission_clock().unwrap();
+        clock.pause();
+        let (completion, events) = captured_copy_with_draft(&runtime, directory.clone(), DRAFT);
+        accept_copy_message(&runtime, &mut writes).await;
+        paint(&runtime, "", false, "");
+        assert_eq!(
+            key(&mut writes).await.as_ref(),
+            b"\x1b[200~review the changes\n\nbefore publishing\x1b[201~"
+        );
+        paint(&runtime, readback, false, "");
+        clock.advance(Duration::from_secs(2));
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        if restored {
+            copy_event(&events, "bus.draft.copy_recovery_retired");
+            assert!(!directory.exists() || std::fs::read_dir(&directory).unwrap().next().is_none());
+        } else {
+            let event = copy_event(&events, "copy_restore_failed");
+            let snapshot = copy_record(&directory, DRAFT);
+            assert!(event.contains(&*snapshot.to_string_lossy()), "{event}");
+            assert_eq!(std::fs::read_to_string(snapshot).unwrap(), DRAFT);
+        }
+        assert!(writes.try_recv().is_err());
+        if directory.exists() {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+}
+
+fn pause_copy_write(
+    directory: &std::path::Path,
+) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+    let (started, waiting) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    crate::terminal::runtime::copy_recovery_test_hooks::install(directory.to_owned(), move || {
+        started.send(()).map_err(std::io::Error::other)?;
+        released
+            .recv_timeout(Duration::from_secs(8))
+            .map_err(std::io::Error::other)
+    });
+    (waiting, release)
+}
+
+async fn restore_copy_message(
+    runtime: &TerminalRuntime,
+    writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
+) {
+    accept_copy_message(runtime, writes).await;
+    paint(runtime, "", false, "");
+    assert_eq!(
+        key(writes).await.as_ref(),
+        b"\x1b[200~developer draft\x1b[201~"
+    );
+    paint(runtime, COPIED_DRAFT, false, "");
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_saturation_keeps_terminal_retirement() {
+    use crate::terminal::runtime::copy_recovery_test_hooks as hooks;
+    let scratch = crate::utils::test_temp::unique_temp_path("copy-saturated");
+    let blocker = scratch.join("blocker");
+    let pane = scratch.join("pane");
+    crate::platform::fs::private_dir(&pane).unwrap();
+    let previous = copy_record(&pane, COPIED_DRAFT);
+    write_private_copy(&previous, COPIED_DRAFT);
+    let (waiting, release) = pause_copy_write(&blocker);
+    hooks::retain(&blocker, "independent slow snapshot");
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let (old, mut old_writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    old.test_submission_clock().unwrap().pause();
+    let (old_result, old_events) = captured_copy(&old, pane.clone());
+    accept_copy_message(&old, &mut old_writes).await;
+    old.invalidate_submission_ownership();
+    paint(&old, "", false, "");
+    old_result
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+
+    for slot in 0..15 {
+        hooks::retain(
+            &scratch.join(format!("queued-{slot}")),
+            &format!("queued snapshot {slot}"),
+        );
+    }
+    let (retry, mut retry_writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    retry.test_submission_clock().unwrap().pause();
+    let (retry_result, retry_events) = captured_copy(&retry, pane.clone());
+    restore_copy_message(&retry, &mut retry_writes).await;
+    retry_result
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(retry_writes.try_recv().is_err());
+    release.send(()).unwrap();
+
+    // Both tracing dispatches close only after the old persistence job and
+    // this retry's terminal retirement have been handled.
+    let mut notices = Vec::new();
+    for events in [old_events, retry_events] {
+        while let Ok(line) = events.recv_timeout(Duration::from_secs(5)) {
+            notices.push(line);
+        }
+    }
+    assert!(
+        !notices
+            .iter()
+            .any(|line| line.contains("bus.draft.recovery_required")),
+        "{notices:?}"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|line| line.contains("snapshot_worker_busy")),
+        "{notices:?}"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|line| line.contains("bus.draft.copy_recovery_retired")),
+        "{notices:?}"
+    );
+    assert!(!previous.exists());
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+fn full_copy_directory(directory: &std::path::Path) -> std::path::PathBuf {
+    crate::platform::fs::private_dir(directory).unwrap();
+    let oldest = copy_record(directory, COPIED_DRAFT);
+    write_private_copy(&oldest, COPIED_DRAFT);
+    // Target A's modification time first so it would be the eviction victim.
+    std::fs::File::options()
+        .write(true)
+        .open(&oldest)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH)
+        .unwrap();
+    for i in 0..15 {
+        let text = format!("retained snapshot {i}");
+        write_private_copy(&copy_record(directory, &text), &text);
+    }
+    oldest
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_failed_replacement_never_evicts_oldest() {
+    let directory = crate::utils::test_temp::unique_temp_path("copy-failed-replacement");
+    let oldest = full_copy_directory(&directory);
+    crate::terminal::runtime::copy_recovery_test_hooks::install(directory.clone(), || {
+        Err(std::io::Error::other(
+            "injected replacement publication failure",
+        ))
+    });
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime.test_submission_clock().unwrap().pause();
+    let (result, events) =
+        captured_copy_with_draft(&runtime, directory.clone(), "distinct snapshot B");
+    accept_copy_message(&runtime, &mut writes).await;
+    runtime.invalidate_submission_ownership();
+    paint(&runtime, "", false, "");
+    result
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    copy_event(&events, "snapshot_storage_failed");
+    assert_eq!(std::fs::read_to_string(oldest).unwrap(), COPIED_DRAFT);
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 16);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_replacement_protects_in_flight_oldest() {
+    let scratch = crate::utils::test_temp::unique_temp_path("copy-active-eviction");
+    let directory = scratch.join("pane");
+    let blocker = scratch.join("blocker");
+    let oldest = full_copy_directory(&directory);
+    let (replacing, mut b_writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    replacing.test_submission_clock().unwrap().pause();
+    // Hold an unrelated worker write so A is in flight before B begins
+    // either replacement publication or any eviction.
+    let (paused, release) = pause_copy_write(&blocker);
+    crate::terminal::runtime::copy_recovery_test_hooks::retain(
+        &blocker,
+        "independent slow snapshot",
+    );
+    paused.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (b_result, b_events) =
+        captured_copy_with_draft(&replacing, directory.clone(), "distinct snapshot B");
+    accept_copy_message(&replacing, &mut b_writes).await;
+    replacing.invalidate_submission_ownership();
+    paint(&replacing, "", false, "");
+    b_result
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let (retry, mut a_writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    retry.test_submission_clock().unwrap().pause();
+    let (a_result, a_events) = captured_copy(&retry, directory.clone());
+    accept_copy_message(&retry, &mut a_writes).await;
+    release.send(()).unwrap();
+    copy_event(&b_events, "bus.draft.recovery_required");
+    let protected = std::fs::read_to_string(&oldest);
+
+    paint(&retry, "", false, "");
+    assert_eq!(
+        key(&mut a_writes).await.as_ref(),
+        b"\x1b[200~developer draft\x1b[201~"
+    );
+    paint(&retry, COPIED_DRAFT, false, "");
+    a_result
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    copy_event(&a_events, "bus.draft.copy_recovery_retired");
+    assert_eq!(protected.unwrap(), COPIED_DRAFT);
+    assert!(!oldest.exists());
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+struct BlockedCopyLog {
+    writer: CopyLogWriter,
+    gate: SharedCopyLogGate,
+    blocked_event: &'static str,
+}
+
+type SharedCopyLogGate = std::sync::Arc<
+    std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+>;
+
+impl std::io::Write for BlockedCopyLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.writer.write(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl Drop for BlockedCopyLog {
+    fn drop(&mut self) {
+        if String::from_utf8_lossy(&self.writer.line).contains(self.blocked_event) {
+            let gate = self.gate.lock().unwrap().take();
+            if let Some((started, release)) = gate {
+                started.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(8)).unwrap();
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_blocked_recovery_notice_does_not_delay_other_pane_delivery() {
+    let scratch = crate::utils::test_temp::unique_temp_path("copy-blocked-sink-pty");
+    let (messages, events) = std::sync::mpsc::channel();
+    let (started, waiting) = std::sync::mpsc::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    let gate = std::sync::Arc::new(std::sync::Mutex::new(Some((started, resume))));
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || BlockedCopyLog {
+                writer: CopyLogWriter {
+                    messages: messages.clone(),
+                    line: Vec::new(),
+                },
+                gate: gate.clone(),
+                blocked_event: "bus.draft.recovery_required",
+            })
+            .finish(),
+    );
+    let (first, mut first_keys) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    first.test_submission_clock().unwrap().pause();
+    let first_result = tracing::dispatcher::with_default(&dispatch, || {
+        queue_claude_copy(&first, scratch.join("first"), COPIED_DRAFT)
+    });
+    accept_copy_message(&first, &mut first_keys).await;
+    first.invalidate_submission_ownership();
+    paint(&first, "", false, "");
+    first_result
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let (second, mut second_keys) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    second.test_submission_clock().unwrap().pause();
+    let (second_result, second_events) = captured_copy(&second, scratch.join("second"));
+    let delivery = tokio::time::timeout(Duration::from_secs(2), async {
+        restore_copy_message(&second, &mut second_keys).await;
+        tokio::task::spawn_blocking(move || second_result.recv_timeout(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    })
+    .await;
+    release.send(()).unwrap();
+    copy_event(&events, "bus.draft.recovery_required");
+    assert!(
+        delivery.is_ok(),
+        "a blocked recovery notice delayed the other pane"
+    );
+    copy_event(&second_events, "bus.draft.copy_recovery_retired");
+    assert!(second_keys.try_recv().is_err());
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[tokio::test]
+async fn claude_copy_fallback_blocked_overload_warning_does_not_delay_its_own_pane() {
+    use crate::terminal::runtime::copy_recovery_test_hooks as hooks;
+
+    let scratch = crate::utils::test_temp::unique_temp_path("copy-blocked-overload-pty");
+    let blocker = scratch.join("storage");
+    let (storage_started, storage_waiting) = std::sync::mpsc::channel();
+    let (release_storage, resume_storage) = std::sync::mpsc::channel();
+    hooks::install(blocker.clone(), move || {
+        storage_started.send(()).unwrap();
+        resume_storage
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        Ok(())
+    });
+    hooks::retain(&blocker, "pause the worker");
+    storage_waiting
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    for slot in 0..16 {
+        hooks::retain(&scratch.join("queued"), &format!("queued snapshot {slot}"));
+    }
+
+    let (messages, events) = std::sync::mpsc::channel();
+    let (started, waiting) = std::sync::mpsc::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    let gate = std::sync::Arc::new(std::sync::Mutex::new(Some((started, resume))));
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || BlockedCopyLog {
+                writer: CopyLogWriter {
+                    messages: messages.clone(),
+                    line: Vec::new(),
+                },
+                gate: gate.clone(),
+                blocked_event: "snapshot_worker_busy",
+            })
+            .finish(),
+    );
+    let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
+    runtime.test_submission_clock().unwrap().pause();
+    let completion = tracing::dispatcher::with_default(&dispatch, || {
+        queue_claude_copy(&runtime, scratch.join("pane"), COPIED_DRAFT)
+    });
+    drop(dispatch);
+    let delivery = tokio::time::timeout(Duration::from_secs(2), async {
+        restore_copy_message(&runtime, &mut writes).await;
+        completion
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    })
+    .await;
+    release_storage.send(()).unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    release.send(()).unwrap();
+    assert!(
+        delivery.is_ok(),
+        "the pane could not clear, submit and restore while its overload warning was blocked"
+    );
+    let diagnostic = copy_event(&events, "snapshot_worker_busy");
+    assert!(
+        diagnostic.contains("bus.draft.copy_recovery_failed"),
+        "{diagnostic}"
+    );
+    while let Ok(line) = events.recv_timeout(Duration::from_secs(5)) {
+        assert!(
+            !line.contains("snapshot_worker_busy"),
+            "duplicate diagnostic: {line}"
+        );
+    }
+    assert!(writes.try_recv().is_err());
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[cfg(feature = "dev-tools")]
+#[path = "claude_occupied_stash_test.rs"]
+mod occupied_stash_tests;
