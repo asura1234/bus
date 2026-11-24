@@ -8,6 +8,7 @@ mod diagnostics;
 #[path = "tests/editor_fallback_hook_test.rs"]
 pub(crate) mod editor_fallback_hook;
 mod exchange_wait;
+mod marked_repair;
 mod plain;
 mod preservation;
 mod recovery;
@@ -216,6 +217,16 @@ pub(crate) trait SubmissionInspector: Send {
         false
     }
     fn native_draft_restored(&self, _screen: &str) -> bool {
+        false
+    }
+    /// A literal, complete editor line with its cursor at the end.
+    fn matches_exact_editor_line(
+        &self,
+        _screen: &str,
+        _row: u16,
+        _literal: &str,
+        _text: &str,
+    ) -> bool {
         false
     }
     fn restoration_marker_visible(&self, _screen: &str, _marker: &str) -> bool {

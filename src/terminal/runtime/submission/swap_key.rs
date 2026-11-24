@@ -2,21 +2,30 @@
 use super::{InputObservation, ObservedSubmission, PromptNotShown};
 use crate::terminal::runtime::draft_input::DraftInputLease;
 use bytes::Bytes;
-use std::{io, sync::atomic::Ordering, time::Duration};
+use std::{
+    io,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 pub(super) enum SwapKey<'a> {
     Transfer(Bytes),
     Enter,
     Resume(Option<&'a str>),
+    EraseMarker {
+        keys: Bytes,
+        marked: &'a str,
+        deadline: Instant,
+    },
 }
 
 impl ObservedSubmission {
     pub(super) fn swap_key(&self, lease: &DraftInputLease, action: SwapKey<'_>) -> io::Result<()> {
-        let submit = !matches!(action, SwapKey::Transfer(_));
-        let deadline = if submit {
-            self.deadline.get()
-        } else {
-            self.hard_deadline
+        let submit = matches!(action, SwapKey::Enter | SwapKey::Resume(_));
+        let deadline = match action {
+            SwapKey::EraseMarker { deadline, .. } => deadline,
+            _ if submit => self.deadline.get(),
+            _ => self.hard_deadline,
         };
         let guard = self
             .content_lock
@@ -28,7 +37,7 @@ impl ObservedSubmission {
                 .active_ansi_if_complete()
                 .filter(|screen| self.inspect.submission_available(screen))
                 .ok_or_else(|| {
-                    if matches!(action, SwapKey::Resume(_)) {
+                    if matches!(action, SwapKey::Resume(_) | SwapKey::EraseMarker { .. }) {
                         io::Error::other(PromptNotShown::ComposerBusy)
                     } else {
                         io::Error::other("Native input is blocked")
@@ -51,6 +60,11 @@ impl ObservedSubmission {
                     return Err(io::Error::other(PromptNotShown::ComposerBusy));
                 }
             }
+            if let SwapKey::EraseMarker { marked, .. } = action {
+                if !self.matches_exact_editor_line(&screen, marked) {
+                    return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                }
+            }
             if self.clock.now() >= deadline {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -58,7 +72,7 @@ impl ObservedSubmission {
                 ));
             }
             let key = match action {
-                SwapKey::Transfer(key) => key,
+                SwapKey::Transfer(key) | SwapKey::EraseMarker { keys: key, .. } => key,
                 SwapKey::Enter | SwapKey::Resume(_) => {
                     self.inspect.editor_submit_key(&screen, &self.enter)
                 }

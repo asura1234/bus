@@ -28,6 +28,7 @@ struct Pane {
     directory: PathBuf,
     file: PathBuf,
     draft: String,
+    caret_left: usize,
     submits: Vec<String>,
 }
 
@@ -44,6 +45,7 @@ impl Pane {
             file: root.join("native.txt"),
             root,
             draft: DRAFT.into(),
+            caret_left: 0,
             submits: Vec::new(),
         };
         pane.paint();
@@ -52,7 +54,12 @@ impl Pane {
 
     fn paint(&self) {
         self.runtime.test_process_pty_bytes(
-            format!("\x1b[2J\x1b[H› {}\r\n\r\n GPT-6 · /repo", self.draft).as_bytes(),
+            format!(
+                "\x1b[2J\x1b[H› {}\r\n\r\n GPT-6 · /repo\x1b[1;{}H",
+                self.draft,
+                self.draft.chars().count() + 3 - self.caret_left,
+            )
+            .as_bytes(),
         );
     }
 
@@ -379,7 +386,9 @@ async fn editor_reentry_stalled_fence_sync_never_authorizes_fallback() {
     assert_eq!(pane.draft, DRAFT);
 }
 
-async fn resume_pending_while_prior_restore_finishes(changed: bool) {
+type MarkedEdit = fn(&str) -> (String, usize);
+
+async fn resume_pending_while_prior_restore_finishes(changed: bool, edit: Option<MarkedEdit>) {
     let mut pane = Pane::new();
     fs::write(&pane.file, DRAFT).unwrap();
     let mut original = Exchange::begin_preserving(pane.directory.clone(), WAIT).unwrap();
@@ -430,10 +439,25 @@ async fn resume_pending_while_prior_restore_finishes(changed: bool) {
         assert_eq!(fs::read_to_string(&backup).unwrap(), DRAFT);
         assert!(Exchange::has_preserved_draft(&pane.directory));
 
-        // The available composer can later return empty. That gives the
-        // existing repair path authority to restore the saved draft.
-        pane.draft.clear();
-        pane.paint();
+        if let Some(edit) = edit {
+            (pane.draft, pane.caret_left) = edit(&returned);
+            pane.paint();
+            let untouched = pane.draft.clone();
+            let refused = pane.queue(NEW, SHORT);
+            composer_busy(refused.recv_timeout(WAIT).unwrap());
+            assert!(
+                pane.writes.try_recv().is_err(),
+                "edited content receives no keys"
+            );
+            assert_eq!(pane.draft, untouched);
+            assert_eq!(fs::read_to_string(backup).unwrap(), DRAFT);
+            assert!(Exchange::has_preserved_draft(&pane.directory));
+            return;
+        }
+        assert_eq!(
+            pane.draft, returned,
+            "repair starts with the marked draft visible"
+        );
         let repair = pane.queue(NEW, WAIT);
         composer_busy(pane.pump(repair).await);
         assert_eq!(pane.draft, DRAFT);
@@ -449,10 +473,26 @@ async fn resume_pending_while_prior_restore_finishes(changed: bool) {
 
 #[tokio::test]
 async fn editor_reentry_rechecks_changed_pending_before_enter() {
-    resume_pending_while_prior_restore_finishes(true).await;
+    resume_pending_while_prior_restore_finishes(true, None).await;
 }
 
 #[tokio::test]
 async fn editor_reentry_rechecks_unchanged_pending_and_enters_once() {
-    resume_pending_while_prior_restore_finishes(false).await;
+    resume_pending_while_prior_restore_finishes(false, None).await;
+}
+
+#[tokio::test]
+async fn editor_reentry_edited_marked_draft_receives_no_keys() {
+    resume_pending_while_prior_restore_finishes(
+        true,
+        Some(|text| (text.replace("__BUS_DRAFT_END_", "__BUS_DRAFT_EDIT_"), 0)),
+    )
+    .await;
+    resume_pending_while_prior_restore_finishes(true, Some(|text| (format!("{text}extra"), 0)))
+        .await;
+    resume_pending_while_prior_restore_finishes(true, Some(|text| (format!(" {text}"), 0))).await;
+    resume_pending_while_prior_restore_finishes(true, Some(|text| (format!("{text} "), 0))).await;
+    // Moving the caret back must not hide a trailing edit from the guard.
+    resume_pending_while_prior_restore_finishes(true, Some(|text| (format!("{text} "), 1))).await;
+    resume_pending_while_prior_restore_finishes(true, Some(|text| (text.to_owned(), 1))).await;
 }

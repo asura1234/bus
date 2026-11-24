@@ -484,6 +484,10 @@ impl SubmissionInspector for PreservingComposer {
         }
     }
 
+    fn matches_exact_editor_line(&self, screen: &str, row: u16, literal: &str, text: &str) -> bool {
+        self.kind == AgentKind::Codex && exact_codex_editor_line(screen, row, literal, text)
+    }
+
     fn restoration_marker_visible(&self, screen: &str, marker: &str) -> bool {
         input(self.kind, screen).is_some_and(|body| {
             // Codex soft-wraps the native editor receipt after its PID
@@ -553,6 +557,36 @@ pub(super) fn native_stash_present(screen: &str) -> bool {
         .into_iter()
         .chain(below)
         .any(|row| row.trim_end().ends_with("› stashed"))
+}
+
+fn exact_codex_editor_line(screen: &str, y: u16, literal: &str, expected: &str) -> bool {
+    use unicode_width::UnicodeWidthChar;
+    // A screen cannot attest clipped or ambiguous whitespace. Only a
+    // literal one-line Codex frame with the caret at its end permits erasure.
+    if expected.is_empty()
+        || expected
+            .chars()
+            .any(|c| c.is_control() || c.width().is_none_or(|width| width == 0))
+    {
+        return false;
+    }
+    let plain = super::super::plain_screen(screen);
+    let rows: Vec<_> = plain.lines().map(str::to_owned).collect();
+    let Some(region) = crate::terminal::driver::editable_composer_region(&rows) else {
+        return false;
+    };
+    let start = region.start;
+    let [_, spacer, footer] = &rows[region] else {
+        return false;
+    };
+    start == usize::from(y)
+        && spacer.trim().is_empty()
+        && (footer.trim_start().starts_with("GPT-") || footer.trim_start().starts_with("gpt-"))
+        && literal
+            .trim_start_matches([' ', '\0'])
+            .strip_prefix('›')
+            .and_then(|text| text.strip_prefix([' ', '\0']))
+            == Some(expected)
 }
 
 fn rendered_claude_draft(screen: &str) -> Option<String> {

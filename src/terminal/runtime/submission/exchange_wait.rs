@@ -1,6 +1,6 @@
 //! Wait for the callback lock within the pane's existing transfer budget.
 use super::{copy::RESTORE_BUDGET, ObservedSubmission, PromptNotShown};
-use crate::platform::draft_editor::Exchange;
+use crate::platform::draft_editor::{Exchange, MarkedDraft};
 use std::{
     io,
     path::Path,
@@ -25,11 +25,19 @@ impl ObservedSubmission {
         .map_err(|_| io::Error::other(PromptNotShown::ComposerBusy))
     }
 
-    fn await_exchange(
+    pub(super) fn open_marked_draft(
+        &self,
+        dir: &Path,
+        deadline: Instant,
+    ) -> io::Result<MarkedDraft> {
+        self.await_exchange(deadline, |_| MarkedDraft::open(dir))
+    }
+
+    fn await_exchange<T>(
         &self,
         deadline: Instant,
-        mut begin: impl FnMut(Duration) -> io::Result<Exchange>,
-    ) -> io::Result<Exchange> {
+        mut begin: impl FnMut(Duration) -> io::Result<T>,
+    ) -> io::Result<T> {
         let deadline = deadline.min(self.hard_deadline);
         loop {
             let generation = self.clock.generation();

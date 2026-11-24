@@ -14,8 +14,10 @@ use std::{
 mod fence;
 pub(crate) use fence::expired_swap_fence_committed;
 mod manual;
+mod marked;
 #[cfg(test)]
 pub(crate) use fence::test_hooks as fence_test_hooks;
+pub(crate) use marked::MarkedDraft;
 #[cfg(test)]
 #[path = "tests/draft_editor_callback_hook_test.rs"]
 pub(crate) mod callback_test_hooks;
@@ -25,6 +27,7 @@ const FALLBACK: &str = "BUS_DRAFT_EDITOR_FALLBACK";
 const REQUEST: &str = "request.json";
 const ACK: &str = "ack.json";
 const PRESERVED: &str = "preserved.json";
+pub(crate) const TRANSFER_MARKER_PREFIX: &str = "__BUS_DRAFT_END_";
 const LOCK: &str = "exchange.lock";
 pub(crate) const MAX_BYTES: u64 = 2 * 1024 * 1024;
 // JSON may encode a single input byte as six bytes (for example, \u0000).
@@ -526,7 +529,7 @@ fn read_regular(path: &Path, maximum: u64) -> io::Result<Vec<u8>> {
     fs::read(path)
 }
 fn marker(token: &str) -> String {
-    format!("__BUS_DRAFT_END_{token}__")
+    format!("{TRANSFER_MARKER_PREFIX}{token}__")
 }
 
 fn private_dir(path: &Path) -> io::Result<()> {

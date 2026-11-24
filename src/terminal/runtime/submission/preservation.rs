@@ -193,7 +193,12 @@ impl ObservedSubmission {
                 return submitted;
             }
             InputObservation::Empty => {}
-            // Developer text after the interrupted swap stays put.
+            InputObservation::Other => {
+                if self.repair_marked_draft(&editor, lease).is_ok() {
+                    lease.restored();
+                }
+                return Err(io::Error::other(PromptNotShown::ComposerBusy));
+            }
             _ => {
                 lease.restored();
                 return Err(io::Error::other(PromptNotShown::ComposerBusy));
