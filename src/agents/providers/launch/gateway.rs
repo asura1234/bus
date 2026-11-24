@@ -1,17 +1,18 @@
 use super::ProviderKind;
 use std::{
     net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
-    sync::mpsc,
+    sync::{mpsc, OnceLock},
     time::{Duration, Instant},
 };
 
 const DEFAULT_URL: &str = "http://127.0.0.1:3425";
-const ARGON_BASE_URL: &str = "CLAUDE_ARGON_BASE_URL";
+pub(crate) const ARGON_BASE_URL: &str = "CLAUDE_ARGON_BASE_URL";
+static ARGON_URL: OnceLock<String> = OnceLock::new();
 const CONNECT_BUDGET: Duration = Duration::from_millis(750);
 
-pub(crate) fn preflight_gateway(provider: ProviderKind) -> Result<(), String> {
+pub(crate) fn preflight_gateway(provider: ProviderKind) -> Result<Option<String>, String> {
     let Some(url) = gateway_url(provider) else {
-        return Ok(());
+        return Ok(None);
     };
     let endpoint = GatewayEndpoint::parse(&url).ok_or_else(|| {
         format!(
@@ -19,12 +20,12 @@ pub(crate) fn preflight_gateway(provider: ProviderKind) -> Result<(), String> {
         )
     })?;
     if endpoint.can_connect() {
-        return Ok(());
+        return Ok((provider == ProviderKind::ClaudeArgon).then_some(url));
     }
     // The authority may contain credentials, and the path/query may carry
     // tokens. The origin identifies the unreachable listener without either.
     Err(format!(
-        "Cannot connect to the Magpie gateway at {}. Start Magpie with `magpie serve` and retry.",
+        "Start Magpie with `magpie serve`. Gateway unreachable at {}.",
         endpoint.origin
     ))
 }
@@ -39,13 +40,18 @@ fn gateway_url(provider: ProviderKind) -> Option<String> {
     if let Some(url) = super::gateway_test_support::override_url(argon) {
         return Some(url);
     }
-    let configured = argon.then(|| std::env::var_os(ARGON_BASE_URL)).flatten();
-    Some(
-        configured
-            .filter(|url| !url.is_empty())
-            .map(|url| url.to_string_lossy().into_owned())
-            .unwrap_or_else(|| DEFAULT_URL.into()),
-    )
+    Some(if argon {
+        ARGON_URL
+            .get_or_init(|| {
+                std::env::var_os(ARGON_BASE_URL)
+                    .filter(|url| !url.is_empty())
+                    .map(|url| url.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| DEFAULT_URL.into())
+            })
+            .clone()
+    } else {
+        DEFAULT_URL.into()
+    })
 }
 
 struct GatewayEndpoint {

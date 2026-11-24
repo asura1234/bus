@@ -145,6 +145,7 @@ pub(in crate::server) struct PreparingResume {
 struct PreparedResume {
     session: Option<PersistedAgentSession>,
     inputs: ResumeInputs,
+    gateway: Result<Option<String>, String>,
 }
 
 impl PreparedResume {
@@ -162,14 +163,15 @@ impl PreparedResume {
             })
             .transpose()?;
         let plan = corrected_plan.as_ref().unwrap_or(plan);
-        if let Some(provider) = crate::agents::providers::launch::native_provider(&plan.agent) {
-            crate::agents::providers::launch::preflight_gateway(provider)?;
-        }
+        let gateway = crate::agents::providers::launch::native_provider(&plan.agent).map_or(
+            Ok(None),
+            crate::agents::providers::launch::preflight_gateway,
+        );
         let provider_argv = matches!(plan.agent.as_str(), "grok" | "kimi")
             .then(|| resume_argv(plan, &extras))
             .transpose()?;
         let (mut argv, env) = resume_launch_inputs(plan, extras);
-        if plan.agent == "claude-gpt" {
+        if gateway.is_ok() && plan.agent == "claude-gpt" {
             argv[0] = crate::agents::providers::launch::selected_executable(
                 crate::agents::providers::ProviderKind::ClaudeGpt,
                 &Default::default(),
@@ -179,6 +181,7 @@ impl PreparedResume {
         Ok(Self {
             session,
             inputs: (provider_argv.unwrap_or(argv), env),
+            gateway,
         })
     }
 }
@@ -462,6 +465,7 @@ impl App {
         let PreparedResume {
             session,
             inputs: (argv, env),
+            gateway,
         } = match prepared {
             Ok(prepared) => prepared,
             Err(reason) => {
@@ -475,6 +479,12 @@ impl App {
             terminal.set_persisted_agent_session(session);
         }
         self.record_resume_command(&terminal_id, &argv);
+        let gateway_url = match gateway {
+            Ok(url) => url,
+            Err(reason) => {
+                return self.suspend_pending_agent_resume(pane_id, &terminal_id, &reason)
+            }
+        };
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, env))
@@ -527,6 +537,7 @@ impl App {
             &runtime,
             &launch_env,
             &argv,
+            gateway_url.as_deref(),
         ) {
             tracing::warn!(
                 pane = pane_id.raw(),
@@ -586,6 +597,7 @@ fn queue_resumed_agent_launch(
     runtime: &crate::terminal::TerminalRuntime,
     launch_env: &crate::terminal::runtime::PaneLaunchEnv,
     argv: &[String],
+    gateway_url: Option<&str>,
 ) -> std::io::Result<()> {
     #[cfg(unix)]
     super::native_input::bind(runtime, launch_env);
@@ -596,7 +608,11 @@ fn queue_resumed_agent_launch(
     }
     #[cfg(unix)]
     let argv = &runtime.launch_shared_codex(argv.to_vec())?;
-    runtime.queue_shell_command(argv, super::agents::DEFAULT_AGENT_START_TIMEOUT)
+    runtime.queue_shell_command_with_env(
+        argv,
+        super::agents::DEFAULT_AGENT_START_TIMEOUT,
+        gateway_url.map(|url| (crate::agents::providers::launch::ARGON_BASE_URL, url)),
+    )
 }
 
 fn guard_resumed_agent_launch(
@@ -797,8 +813,24 @@ fn native_resume_launch_inputs_for_test(
 }
 
 #[cfg(test)]
+fn prepare_corrected_resume_for_test(
+    plan: &AgentResumePlan,
+    session: PersistedAgentSession,
+) -> Result<PreparedResume, String> {
+    PreparedResume::new(
+        plan,
+        LaunchExtras {
+            session: Some(session),
+            ..Default::default()
+        },
+    )
+}
+
+#[cfg(test)]
 fn prepare_native_resume_for_test(plan: &AgentResumePlan) -> Result<(), String> {
-    PreparedResume::new(plan, LaunchExtras::default()).map(|_| ())
+    PreparedResume::new(plan, LaunchExtras::default())?
+        .gateway
+        .map(|_| ())
 }
 
 #[cfg(test)]

@@ -54,6 +54,7 @@ pub(super) fn check_saved_project_hooks(
 
 impl Worker {
     pub(super) fn resume_room(&mut self, room: RoomId) -> Result<Value, String> {
+        let mut gateways = std::collections::HashMap::new();
         // A fresh native list prevents relaunching a provider which recovered on its own.
         let infos = self
             .poll()?
@@ -75,7 +76,7 @@ impl Worker {
                 row["outcome"] = json!("skipped");
                 row["reason"] = json!("provider is running or still launching");
             } else {
-                match self.resume_saved_agent(&agent) {
+                match self.resume_saved_agent(&agent, &mut gateways) {
                     Ok(()) => row["outcome"] = json!("resuming"),
                     Err(error) => {
                         row["outcome"] = json!("blocked");
@@ -102,7 +103,11 @@ impl Worker {
         Ok(json!({"room_id":room, "agents":results}))
     }
 
-    fn resume_saved_agent(&mut self, agent: &RoomAgent) -> Result<(), String> {
+    fn resume_saved_agent(
+        &mut self,
+        agent: &RoomAgent,
+        gateways: &mut std::collections::HashMap<&'static str, Result<(), String>>,
+    ) -> Result<(), String> {
         if let Err(error) = self.ensure_provider_binary(agent.room_id, agent.provider) {
             let recovery = agent.startup.as_ref().and_then(|s| s.recovery.as_ref());
             let tracked = !matches!(recovery, Some(StartupRecovery::Requested));
@@ -141,7 +146,8 @@ impl Worker {
             .and_then(|startup| startup.recovery.as_ref())
         {
             Some(crate::messaging::model::StartupRecovery::Unsubmitted { args }) => {
-                return self.retry_unsubmitted_agent_start(agent, args.clone());
+                let gateway = self.cached_gateway_check(agent.provider, gateways);
+                return self.retry_unsubmitted_agent_start(agent, args.clone(), gateway);
             }
             Some(crate::messaging::model::StartupRecovery::Requested) => {
                 return Err("Previous launch input is unconfirmed; inspect the owned terminal before recovery; no retry was sent".into());
@@ -176,7 +182,8 @@ impl Worker {
             binary: crate::platform::fs::running_executable().map_err(|e| e.to_string())?,
         };
         let attempt = self.begin_agent_launch(agent, LaunchKind::Resume)?;
-        let preflight = self.preflight_resume_gateway(agent);
+        let gateway = self.cached_gateway_check(agent.provider, gateways);
+        let preflight = self.record_resume_gateway_check(agent, gateway);
         self.track_launch_result(attempt, "resume_preparation_failed", preflight)?;
         let extras = super::resume::for_native_resume(
             &context,
@@ -189,6 +196,21 @@ impl Worker {
         );
         let extras = self.track_launch_result(attempt, "resume_preparation_failed", extras)?;
         self.launch_saved_agent(agent, kind, plan, extras, attempt)
+    }
+
+    fn cached_gateway_check(
+        &mut self,
+        provider: Provider,
+        gateways: &mut std::collections::HashMap<&'static str, Result<(), String>>,
+    ) -> Result<(), String> {
+        // Check each provider endpoint at most once for this room command.
+        gateways
+            .entry(provider.label())
+            .or_insert_with(|| {
+                self.transport
+                    .preflight_gateway(identity::provider_kind(provider))
+            })
+            .clone()
     }
 
     fn launch_saved_agent(

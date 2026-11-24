@@ -557,7 +557,7 @@ fn launch_metrics_unsubmitted_recovery_preparation_failure_is_durable() {
     );
     assert_eq!(ledger(&worker)["1"]["outcome"], "pending");
     let agent = worker.state.agent(agent).unwrap().clone();
-    let result = worker.retry_unsubmitted_agent_start(&agent, vec![]);
+    let result = worker.retry_unsubmitted_agent_start(&agent, vec![], Ok(()));
     assert!(
         result
             .as_ref()
@@ -749,4 +749,37 @@ fn seed_magpie_session(worker: &mut Worker, agent: AgentId) {
         .set_agent_runtime_identity(agent, saved_identity)
         .unwrap();
     worker.save(state).unwrap();
+}
+
+#[test]
+fn magpie_outage_replaces_a_recovered_binary_error() {
+    let _providers = provider_binaries();
+    let url = closed_gateway_url();
+    let _gateway = launch::gateway_test_support::GatewayOverride::set(url.clone(), None);
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeArgon, vec![]);
+    seed_magpie_session(&mut worker, agent);
+    prepare_resume(&mut worker, agent, None);
+    let mut state = worker.state.clone();
+    state
+        .block_missing_binary(agent, "claude-argon", 100)
+        .unwrap();
+    worker.save(state).unwrap();
+    worker.transport = Box::new(ResumeNative {
+        state_path: dir.join("state.json"),
+        agent,
+        terminal: "terminal",
+        pane: "pane",
+        started: false,
+        recovery: false,
+    });
+    let result = worker.resume_room(room).unwrap();
+    assert_eq!(result["agents"][0]["outcome"], "blocked");
+    let saved = worker.state.agent(agent).unwrap();
+    assert!(
+        saved.missing_binary.is_none(),
+        "stale PATH blocker: {saved:?}"
+    );
+    assert_magpie_error(saved.actionable_error.as_deref().unwrap(), &url);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }

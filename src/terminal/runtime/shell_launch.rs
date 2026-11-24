@@ -45,6 +45,43 @@ impl EditorProbe {
         }
     }
 
+    fn command_with_private_env(
+        &self,
+        argv: &[String],
+        key: &str,
+        value: &str,
+    ) -> io::Result<String> {
+        if key.is_empty() || !key.bytes().all(|c| c.is_ascii_uppercase() || c == b'_') {
+            return Err(io::Error::other("Invalid private launch environment key"));
+        }
+        let path = self.directory.join("launch-env");
+        let path_arg = path
+            .to_str()
+            .ok_or_else(|| io::Error::other("Invalid launch environment path"))?;
+        crate::platform::fs::atomic_write(&path, value.as_bytes())?;
+        // Endpoint URLs can contain credentials or tokens. Keep the value out
+        // of the shell editor, logs and the terminal's persisted launch argv.
+        if self.windows {
+            let command = crate::platform::interactive_shell_command(argv, &self.shell)
+                .ok_or_else(|| io::Error::other("Invalid shell command"))?;
+            let path = crate::platform::quote_powershell_arg(path_arg);
+            return Ok(format!(
+                "& {{ $busSaved = $env:{key}; try {{ $env:{key} = [IO.File]::ReadAllText({path}); {command} }} finally {{ $env:{key} = $busSaved }} }}"
+            ));
+        }
+        let mut bound = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "value=$(/bin/cat \"$1\") || exit; key=$2; shift 2; exec /usr/bin/env \"$key=$value\" \"$@\"".into(),
+            "bus-launch".into(),
+            path_arg.into(),
+            key.into(),
+        ];
+        bound.extend_from_slice(argv);
+        crate::platform::interactive_shell_command(&bound, &self.shell)
+            .ok_or_else(|| io::Error::other("Invalid shell command"))
+    }
+
     fn attempt_command(&self, id: u64, command: &str) -> io::Result<String> {
         if super::spawn::is_powershell_shell(&self.shell) {
             return Ok(format!("$global:__bus_launch_attempt={id}; {command}"));
@@ -256,7 +293,17 @@ impl TerminalRuntime {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn queue_shell_command(&self, argv: &[String], timeout: Duration) -> io::Result<()> {
+        self.queue_shell_command_with_env(argv, timeout, None)
+    }
+
+    pub(crate) fn queue_shell_command_with_env(
+        &self,
+        argv: &[String],
+        timeout: Duration,
+        private_env: Option<(&str, &str)>,
+    ) -> io::Result<()> {
         if argv.is_empty() || argv.iter().any(|arg| arg.chars().any(char::is_control)) {
             return Err(io::Error::other("Invalid shell launch arguments"));
         }
@@ -282,8 +329,11 @@ impl TerminalRuntime {
         let integration = self.shell_integration.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported,
             "This pane has no Bus shell integration; no launch input was sent. Create a new Bus pane with zsh, bash, fish or PowerShell and launch there"))?;
         let probe = integration.editor_probe(self.child_pid());
-        let command = crate::platform::interactive_shell_command(argv, &probe.shell)
-            .ok_or_else(|| io::Error::other("Invalid shell command"))?;
+        let command = match private_env {
+            Some((key, value)) => probe.command_with_private_env(argv, key, value)?,
+            None => crate::platform::interactive_shell_command(argv, &probe.shell)
+                .ok_or_else(|| io::Error::other("Invalid shell command"))?,
+        };
         let id = self
             .launch_transaction
             .begin(self.pane_id.raw(), self.shell_prompt_generation());

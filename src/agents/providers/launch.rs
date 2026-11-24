@@ -60,7 +60,7 @@ pub(crate) use tokens::{parse_path_tokens, PathParseError};
 mod arguments;
 mod gateway;
 pub(crate) use arguments::{argument_positions, resumable_options, unstarted_options};
-pub(crate) use gateway::preflight_gateway;
+pub(crate) use gateway::{preflight_gateway, ARGON_BASE_URL};
 
 pub(crate) const fn provider_kind(provider: ProviderKind) -> &'static str {
     provider.label()

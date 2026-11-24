@@ -1670,3 +1670,61 @@ fn magpie_unreachable_gateway_rejects_native_restore_for_both_wrappers() {
         assert!(error.contains("magpie serve"), "{error}");
     }
 }
+
+#[tokio::test]
+async fn magpie_outage_preserves_the_verified_session_for_native_failure_projection() {
+    use super::{prepare_native_resume_for_test, AgentResumePlan, PendingAgentResumeCandidate};
+    use crate::agents::providers::launch::gateway_test_support::GatewayOverride;
+    use crate::agents::resume::catalog::{AgentSessionRef, PersistedAgentSession};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let _gateway = GatewayOverride::set(url.clone(), None);
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("magpie-stale-resume");
+    let pane = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane).unwrap().clone();
+    app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+    app.state.view.pane_infos = workspace.tabs[0].layout.panes(app.state.view.terminal_area);
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+
+    let make_session = |value| PersistedAgentSession {
+        source: "herdr:claude-argon".into(),
+        agent: "claude-argon".into(),
+        session_ref: AgentSessionRef::id(value).unwrap(),
+    };
+    let old = "00000000-0000-4000-8000-000000000001";
+    let verified = "00000000-0000-4000-8000-000000000002";
+    let plan = AgentResumePlan {
+        agent: "claude-argon".into(),
+        argv: vec!["claude-argon".into(), "--resume".into(), old.into()],
+        dedupe_key: "magpie".into(),
+    };
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("bus-r1-a2".into(), crate::agents::AgentKind::Claude);
+    terminal.set_persisted_agent_session(make_session(old));
+    let candidate = PendingAgentResumeCandidate {
+        pane_id: pane,
+        terminal_id,
+        cwd: std::env::temp_dir(),
+        plan: plan.clone(),
+        rows: 30,
+        cols: 100,
+    };
+    let prepared = super::prepare_corrected_resume_for_test(&plan, make_session(verified));
+    assert!(app.start_prepared_agent_resume(candidate, prepared));
+
+    let info = app.collect_agent_infos().pop().unwrap();
+    let attempt = info.native_resume.unwrap();
+    assert_eq!(attempt.session_id.as_deref(), Some(verified));
+    let error = attempt.error.as_deref().unwrap();
+    assert!(
+        error.contains(&url) && error.contains("magpie serve"),
+        "{error}"
+    );
+    assert!(!info.interactive_ready);
+    assert!(prepare_native_resume_for_test(&plan).is_err());
+}

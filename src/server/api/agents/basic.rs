@@ -98,6 +98,29 @@ impl App {
         self.handle_agent_start(id, params.start)
     }
 
+    pub(in crate::server::api) fn handle_agent_gateway_preflight(
+        &self,
+        id: String,
+        kind: &str,
+    ) -> String {
+        use crate::agents::providers::launch;
+        match launch::native_provider(kind) {
+            Some(provider) => match launch::preflight_gateway(provider) {
+                Ok(_) => encode_success(id, ResponseResult::Ok {}),
+                Err(message) => crate::server::api::errors::encode_error(
+                    id,
+                    "provider_gateway_unavailable",
+                    &message,
+                ),
+            },
+            None => crate::server::api::errors::encode_error(
+                id,
+                "unsupported_agent_kind",
+                "Unknown provider for gateway preflight",
+            ),
+        }
+    }
+
     pub(in crate::server::api) fn handle_agent_start(
         &mut self,
         id: String,

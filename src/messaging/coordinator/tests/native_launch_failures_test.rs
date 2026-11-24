@@ -180,7 +180,7 @@ fn launch_metrics_unsubmitted_recovery_preparation_failure_settles_a_failed_atte
     seed_launch(&mut worker, agent, u64::MAX);
     let saved_agent = worker.state.agent(agent).unwrap().clone();
     assert_eq!(saved_agent.launch_attempt_id, Some(1));
-    let result = worker.retry_unsubmitted_agent_start(&saved_agent, vec![]);
+    let result = worker.retry_unsubmitted_agent_start(&saved_agent, vec![], Ok(()));
     assert!(
         result
             .as_ref()

@@ -167,6 +167,9 @@ impl App {
             Method::AgentStartupSnapshot(params) => self.handle_agent_startup_snapshot(id, params),
             Method::AgentFocus(target) => self.handle_agent_focus(id, target),
             Method::AgentRename(params) => self.handle_agent_rename(id, params),
+            Method::AgentGatewayPreflight { kind } => {
+                self.handle_agent_gateway_preflight(id, &kind)
+            }
             Method::AgentStart(params) => self.handle_agent_start(id, params),
             Method::AgentStartIfIdentity(params) => self.handle_agent_start_if_identity(id, params),
             Method::AgentPrompt(_)

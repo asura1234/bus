@@ -90,6 +90,8 @@ pub enum Method {
     AgentRename(AgentRenameParams),
     #[serde(rename = "agent.focus")]
     AgentFocus(AgentTarget),
+    #[serde(rename = "agent.gateway_preflight")]
+    AgentGatewayPreflight { kind: String },
     #[serde(rename = "agent.start")]
     AgentStart(AgentStartParams),
     #[serde(rename = "agent.start_if_identity")]
@@ -201,6 +203,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentSendKeys(_) => "agent.send_keys",
         Method::AgentRename(_) => "agent.rename",
         Method::AgentFocus(_) => "agent.focus",
+        Method::AgentGatewayPreflight { .. } => "agent.gateway_preflight",
         Method::AgentStart(_) => "agent.start",
         Method::AgentStartIfIdentity(_) => "agent.start_if_identity",
         Method::AgentPrompt(_) => "agent.prompt",
