@@ -148,7 +148,10 @@ the wrapper remains held.
   A separate MASTER message is needed only for the cases above.
 
   Keep routine dialog approvals, worker hand-offs, and step-by-step details in
-  your work room. Terminal-only output does not count. *Why:* the developer
+  your work room. Terminal-only output does not count. When a work item that
+  results in an MR changes status, update the Agile Board via its CLI as
+  described in [Update the Agile Board](orchestrator-guide.md#update-the-agile-board).
+  *Why:* the developer
   follows the work from MASTER, so progress, questions and blockers must reach
   it; routine details there bury them, and the work room keeps them.
 - **Tag developer attention only when work waits on the developer.** Start

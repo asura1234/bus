@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agile Board</title>
+  <style>
+    :root {
+      --sidebar-width: 148px;
+      --col-width: 160px;
+      --col-gap: 8px;
+      --card-min-height: 138px;
+      --bg-page: #0b0f17;
+      --bg-surface: #111827;
+      --bg-sidebar: #141d2f;
+      --bg-elevated: #172033;
+      --bg-column: #0e1525;
+      --bg-card: #161f33;
+      --border-subtle: #1f2b42;
+      --border-strong: #2e3e5c;
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-blue: #38bdf8;
+      --col-todo: #94a3b8;
+      --col-blocked: #f43f5e;
+      --col-investigation: #a855f7;
+      --col-implementation: #3b82f6;
+      --col-testing: #f59e0b;
+      --col-review: #06b6d4;
+      --col-done: #10b981;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      margin: 0;
+      padding: 0;
+      background: var(--bg-page);
+      overflow: auto;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg-page);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.4;
+      overflow: visible;
+      min-height: 100vh;
+      width: 100%;
+      min-width: calc(var(--sidebar-width) + 7 * var(--col-width) + 7 * var(--col-gap) + 16px);
+    }
+
+    /* Frozen top band: keeps topbar + global 7-column header pinned at top for the entire page scroll */
+    .sticky-header-band {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      width: 100%;
+    }
+
+    /* Top bar: only the View selector and the Clear session history control */
+    .topbar {
+      position: sticky;
+      left: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 16px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      width: 100vw;
+      max-width: 100%;
+    }
+
+    .brand-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .control-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 4px 8px;
+    }
+
+    .control-group label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-secondary);
+    }
+
+    select {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-family: inherit;
+      outline: none;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 11px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+    }
+
+    .btn-danger {
+      background: rgba(244, 63, 94, 0.14);
+      color: #fda4af;
+      border-color: rgba(244, 63, 94, 0.4);
+    }
+
+    /* Double-confirmation popup for Clear session history */
+    .confirm-popup-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 300;
+      background: rgba(11, 15, 23, 0.75);
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .confirm-popup-overlay.visible {
+      display: flex;
+    }
+
+    .confirm-popup {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      padding: 16px 18px;
+      width: 340px;
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .confirm-popup-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 0;
+    }
+
+    .confirm-popup-text {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin: 0;
+      line-height: 1.45;
+    }
+
+    .confirm-popup-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    /* Global sticky column-name row: frozen top row + frozen top-left corner cell */
+    .global-columns-bar {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) repeat(7, minmax(var(--col-width), 1fr));
+      gap: var(--col-gap);
+      padding: 8px 16px 8px 0;
+      background: var(--bg-surface);
+      width: 100%;
+      align-items: stretch;
+    }
+
+    .sidebar-corner-header {
+      position: sticky;
+      left: 0;
+      z-index: 30;
+      width: var(--sidebar-width);
+      min-width: var(--sidebar-width);
+      max-width: var(--sidebar-width);
+      margin: -8px 0;
+      padding: 14px 12px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-secondary);
+    }
+
+    .column-header {
+      padding: 6px 8px;
+      background: var(--bg-column);
+      border: 1px solid var(--border-subtle);
+      border-bottom: 2px solid var(--border-subtle);
+      border-radius: 6px;
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      width: 100%;
+      min-width: var(--col-width);
+    }
+
+    .column-header[data-col="todo"] { border-bottom-color: var(--col-todo); color: var(--col-todo); }
+    .column-header[data-col="blocked"] {
+      background: rgba(244, 63, 94, 0.18);
+      border-color: rgba(244, 63, 94, 0.45);
+      border-bottom-color: var(--col-blocked);
+      color: #fecdd3;
+    }
+    .column-header[data-col="investigation"] { border-bottom-color: var(--col-investigation); color: #d8b4fe; }
+    .column-header[data-col="implementation"] { border-bottom-color: var(--col-implementation); color: #93c5fd; }
+    .column-header[data-col="testing"] { border-bottom-color: var(--col-testing); color: #fcd34d; }
+    .column-header[data-col="review"] { border-bottom-color: var(--col-review); color: #67e8f9; }
+    .column-header[data-col="done"] { border-bottom-color: var(--col-done); color: #6ee7b7; }
+
+    /* Main board area: stacked section rows with continuous sticky left sidebar rail + universal 7-column tracks */
+    .board-container {
+      padding: 0 16px 0 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      width: 100%;
+      min-height: calc(100vh - 84px);
+      background: linear-gradient(
+        to right,
+        var(--bg-sidebar) 0,
+        var(--bg-sidebar) calc(var(--sidebar-width) - 1px),
+        var(--border-strong) calc(var(--sidebar-width) - 1px),
+        var(--border-strong) var(--sidebar-width),
+        var(--bg-page) var(--sidebar-width)
+      );
+    }
+
+    /* Each section row aligns its sticky left room-name cell with the 7 universal column tracks */
+    .room-section {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) repeat(7, minmax(var(--col-width), 1fr));
+      column-gap: var(--col-gap);
+      row-gap: 0;
+      width: 100%;
+      align-items: stretch;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    /* Sticky left sidebar cell: continuous full-height rail with its own distinct background and no gaps */
+    .room-sidebar-cell {
+      position: sticky;
+      left: 0;
+      z-index: 20;
+      width: var(--sidebar-width);
+      min-width: var(--sidebar-width);
+      max-width: var(--sidebar-width);
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-strong);
+      border-radius: 0;
+      padding: 14px 12px;
+      display: flex;
+      align-items: flex-start;
+    }
+
+    .room-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .kanban-column {
+      background: var(--bg-column);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      margin: 10px 0;
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      min-width: var(--col-width);
+      height: auto;
+      container-type: inline-size;
+    }
+
+    /* Subtle translucent red tint overlay (蒙层) on the blocked column surface */
+    .kanban-column[data-col="blocked"] {
+      background: linear-gradient(rgba(244, 63, 94, 0.09), rgba(244, 63, 94, 0.09)), var(--bg-column);
+      border-color: rgba(244, 63, 94, 0.35);
+    }
+
+    .column-cards {
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1;
+      height: auto;
+    }
+
+    .empty-col {
+      margin: auto;
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 10px 4px;
+      text-align: center;
+    }
+
+    /* Near-square rounded-rectangle ticket card: width-proportional min-height (86cqi of column width)
+       with height: auto so longer descriptions grow the card and the MR link badge stays inside the border */
+    .ticket-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      padding: 8px 9px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 6px;
+      width: 100%;
+      min-height: 86cqi;
+      height: auto;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      cursor: default;
+    }
+
+    .ticket-card-body {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .ticket-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-primary);
+      line-height: 1.35;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .ticket-description {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .ticket-description p {
+      margin: 0;
+    }
+
+    .ticket-description a {
+      color: var(--accent-blue);
+      text-decoration: underline;
+    }
+
+    .ticket-description code {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+
+    .ticket-mr-row {
+      padding-top: 4px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      display: flex;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+    }
+
+    .mr-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      color: var(--accent-blue);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .mr-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="sticky-header-band">
+    <header class="topbar">
+      <h1 class="brand-title">Agile Board</h1>
+
+      <div class="controls">
+        <div class="control-group">
+          <label for="view-select">View</label>
+          <select id="view-select" aria-label="View">
+            <option value="session" selected>session</option>
+            <option value="week">week</option>
+            <option value="day">day</option>
+          </select>
+        </div>
+
+        <button type="button" class="btn btn-danger" id="clear-history-btn">
+          Clear session history
+        </button>
+      </div>
+    </header>
+
+    <div class="global-columns-bar" aria-label="Board columns">
+      <div class="sidebar-corner-header">Section</div>
+      <div class="column-header" data-col="todo">todo</div>
+      <div class="column-header" data-col="blocked">blocked</div>
+      <div class="column-header" data-col="investigation">investigation</div>
+      <div class="column-header" data-col="implementation">implementation</div>
+      <div class="column-header" data-col="testing">testing</div>
+      <div class="column-header" data-col="review">review</div>
+      <div class="column-header" data-col="done">done</div>
+    </div>
+  </div>
+
+  <!-- Double confirmation popups for Clear session history -->
+  <div class="confirm-popup-overlay" id="clear-confirm-step1" role="dialog" aria-modal="true" aria-labelledby="clear-step1-title">
+    <div class="confirm-popup">
+      <h2 class="confirm-popup-title" id="clear-step1-title">Clear session history? (Step 1 of 2)</h2>
+      <p class="confirm-popup-text">This action will remove all tickets and history events from the current session while keeping registered sections.</p>
+      <div class="confirm-popup-actions">
+        <button type="button" class="btn" id="cancel-step1-btn">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-step1-btn">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="confirm-popup-overlay" id="clear-confirm-step2" role="dialog" aria-modal="true" aria-labelledby="clear-step2-title">
+    <div class="confirm-popup">
+      <h2 class="confirm-popup-title" id="clear-step2-title">Final confirmation (Step 2 of 2)</h2>
+      <p class="confirm-popup-text">Are you sure you want to permanently clear all session tickets and history now?</p>
+      <div class="confirm-popup-actions">
+        <button type="button" class="btn" id="cancel-step2-btn">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-step2-btn">Permanently clear</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="board-container" id="board-container"></main>
+
+  <script>
+    const COLUMNS = [
+      { key: "todo", label: "todo" },
+      { key: "blocked", label: "blocked" },
+      { key: "investigation", label: "investigation" },
+      { key: "implementation", label: "implementation" },
+      { key: "testing", label: "testing" },
+      { key: "review", label: "review" },
+      { key: "done", label: "done" }
+    ];
+
+    let currentView = "session";
+    let latestPayload = null;
+
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function formatShortPull(url) {
+      if (!url) return "";
+      const m = String(url).match(/\/(?:pull|merge_requests)\/(\d+)/i);
+      if (m) return "MR #" + m[1];
+      return "MR / PR";
+    }
+
+    async function fetchBoard() {
+      try {
+        const res = await fetch(`/api/board?view=${encodeURIComponent(currentView)}`, {
+          cache: "no-store"
+        });
+        if (!res.ok) return;
+        latestPayload = await res.json();
+        renderAll(latestPayload);
+      } catch (_) {}
+    }
+
+    function renderAll(data) {
+      const container = document.getElementById("board-container");
+      const rooms = data.rooms || [];
+      const tickets = data.tickets || [];
+
+      if (rooms.length === 0) {
+        container.innerHTML = `<section class="room-section"><aside class="room-sidebar-cell"><h2 class="room-name">No sections</h2></aside></section>`;
+        return;
+      }
+
+      container.innerHTML = rooms.map(room => {
+        const roomTickets = tickets.filter(t => t.room_id === room.id);
+        const colsHtml = COLUMNS.map(col => {
+          const colTickets = roomTickets.filter(t => t.column === col.key);
+          const cardsHtml = colTickets.length === 0
+            ? `<div class="empty-col">—</div>`
+            : colTickets.map(t => renderTicketCard(t)).join("");
+
+          return `
+            <div class="kanban-column" data-col="${col.key}">
+              <div class="column-cards">${cardsHtml}</div>
+            </div>
+          `;
+        }).join("");
+
+        return `
+          <section class="room-section">
+            <aside class="room-sidebar-cell">
+              <h2 class="room-name">${escapeHtml(room.name)}</h2>
+            </aside>
+            ${colsHtml}
+          </section>
+        `;
+      }).join("");
+    }
+
+    function renderTicketCard(t) {
+      const descHtml = t.description_html || escapeHtml(t.description || "");
+      const mrHtml = t.mr_url
+        ? `<div class="ticket-mr-row">
+             <a class="mr-link" href="${escapeHtml(t.mr_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(formatShortPull(t.mr_url))} ↗</a>
+           </div>`
+        : "";
+
+      return `
+        <article class="ticket-card">
+          <div class="ticket-card-body">
+            <div class="ticket-title">${escapeHtml(t.title)}</div>
+            ${descHtml ? `<div class="ticket-description">${descHtml}</div>` : ""}
+          </div>
+          ${mrHtml}
+        </article>
+      `;
+    }
+
+    document.getElementById("view-select").addEventListener("change", (e) => {
+      currentView = e.target.value;
+      fetchBoard();
+    });
+
+    const clearBtn = document.getElementById("clear-history-btn");
+    const step1Overlay = document.getElementById("clear-confirm-step1");
+    const step2Overlay = document.getElementById("clear-confirm-step2");
+    const cancelStep1Btn = document.getElementById("cancel-step1-btn");
+    const confirmStep1Btn = document.getElementById("confirm-step1-btn");
+    const cancelStep2Btn = document.getElementById("cancel-step2-btn");
+    const confirmStep2Btn = document.getElementById("confirm-step2-btn");
+
+    clearBtn.addEventListener("click", () => {
+      step2Overlay.classList.remove("visible");
+      step1Overlay.classList.add("visible");
+    });
+
+    cancelStep1Btn.addEventListener("click", () => {
+      step1Overlay.classList.remove("visible");
+    });
+
+    confirmStep1Btn.addEventListener("click", () => {
+      step1Overlay.classList.remove("visible");
+      step2Overlay.classList.add("visible");
+    });
+
+    cancelStep2Btn.addEventListener("click", () => {
+      step2Overlay.classList.remove("visible");
+    });
+
+    confirmStep2Btn.addEventListener("click", async () => {
+      try {
+        const res = await fetch("/api/history/clear", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm: true })
+        });
+        if (res.ok) {
+          step2Overlay.classList.remove("visible");
+          await fetchBoard();
+        }
+      } catch (_) {}
+    });
+
+    fetchBoard();
+    setInterval(fetchBoard, 3000);
+  </script>
+</body>
+</html>

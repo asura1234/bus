@@ -577,7 +577,11 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     assert!(status_guide.contains(
         "[sitrep skill](https://github.com/asura1234/bus/blob/master/skills/sitrep/SKILL.md)"
     ));
+    assert!(status_guide.contains("### Update the Agile Board"));
+    assert!(status_guide.contains("Only work that results in an MR/PR is classified as a ticket"));
+    assert!(status_guide.contains("plugins/agile-board/GUIDE.md"));
     assert!(rules.contains("orchestrator-guide.md#report-status"));
+    assert!(rules.contains("orchestrator-guide.md#update-the-agile-board"));
     let guide = std::fs::read_to_string(root.join("workflow-create.md")).unwrap();
     assert_eq!(guide, WORKFLOW_CREATE);
     assert!(guide.starts_with("# workflow-create"), "{guide}");

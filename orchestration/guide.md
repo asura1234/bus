@@ -119,6 +119,41 @@ and the next action. Keep details and decisions in the workflow log. When the
 developer asks for status, use the [sitrep skill](https://github.com/asura1234/bus/blob/master/skills/sitrep/SKILL.md)
 (`skills/sitrep`, installed with `./run install-skills`); follow its format there.
 
+### Update the Agile Board
+
+Whenever a work item's status changes, update the Agile Board through its CLI
+(`plugins/agile-board`; see `plugins/agile-board/GUIDE.md` for full command and
+transition details). Only work that results in an MR/PR is classified as a
+ticket (plus an `--investigation-only` task that concludes without needing an
+MR); do not create tickets for routine chat, housekeeping or sub-steps inside an
+existing MR.
+
+Register your room once per board session, create one ticket per MR work item,
+and move or update it on every stage change:
+
+```sh
+agile-board --data-dir "$BOARD_DATA_DIR" room add --id "$room_id" --name "$room_name"
+agile-board --data-dir "$BOARD_DATA_DIR" ticket add \
+  --room "$room_name" \
+  --title "Short plain-text MR title" \
+  --description "One-sentence Markdown summary with [Feishu/spec links](https://...)." \
+  --column investigation
+agile-board --data-dir "$BOARD_DATA_DIR" ticket update T-1 --mr "https://github.com/OWNER/REPO/pull/N"
+agile-board --data-dir "$BOARD_DATA_DIR" ticket move T-1 --column implementation --note "Root cause confirmed"
+```
+
+Map each MR work item's status to the board's seven columns:
+
+| Status / phase | Board column | Allowed next columns |
+|---|---|---|
+| Deferred or held before kickoff | `todo` | `investigation`, `blocked` |
+| Waiting on a developer decision or external dependency | `blocked` | Any column (`todo`, `investigation`, `implementation`, `testing`, `review`, `done`) |
+| Root-cause analysis, enumeration or spike | `investigation` | `implementation`, `blocked` (and `done` only if created with `--investigation-only`) |
+| Coding or addressing review/test findings | `implementation` | `testing`, `blocked` |
+| Gate, unit/integration or E2E verification | `testing` | `review`, `implementation`, `blocked` |
+| Peer or bot code review | `review` | `done`, `implementation`, `blocked` |
+| MR merged (or `--investigation-only` concluded) | `done` | `blocked` |
+
 ## Open peer messaging
 
 Make direct peer messaging the normal path for each PR's implementation,
