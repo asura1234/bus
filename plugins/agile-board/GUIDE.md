@@ -43,6 +43,7 @@ A ticket represents a work item that results in a Merge Request / Pull Request (
 - Both Markdown links (`[Feishu buglist #4821](https://example.feishu.cn/wiki/wikcnBugList4821)`, `[Product Spec](https://example.com/docs/spec)`) and bare `https://...` or `http://...` URLs are rendered into safe `<a href="..." target="_blank" rel="noopener noreferrer">` links that open in a new tab.
 - Raw HTML inside `description` is escaped by the Rust `pulldown-cmark` sanitizer and never injected into the DOM. Non-HTTP(S) link schemes (such as `javascript:` or `data:`) are stripped to plain text.
 - The MR/PR link is stored separately via `--mr <URL>` and rendered as its own badge at the bottom of the card.
+- The badge shows `PR #N` for `github.com` pull links, and `MR #N` for Codeup `/change/N` and GitLab `/merge_requests/N` links. It shows `MR / PR` when the URL has no recognized change number.
 
 ---
 

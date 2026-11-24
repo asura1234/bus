@@ -516,13 +516,16 @@
 
     function formatShortPull(url) {
       if (!url) return "";
-      const m = String(url).match(/\/(?:pull|merge_requests)\/(\d+)/i);
-      if (!m) return "MR / PR";
+      let match = String(url).match(/\/(?:pull|merge_requests)\/(\d+)/i);
       let prefix = "MR";
       try {
-        if (new URL(url).hostname === "github.com") prefix = "PR";
+        const link = new URL(url);
+        if (link.hostname === "github.com") prefix = "PR";
+        if (link.hostname === "codeup.aliyun.com") {
+          match = link.pathname.match(/\/change\/(\d+)(?:\/|$)/i) || match;
+        }
       } catch (_) {}
-      return `${prefix} #${m[1]}`;
+      return match ? `${prefix} #${match[1]}` : "MR / PR";
     }
 
     async function fetchBoard() {

@@ -693,11 +693,12 @@ fn headless_page_labels_pull_requests_by_host() {
 const rooms = [{ id: 1, name: "Requests" }];
 const cases = [
   ["https://github.com/example/platform/pull/41?tab=files", "PR #41"],
+  ["https://codeup.aliyun.com/663dc7b313a39cc55c4cb5b8/mobile/libtv-app/change/1936", "MR #1936"],
   ["https://codeup.aliyun.com/example/platform/merge_requests/42", "MR #42"],
   ["https://gitlab.com/example/platform/-/merge_requests/43", "MR #43"],
   ["https://forge.example.com/example/platform/-/merge_requests/44", "MR #44"],
   ["https://github.com.example.com/example/platform/pull/45", "MR #45"],
-  ["https://example.com/changes/46", "MR / PR"]
+  ["https://example.com/change/46", "MR / PR"]
 ];
 const tickets = cases.map(([mr_url], index) => ({
   room_id: 1, column: "review", title: `Ticket ${index + 1}`, mr_url

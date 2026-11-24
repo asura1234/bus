@@ -29,7 +29,7 @@ agile-board --version
 - `description` is stored as raw Markdown text and rendered server-side via `pulldown-cmark` into `description_html`.
 - Raw HTML tags in `description` are escaped and never passed through.
 - `http://` and `https://` links (both `[label](url)` and bare URLs) render with `target="_blank" rel="noopener noreferrer"`.
-- `mr_url` (`--mr`) is stored and rendered as a separate field.
+- `mr_url` (`--mr`) is stored separately and rendered as a badge using the [MR/PR link format](GUIDE.md#description-markdown-and-link-format).
 
 ### Columns and Transition Matrix
 
