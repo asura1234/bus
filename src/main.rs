@@ -26,6 +26,15 @@ where
         .collect()
 }
 
+fn identity_json() -> String {
+    let providers = crate::agents::providers::SUPPORTED_PROVIDERS.map(|provider| provider.label());
+    serde_json::json!({
+        "sha": env!("BUS_BUILD_SHA"),
+        "providers": providers,
+    })
+    .to_string()
+}
+
 fn main() -> io::Result<()> {
     #[cfg(windows)]
     if let Some(status) = platform::fs::forward_cli_alias()? {
@@ -98,10 +107,7 @@ fn main() -> io::Result<()> {
         // One JSON line: embedded build SHA and the providers this binary can launch.
         Some("--identity") if raw_args.len() == 2 => {
             platform::begin_cli_output();
-            cli::help::write_stdout_line(format_args!(
-                "{}",
-                utils::restart_record::identity_json()
-            ));
+            cli::help::write_stdout_line(format_args!("{}", identity_json()));
             Ok(())
         }
         // Detached helper spawned by `bus restart` before the server is stopped.
@@ -129,6 +135,26 @@ mod live_bus_env;
 #[cfg(test)]
 mod tests {
     use super::args_as_utf8;
+
+    #[test]
+    fn identity_includes_every_supported_provider() {
+        let identity =
+            crate::utils::restart_record::parse_identity(&super::identity_json()).unwrap();
+        assert_eq!(
+            identity.providers,
+            [
+                "claude",
+                "claude-ds",
+                "claude-argon",
+                "claude-gpt",
+                "codex",
+                "cursor",
+                "grok",
+                "kimi",
+                "agy"
+            ]
+        );
+    }
 
     #[cfg(unix)]
     fn invalid_utf8_arg() -> std::ffi::OsString {
