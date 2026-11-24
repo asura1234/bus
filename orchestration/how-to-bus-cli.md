@@ -96,6 +96,24 @@ self-contained asks, optional Feishu replies and repeat asks. Agent posts to You
 and explicit @you/blocker markers alert the TUI; peer traffic saying merely
 “waiting on you” does not page the developer. Developer sends never notify.
 
+### Send as a bot
+
+Use a bot for a script that needs a named sender. Bots have no provider, terminal,
+turns or inbox. Names are trimmed, case-sensitive and unique across agents and bots.
+
+```sh
+bus bot add --room feature-work --name notifications
+bus send --room feature-work --as notifications --to worker --text 'Three new reports'
+bus bot list --json
+bus bot delete notifications
+```
+
+`--room` on `bot add` is optional. Removing a room drops its bots' membership.
+`bus state` lists bots separately. Use the bot name in `send --as` and choose
+live agents for `--to`. An exact bot name is refused as a recipient rather than
+expanded as an alias such as `all`. Message status and room history keep the
+bot name after deletion.
+
 ## Send work and wait for the reply
 ```sh
 room_id=$(bus room create feature-work | jq -r '.result.room_id')

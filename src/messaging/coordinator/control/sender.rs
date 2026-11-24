@@ -9,6 +9,39 @@ use serde_json::Value;
 const UNKNOWN_CALLER: &str = "Cannot determine the send caller; pass --as <your name or id>";
 
 impl Worker {
+    pub(super) fn explicit_message_author(
+        &self,
+        room: RoomId,
+        selector: &str,
+    ) -> Result<Author, String> {
+        if self.exact_agent(selector).is_none() {
+            if let Some(bot) = self.state.bot(selector) {
+                return Ok(Author::Bot(bot.name.clone()));
+            }
+        }
+        self.control_author(room, selector).map(Author::Agent)
+    }
+
+    pub(super) fn message_author(&mut self, room: RoomId, p: &Value) -> Result<Author, String> {
+        if let Some(selector) = p.get("as") {
+            let selector = selector
+                .as_str()
+                .ok_or("Author must be an agent name, agent ID or bot name")?;
+            return self.explicit_message_author(room, selector);
+        }
+        self.send_author(room, p)
+            .map(|author| author.map_or(Author::Developer, Author::Agent))
+    }
+
+    pub(super) fn sender_room(&self, author: &Author, conversation: RoomId) -> RoomId {
+        match author {
+            Author::Agent(id) => self.state.agent(*id).map(|agent| agent.room_id),
+            Author::Bot(name) => self.state.bot(name).and_then(|bot| bot.room_id),
+            Author::Developer | Author::Bus => None,
+        }
+        .unwrap_or(conversation)
+    }
+
     pub(super) fn send_author(
         &mut self,
         room: RoomId,

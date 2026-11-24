@@ -20,6 +20,8 @@ pub(crate) struct BusState {
     #[serde(deserialize_with = "deserialize_agents")]
     pub(super) agents: BTreeMap<AgentId, RoomAgent>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) bots: BTreeMap<String, super::bots::Bot>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) retired_agents: BTreeMap<AgentId, super::staffing::RetiredAgent>,
     pub(super) requests: super::request_map::RequestMap,
     /// Recovery floor for transient routing metadata; old audit records remain readable.
@@ -143,6 +145,7 @@ impl BusState {
         if self.next_id != previous.next_id
             || self.launch_attempts != previous.launch_attempts
             || self.retired_agents != previous.retired_agents
+            || self.bots != previous.bots
             || self.rooms != previous.rooms
             || self.routing_before_ms != previous.routing_before_ms
             || self.requests != previous.requests
@@ -187,6 +190,7 @@ impl BusState {
             launch_attempts: Arc::default(),
             rooms: BTreeMap::new(),
             agents: BTreeMap::new(),
+            bots: BTreeMap::new(),
             retired_agents: BTreeMap::new(),
             requests: Default::default(),
             routing_before_ms: 0,

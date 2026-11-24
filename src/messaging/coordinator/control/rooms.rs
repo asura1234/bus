@@ -120,7 +120,7 @@ impl Worker {
         let next_before = (skip > 0)
             .then(|| messages.keys().nth(skip).copied())
             .flatten();
-        let mut result = json!({"room_id":room,"room_name":self.state.history_room_name(room),"deleted":self.state.room(room).is_none(),"messages":messages.iter().skip(skip).map(|(id,(prompt,delivered))|json!({"prompt":prompt,"author_name":match &prompt.author { crate::messaging::model::Author::Agent(agent) => self.state.agent_label(*agent), crate::messaging::model::Author::Developer => "You".into(), crate::messaging::model::Author::Bus => "bus".into() },"recipient_names":prompt.recipient_ids.iter().map(|id| self.state.agent_label(*id)).collect::<Vec<_>>(),"delivery":delivered.then(|| self.history_delivery(*id, now, deliveries.get(id).cloned().unwrap_or_default())).flatten()})).collect::<Vec<_>>()});
+        let mut result = json!({"room_id":room,"room_name":self.state.history_room_name(room),"deleted":self.state.room(room).is_none(),"messages":messages.iter().skip(skip).map(|(id,(prompt,delivered))|json!({"prompt":prompt,"author_name":self.state.author_label(&prompt.author),"recipient_names":prompt.recipient_ids.iter().map(|id| self.state.agent_label(*id)).collect::<Vec<_>>(),"delivery":delivered.then(|| self.history_delivery(*id, now, deliveries.get(id).cloned().unwrap_or_default())).flatten()})).collect::<Vec<_>>()});
         if limit.is_some() {
             result["has_more"] = json!(skip > 0);
             result["next_before"] = json!(next_before);
@@ -143,7 +143,7 @@ impl Worker {
         let hidden_reply_reason = match requests.first().map(|request| &request.prompt.author) {
             Some(Author::Agent(_)) => "requester_reply",
             Some(Author::Developer) => "shared_reply",
-            Some(Author::Bus) | None => "internal_reply",
+            Some(Author::Bot(_) | Author::Bus) | None => "internal_reply",
         };
         let mut delivery = self.control_message_from(message, now, requests).ok()?;
         for request in delivery.get_mut("requests")?.as_array_mut()? {

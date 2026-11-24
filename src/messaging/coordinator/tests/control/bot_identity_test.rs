@@ -67,6 +67,7 @@ fn bot_identity_survives_restart_and_keeps_message_attribution_after_delete() {
         json!({"message":id.to_string()}),
     );
     assert!(status.ok, "{status:?}");
+    assert_eq!(status.result["author_name"], "inbox-watcher");
     assert_eq!(status.result["prompt"], row["prompt"]);
     let delivered = worker.state.render_request_payload(request).unwrap();
     assert_eq!(
@@ -76,6 +77,26 @@ fn bot_identity_survives_restart_and_keeps_message_attribution_after_delete() {
             room.0
         ),
     );
+    let mut state = worker.state.clone();
+    let finished_at = crate::messaging::storage::io::now_ms();
+    state.finish_for_test(request, "Noted", finished_at);
+    assert!(state.archive(finished_at + crate::messaging::model::ARCHIVE_AFTER_MS + 1));
+    worker.save(state).unwrap();
+    drop(worker);
+
+    let mut worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
+    assert!(worker.state.history().items().any(|item| {
+        matches!(item, crate::messaging::model::Archived::Request(row) if row.id == request)
+    }));
+    let archived = call(
+        &mut worker,
+        "archived-status",
+        "message.status",
+        json!({"message":id.to_string()}),
+    );
+    assert!(archived.ok, "{archived:?}");
+    assert_eq!(archived.result["author_name"], "inbox-watcher");
+    assert_eq!(archived.result["prompt"], row["prompt"]);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -135,6 +156,19 @@ fn bot_identity_cannot_receive_or_enter_the_agent_lifecycle() {
     let requests = worker.state.requests().collect::<Vec<_>>();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].agent_id, agent);
+
+    let alias_bot = call(&mut worker, "alias-bot", "bot.add", json!({"name":"all"}));
+    assert!(alias_bot.ok, "{alias_bot:?}");
+    let before = worker.state.clone();
+    let refused = call(
+        &mut worker,
+        "alias-target",
+        "message.send",
+        json!({"room":"test","to":["all"],"text":"Do not broadcast"}),
+    );
+    assert!(!refused.ok, "{refused:?}");
+    assert!(error_message(&refused).contains("cannot receive"));
+    assert_eq!(worker.state, before);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

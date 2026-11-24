@@ -172,7 +172,7 @@ fn insert_prompt<'a>(
             Some(origin) => (origin.agent_name.as_str(), Some(origin.agent_id), false),
             None => return,
         },
-        Author::Developer => return,
+        Author::Developer | Author::Bot(_) => return,
     };
     messages.insert(
         Key::Prompt(prompt.id),

@@ -30,9 +30,13 @@ pub(super) fn decorate(command: Command, path: &str, dev: bool) -> Command {
             } else {
                 arg
             };
+            let help = match (path, id.as_str()) {
+                ("send", "as") => "Author agent name or ID, or bot name for an ordinary send",
+                _ => argument_help(&id),
+            };
             match details::default_value(path, &id, &arg) {
-                Some(default) => arg.help(format!("{} [{default}]", argument_help(&id))),
-                None => arg.help(argument_help(&id)),
+                Some(default) => arg.help(format!("{help} [{default}]")),
+                None => arg.help(help),
             }
         })
     });
@@ -53,7 +57,8 @@ fn argument_help(id: &str) -> &'static str {
         "app-id" => "Expected Feishu application ID for the trusted bridge sink",
         "room" => "Room name or ID (master selects MASTER)",
         "agent" => "Agent name or ID",
-        "name" => "Name to create or assign",
+        "name" => "Identity name",
+        "json" => "Return the JSON control response (also the default)",
         "provider" => "Provider used to launch the agent",
         "pwd" => "Project working directory for the agent",
         "args" => "Additional provider launch arguments as one string",
@@ -96,7 +101,7 @@ fn argument_help(id: &str) -> &'static str {
 fn description(path: &str) -> (&'static str, &'static str) {
     match path {
         "" => ("Coordinate coding agents in terminal rooms", "Example: bus agent list"),
-        "state" => ("Inspect rooms, agents, and current activity", "Example: bus state"),
+        "state" => ("Inspect rooms, agents, bots, and current activity", "Example: bus state"),
         "feishu" => ("Accept authenticated replies from the optional Feishu bridge", "Example: bus feishu ingest --help"),
         "feishu ingest" => ("Durably ingest one bridge message from JSON stdin", "Example: bus feishu ingest --instance /absolute/bus-root --app-id cli_example"),
         "quit" => ("Quit the running Bus", "Example: bus --dev quit"),
@@ -118,6 +123,10 @@ fn description(path: &str) -> (&'static str, &'static str) {
         "room rename" => ("Rename a work room", "Example: bus room rename feature-work implementation"),
         "room delete" => ("Delete a room and its orchestrator", "Example: bus room delete feature-work --confirm"),
         "agent" => ("Launch, inspect, and manage agents", "Example: bus agent list"),
+        "bot" => ("Manage sender-only bot identities", "Example: bus bot list"),
+        "bot add" => ("Register a named bot", "Example: bus bot add --room feature-work --name notifications"),
+        "bot list" => ("List bot names and room memberships", "Example: bus bot list --json"),
+        "bot delete" => ("Remove a bot identity", "Example: bus bot delete notifications"),
         "agent add" => ("Launch a named agent in a room", "Example: bus agent add --room feature-work --name worker --provider codex --pwd /path/to/project"),
         "agent list" => ("List current agent names, IDs, and rooms", "Example: bus agent list --room feature-work"),
         "agent read" => ("Read an agent's terminal", "Example: bus agent read worker --source recent --lines 80\n         bus agent read worker --source visible"),

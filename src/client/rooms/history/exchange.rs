@@ -426,11 +426,7 @@ fn blank_row(anchor: RowAnchor) -> Line {
 }
 
 fn participant_label(state: &BusState, participant: &Author) -> String {
-    match participant {
-        Author::Developer => "You".into(),
-        Author::Bus => crate::messaging::model::BUS_SENDER.into(),
-        Author::Agent(id) => state.agent_label(*id),
-    }
+    state.author_label(participant)
 }
 
 fn link_scope(state: &BusState, author: &Author) -> LinkScope {
@@ -444,7 +440,7 @@ fn link_scope(state: &BusState, author: &Author) -> LinkScope {
                     .and_then(|agent| agent.cwd.as_deref())
             })
             .map(Arc::from),
-        Author::Developer | Author::Bus => None,
+        Author::Developer | Author::Bus | Author::Bot(_) => None,
     };
     LinkScope {
         cwd,
@@ -457,6 +453,7 @@ fn participant_tone(participant: &Author) -> Tone {
         Author::Agent(id) => Tone::Agent(*id),
         Author::Developer => Tone::You,
         Author::Bus => Tone::Bus,
+        Author::Bot(_) => Tone::Text,
     }
 }
 

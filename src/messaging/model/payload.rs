@@ -119,17 +119,16 @@ impl BusState {
                         replace,
                     )
                 };
-                if replace_identity {
-                    text = text
-                        .split_once('\n')
-                        .map_or(String::new(), |(_, body)| body.to_owned());
-                }
                 let marker = format!("[Bus message {message_id} from {from}{recipients}]");
-                text = if text.is_empty() {
-                    format!("{header}\n{marker}")
-                } else {
-                    format!("{header}\n{marker}\n{text}")
-                };
+                text = named_payload(&text, &header, &marker, replace_identity);
+            } else if let Author::Bot(name) = &author {
+                let header = format!("{name}:");
+                let marker = format!(
+                    "[Bus message {message_id} from {name} (room {}){recipients}]",
+                    request.room_id.0
+                );
+                let replace_identity = text.lines().next().unwrap_or_default().trim() == header;
+                text = named_payload(&text, &header, &marker, replace_identity);
             } else {
                 let marker = format!(
                     "[Bus message {message_id} from you (room {}){recipients}]",
@@ -144,6 +143,19 @@ impl BusState {
         }
         self.requests.get_mut(&id)?.submitted_payload = Some(text.clone());
         Some(text)
+    }
+}
+
+fn named_payload(text: &str, header: &str, marker: &str, replace_identity: bool) -> String {
+    let body = if replace_identity {
+        text.split_once('\n').map_or("", |(_, body)| body)
+    } else {
+        text
+    };
+    if body.is_empty() {
+        format!("{header}\n{marker}")
+    } else {
+        format!("{header}\n{marker}\n{body}")
     }
 }
 
