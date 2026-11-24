@@ -223,21 +223,23 @@ retrieve the retained outcome. --confirm is required (default false)."#;
 
 const AGENT_ADD: &str = r#"Launch a worker in a work room, or an orchestrator in MASTER. Current names are
 case-sensitive, trimmed and unique session-wide; a fully deleted name is reusable.
-Providers: claude, claude-ds, codex, cursor, grok, kimi, agy (agy is worker-only). --pwd is the project directory; --args is one
+Providers: claude, claude-ds, claude-gpt, codex, cursor, grok, kimi, agy (agy is worker-only). --pwd is the project directory; --args is one
 provider-argument string. Bus disables startup updates on launches/resumes;
 explicit Claude updater environment settings take precedence.
 Result: {agent_id:NUMBER,stage:"launching"}; launch success is not task completion.
 Errors: command_failed carries setup/provider/validation diagnostics. Inspect the
 reported project hook path before using --consent-hooks, or setup-confirm for an
-existing pending agent. Missing provider binaries retain saved agents/tasks; fix
-the installation and use agent resume --room ROOM. Never blindly duplicate add.
-A missing provider command leaves the agent Unavailable and logs the binary
-with room/provider context; affected agents and tasks stay saved.
+existing pending agent. If add is refused because the executable is missing,
+install it on PATH and retry add. If add already returned an agent ID, follow
+the recorded startup diagnostic. Use agent resume --room ROOM for a saved
+session or a retryable unsubmitted launch. Other sessionless failures can
+require recreating the agent.
 
 MASTER requires --orchestrates ROOM (one orchestrator per work room, binding for
 life); --orchestrates and custom system prompts are MASTER-only. Claude Code,
-Codex, Cursor, Grok and Kimi can orchestrate. Codex cannot wake on background
-command completion; use foreground bounded waits or ordinary worker messages.
+Claude DS, Claude GPT, Codex, Cursor, Grok and Kimi can orchestrate. Codex cannot
+wake on background command completion; use foreground bounded waits or ordinary
+worker messages.
 Default prompt is built in (orchestration/prompt.md); --system-prompt TEXT or
 --system-prompt-file PATH replaces it (mutually exclusive). Bus fills {{ROOM_NAME}},
 {{ROOM_ID}}, {{AGENT_NAME}}, {{DOCS}} (the session's <BUS_DATA_DIR>/docs/) and

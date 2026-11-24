@@ -179,6 +179,7 @@ impl BusUi {
             cwd,
             args,
             field,
+            provider_cursor,
             orchestrates,
             ..
         } = form
@@ -188,7 +189,12 @@ impl BusUi {
         let x = main.x + 3;
         let width = main.width.saturating_sub(6);
         let mut y = 3;
-        let gap = agent_form_gap(main, form);
+        let choices = if *field == 1 {
+            super::super::forms::provider_choices(orchestrates.is_some())
+        } else {
+            Vec::new()
+        };
+        let gap = agent_form_gap(main, form, choices.len() as u16);
         for (index, label, editor) in [
             (0, "Name", Some(name)),
             (1, "Agent", None),
@@ -219,8 +225,16 @@ impl BusUi {
                     false,
                 );
             }
-            if index == 1 && *field == 1 {
-                y += super::super::forms::provider_choices(orchestrates.is_some()).len() as u16;
+            if index == 1 {
+                for &kind in &choices {
+                    y += 1;
+                    view.overlay_row(
+                        Rect::new(x, y, width, 1),
+                        provider(kind).to_owned(),
+                        Some(Action::Provider(kind)),
+                        *provider_cursor == kind,
+                    );
+                }
             }
             y += gap;
         }
@@ -297,7 +311,10 @@ impl BusUi {
                 Some(Action::Field(index)),
                 *field == index,
             );
-            y += height + 1;
+            y += height;
+            if y + 1 < main.bottom() {
+                y += 1;
+            }
         }
 
         y
@@ -360,28 +377,6 @@ impl BusUi {
                 index == self.suggestions.selected,
                 true,
             );
-        }
-        if let Form::Agent {
-            provider_cursor,
-            field: 1,
-            orchestrates,
-            ..
-        } = form
-        {
-            // Below the Agent field's value row.
-            let top = 6 + agent_form_gap(main, form);
-            for (index, kind) in super::super::forms::provider_choices(orchestrates.is_some())
-                .iter()
-                .copied()
-                .enumerate()
-            {
-                view.overlay_row(
-                    Rect::new(x, top + index as u16, width, 1),
-                    provider(kind).to_owned(),
-                    Some(Action::Provider(kind)),
-                    *provider_cursor == kind,
-                );
-            }
         }
     }
 }

@@ -38,7 +38,7 @@ fn launch_metrics_data_route_counts_every_attempt_and_keeps_failure_evidence() {
         data["all"]["rates"]["launch_success"],
         json!({"numerator":3,"denominator":5,"percent":60.0})
     );
-    assert_eq!(data["providers"].as_object().unwrap().len(), 7);
+    assert_eq!(data["providers"].as_object().unwrap().len(), 8);
     assert_eq!(data["providers"]["claude"]["counts"]["usable"], 2);
     assert_eq!(data["providers"]["claude-ds"]["counts"]["attempts"], 0);
     assert_eq!(data["providers"]["agy"]["counts"]["attempts"], 0);

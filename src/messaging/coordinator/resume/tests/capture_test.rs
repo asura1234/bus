@@ -274,7 +274,7 @@ impl Fixture {
         std::fs::create_dir_all(&project).unwrap();
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        for name in ["codex", "claude", "cursor-agent"] {
+        for name in ["codex", "claude", "claude-gpt", "cursor-agent"] {
             let path = bin.join(name);
             std::fs::write(&path, "fixture executable").unwrap();
             #[cfg(unix)]
@@ -358,7 +358,7 @@ impl Fixture {
             | crate::agents::providers::ProviderKind::Agy => panic!(
                 "This fixture covers the original providers; use dedicated Grok provider tests"
             ),
-            Provider::ClaudeCode | Provider::ClaudeDs => self
+            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => self
                 .root
                 .join("callbacks/owned-launch/claude-settings.json"),
             Provider::Codex => self.project.join(".codex/hooks.json"),
@@ -375,7 +375,7 @@ impl Fixture {
             | crate::agents::providers::ProviderKind::Agy => panic!(
                 "This fixture covers the original providers; use dedicated Grok provider tests"
             ),
-            Provider::ClaudeCode | Provider::ClaudeDs => (
+            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => (
                 "claude-hook",
                 &["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"],
             ),
@@ -774,7 +774,7 @@ fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan
                 | crate::agents::providers::ProviderKind::Agy => panic!(
                     "This fixture covers the original providers; use dedicated Grok provider tests"
                 ),
-                Provider::ClaudeCode | Provider::ClaudeDs => vec![
+                Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => vec![
                     "--settings".to_owned(),
                     fixture.hook_path().to_string_lossy().into_owned(),
                 ],
@@ -1266,7 +1266,7 @@ fn started_resume_keeps_options_after_prompts_and_leaves_unknown_arity_untouched
                 panic!("This fixture covers the original providers; use dedicated provider tests")
             }
             Provider::Codex => crate::agents::providers::launch::runtime_args(Provider::Codex),
-            Provider::ClaudeCode | Provider::ClaudeDs => vec![
+            Provider::ClaudeCode | Provider::ClaudeDs | Provider::ClaudeGpt => vec![
                 "--settings".into(),
                 fixture.hook_path().to_string_lossy().into_owned(),
             ],
@@ -1440,7 +1440,7 @@ fn codex_resume_environment_opts_into_the_native_runtime() {
 
 #[test]
 fn startup_timeout_sessionless_capture_retains_provider_ownership() {
-    for provider in [Provider::ClaudeCode, Provider::Cursor] {
+    for provider in [Provider::ClaudeCode, Provider::ClaudeGpt, Provider::Cursor] {
         let mut fixture = Fixture::new(provider);
         let mut identity = fixture
             .state

@@ -749,6 +749,11 @@ turn did not survive the relaunch.
 
 ## Testing lessons
 
+- **2026-11-23 — Claude GPT:** Fresh Claude Code configuration can show theme,
+  gateway-key and security screens before project trust. After a trust chooser
+  reports `selection_pending`, observe again before submitting any key. The
+  navigation key may already have moved focus to the requested option.
+
 The dated observations below include failures of the retired dialog parser.
 They are historical diagnoses; their action rules use the current shared
 `agent observe` / `agent press` route. A former parsed `dialog` result is not a

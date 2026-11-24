@@ -1,6 +1,9 @@
 use super::launch_metrics_tests::{ledger, seed_launch};
 use super::*;
+use crate::agents::providers::{hook_json, launch};
+use crate::messaging::identity;
 use crate::messaging::model::{AgentStartup, LaunchOutcome, StartupRecovery};
+use std::sync::{Arc, Mutex};
 
 struct ResumeNative {
     state_path: PathBuf,
@@ -17,7 +20,18 @@ impl ResumeNative {
             .unwrap()
             .unwrap();
         let a = s.agent(self.agent).unwrap();
-        let mut i = native_info(self.pane, "codex", "session");
+        let mut i = native_info(
+            self.pane,
+            if a.provider.uses_claude_harness() {
+                "claude"
+            } else {
+                a.provider.label()
+            },
+            a.runtime_identity
+                .session_id
+                .as_deref()
+                .unwrap_or("session"),
+        );
         i.name = Some(crate::messaging::identity::managed_name(a.room_id, a.id));
         i.terminal_id = self.terminal.into();
         i.native_ready = ready;
@@ -29,7 +43,7 @@ impl ResumeNative {
         };
         i
     }
-    fn verify_before_input(&mut self) {
+    fn verify_before_input(&mut self, start: &schema::AgentStartParams) {
         assert!(
             !self.started,
             "one accepted attempt must not replay native input"
@@ -41,6 +55,24 @@ impl ResumeNative {
         let a = s
             .current_launch_attempt(self.agent)
             .expect("attempt durable before resume input");
+        let agent = s.agent(self.agent).unwrap();
+        if agent.provider == Provider::ClaudeGpt {
+            assert_eq!(start.kind, "claude-gpt");
+            let executable = Path::new(start.executable.as_deref().unwrap());
+            assert!(executable.is_absolute());
+            assert_eq!(executable.file_name().unwrap(), "claude-gpt");
+            if !self.recovery {
+                assert_eq!(
+                    start
+                        .args
+                        .iter()
+                        .take(2)
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    ["--resume", CLAUDE_GPT_SESSION]
+                );
+            }
+        }
         assert_eq!(s.launch_attempts().count(), 2);
         assert_eq!(a.outcome, LaunchOutcome::Pending);
         assert_eq!(a.terminal_id.as_deref(), Some(self.terminal));
@@ -77,27 +109,99 @@ impl Transport for ResumeNative {
                 root_pane:serde_json::from_value(json!({"pane_id":self.pane,"terminal_id":self.terminal,"workspace_id":"w1","tab_id":"t1","focused":false,"agent_status":"unknown","revision":1})).unwrap(),
             },
             Method::PaneGet(_)=>ResponseResult::PaneInfo {pane:serde_json::from_value(json!({"pane_id":self.pane,"terminal_id":self.terminal,"workspace_id":"w1","tab_id":"t1","focused":false,"agent_status":"unknown","revision":1,"agent_process_exited":false})).unwrap()},
-            Method::AgentStart(_)|Method::AgentStartIfIdentity(_)=>{
-                self.verify_before_input();
+            Method::AgentStart(start)
+            | Method::AgentStartIfIdentity(schema::AgentStartIfIdentityParams { start, .. }) => {
+                self.verify_before_input(&start);
                 ResponseResult::AgentStarted {agent:self.info(true),argv:vec!["codex".into()]}
             }
             _=>ResponseResult::Ok{},
         })
     }
 }
+const CLAUDE_GPT_SESSION: &str = "00000000-0000-4000-8000-000000000001";
+
+struct ClaudeGptResumeNative {
+    native: ResumeNative,
+    reports: Arc<Mutex<Vec<schema::PaneReportAgentSessionParams>>>,
+}
+
+impl Transport for ClaudeGptResumeNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if let Method::PaneReportAgentSession(report) = method {
+            self.reports.lock().unwrap().push(report);
+            Ok(ResponseResult::Ok {})
+        } else {
+            self.native.request(method)
+        }
+    }
+}
+
+#[test]
+fn claude_gpt_explicit_recovery_keeps_the_wrapper_and_saved_session() {
+    let _providers = provider_binaries();
+    for recovery in [false, true] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeGpt, vec![]);
+        let mut state = worker.state.clone();
+        let mut saved_identity = state.agent(agent).unwrap().runtime_identity.clone();
+        saved_identity.session_id = Some(CLAUDE_GPT_SESSION.into());
+        state
+            .set_agent_runtime_identity(agent, saved_identity)
+            .unwrap();
+        worker.save(state).unwrap();
+        prepare_resume(
+            &mut worker,
+            agent,
+            recovery.then_some(StartupRecovery::Unsubmitted { args: vec![] }),
+        );
+        let pane = if recovery { "pane" } else { "new-pane" };
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        worker.transport = Box::new(ClaudeGptResumeNative {
+            native: ResumeNative {
+                state_path: dir.join("state.json"),
+                agent,
+                terminal: if recovery { "terminal" } else { "new-terminal" },
+                pane,
+                started: false,
+                recovery,
+            },
+            reports: Arc::clone(&reports),
+        });
+        let result = worker.resume_room(room).unwrap();
+        assert_eq!(result["agents"][0]["outcome"], "resuming", "{result}");
+        let reports = reports.lock().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].pane_id, pane);
+        assert_eq!(reports[0].source, "herdr:claude-gpt");
+        assert_eq!(reports[0].agent, "claude-gpt");
+        assert_eq!(
+            reports[0].agent_session_id.as_deref(),
+            Some(CLAUDE_GPT_SESSION)
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
 fn prepare_resume(worker: &mut Worker, agent: AgentId, recovery: Option<StartupRecovery>) {
     seed_launch(worker, agent, u64::MAX);
     let mut state = worker.state.clone();
+    let saved = state.agent(agent).unwrap();
+    let provider = saved.provider;
     if recovery.is_none() {
-        let hooks = worker.data_dir.join(".codex/hooks.json");
-        let document = crate::agents::providers::hook_json::merge_hooks(
-            json!({}),
-            crate::agents::providers::hook_json::HookContract::for_provider(Provider::Codex),
+        let hooks = if provider.uses_claude_harness() {
+            worker
+                .data_dir
+                .join("callbacks")
+                .join(saved.runtime_identity.launch_id.as_deref().unwrap())
+                .join("claude-settings.json")
+        } else {
+            worker.data_dir.join(".codex/hooks.json")
+        };
+        hook_json::install_hooks(
+            &hooks,
+            hook_json::HookContract::for_provider(identity::provider_kind(provider)),
             &std::env::current_exe().unwrap(),
         )
         .unwrap();
-        std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
-        std::fs::write(hooks, serde_json::to_vec(&document).unwrap()).unwrap();
         super::super::launch_metrics::settle_current(
             &mut state,
             agent,
@@ -113,7 +217,7 @@ fn prepare_resume(worker: &mut Worker, agent: AgentId, recovery: Option<StartupR
             .set_agent_startup(
                 agent,
                 Some(AgentStartup {
-                    command: "codex".into(),
+                    command: launch::executable(provider).into(),
                     started_at_ms: 1,
                     reported: true,
                     process_observed: false,

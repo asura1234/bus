@@ -73,11 +73,12 @@ impl Form {
 }
 
 /// The providers the Add agent form offers, preserving each form's default.
-pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
-    if orchestrator {
+pub(super) fn provider_choices(orchestrator: bool) -> Vec<Provider> {
+    let choices: &[Provider] = if orchestrator {
         &[
             Provider::ClaudeCode,
             Provider::ClaudeDs,
+            Provider::ClaudeGpt,
             Provider::Codex,
             Provider::Cursor,
             Provider::Grok,
@@ -88,12 +89,19 @@ pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
             Provider::Codex,
             Provider::ClaudeCode,
             Provider::ClaudeDs,
+            Provider::ClaudeGpt,
             Provider::Cursor,
             Provider::Grok,
             Provider::Kimi,
             Provider::Agy,
         ]
-    }
+    };
+    let has_claude_gpt = crate::agents::providers::launch::binary_available(Provider::ClaudeGpt);
+    choices
+        .iter()
+        .copied()
+        .filter(|choice| *choice != Provider::ClaudeGpt || has_claude_gpt)
+        .collect()
 }
 
 /// The MASTER agent form's room choice; `None` only while no work room is free,
