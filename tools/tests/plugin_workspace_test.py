@@ -1,10 +1,10 @@
-"""Guard the Cargo-level isolation of the vendored plugin.
+"""Guard the Cargo-level isolation of the vendored plugins.
 
-plugins/feishu-bridge is an independent crate with its own Cargo.toml and
-Cargo.lock. It must never become a workspace member or a declared dependency
-of the bus package, so Cargo cannot link plugin code into the bus build.
-This covers Cargo declarations only; non-Cargo embedding (``include!``,
-``#[path]``) is outside its scope.
+plugins/feishu-bridge and plugins/agile-board are independent crates with their
+own Cargo.toml and Cargo.lock. They must never become workspace members or
+declared dependencies of the bus package, so Cargo cannot link plugin code into
+the bus build. This covers Cargo declarations only; non-Cargo embedding
+(``include!``, ``#[path]``) is outside its scope.
 """
 from __future__ import annotations
 
@@ -15,8 +15,10 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PLUGIN_PACKAGE = "feishu-bridge"
-PLUGIN_DIR = "plugins/feishu-bridge"
+PLUGINS = (
+    ("feishu-bridge", "plugins/feishu-bridge"),
+    ("agile-board", "plugins/agile-board"),
+)
 DEPENDENCY_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 
 
@@ -48,11 +50,12 @@ class PluginWorkspaceTest(unittest.TestCase):
         manifest = tomllib.loads((REPO / "Cargo.toml").read_text(encoding="utf-8"))
         for table in dependency_tables(manifest):
             for name, spec in table.items():
-                self.assertNotEqual(name, PLUGIN_PACKAGE)
-                path = spec.get("path") if isinstance(spec, dict) else None
-                if path:
-                    normalized = str(path).replace("\\", "/")
-                    self.assertNotIn(PLUGIN_DIR, normalized)
+                for plugin_package, plugin_dir in PLUGINS:
+                    self.assertNotEqual(name, plugin_package)
+                    path = spec.get("path") if isinstance(spec, dict) else None
+                    if path:
+                        normalized = str(path).replace("\\", "/")
+                        self.assertNotIn(plugin_dir, normalized)
 
 
 if __name__ == "__main__":
