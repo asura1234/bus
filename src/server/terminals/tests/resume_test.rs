@@ -1645,3 +1645,28 @@ fn startup_timeout_ends_launching_and_restores_grok_short_options() {
         "the prior attempt timed out before restart"
     );
 }
+
+#[test]
+fn magpie_unreachable_gateway_rejects_native_restore_for_both_wrappers() {
+    use super::{AgentResumePlan, LaunchExtras, PreparedResume};
+    use crate::agents::providers::launch::gateway_test_support::GatewayOverride;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let _gateway = GatewayOverride::set(url.clone(), None);
+    for agent in ["claude-argon", "claude-gpt"] {
+        let plan = AgentResumePlan {
+            agent: agent.into(),
+            argv: vec![agent.into()],
+            dedupe_key: agent.into(),
+        };
+        let error = match PreparedResume::new(&plan, LaunchExtras::default()) {
+            Ok(_) => panic!("{agent} prepared a native resume with no Magpie listener"),
+            Err(error) => error,
+        };
+        assert!(error.contains("Magpie"), "{error}");
+        assert!(error.contains(&url), "{error}");
+        assert!(error.contains("magpie serve"), "{error}");
+    }
+}

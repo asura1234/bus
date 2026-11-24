@@ -162,6 +162,9 @@ impl PreparedResume {
             })
             .transpose()?;
         let plan = corrected_plan.as_ref().unwrap_or(plan);
+        if let Some(provider) = crate::agents::providers::launch::native_provider(&plan.agent) {
+            crate::agents::providers::launch::preflight_gateway(provider)?;
+        }
         let provider_argv = matches!(plan.agent.as_str(), "grok" | "kimi")
             .then(|| resume_argv(plan, &extras))
             .transpose()?;

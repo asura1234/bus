@@ -61,3 +61,9 @@ private writable directory and export `CLAUDE_CODE_TMPDIR` to that path in
 the wrapper. [Claude Code environment variables](https://code.claude.com/docs/en/env-vars)
 
 Cross-client use of a subscription is governed by the plan's terms.
+
+Bus checks the TCP listener at `http://127.0.0.1:3425` before adding,
+resuming, or restoring a Claude GPT agent. It waits up to 750 ms for a TCP
+connection. Magpie can pass the check while its HTTP handlers or upstream
+models are busy because the check sends no HTTP request. If the listener is
+unreachable, start Magpie with `magpie serve` and retry.

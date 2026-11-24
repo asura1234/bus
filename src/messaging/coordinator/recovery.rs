@@ -176,6 +176,8 @@ impl Worker {
             binary: crate::platform::fs::running_executable().map_err(|e| e.to_string())?,
         };
         let attempt = self.begin_agent_launch(agent, LaunchKind::Resume)?;
+        let preflight = self.preflight_resume_gateway(agent);
+        self.track_launch_result(attempt, "resume_preparation_failed", preflight)?;
         let extras = super::resume::for_native_resume(
             &context,
             &super::resume::NativeResumeFacts {

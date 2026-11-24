@@ -21,7 +21,9 @@ impl Worker {
         else {
             return Err("Saved launch terminal identity is incomplete; no retry was sent".into());
         };
-        let prepared = self.prepare_unsubmitted_launch(agent);
+        let prepared = self
+            .preflight_resume_gateway(agent)
+            .and_then(|()| self.prepare_unsubmitted_launch(agent));
         // A rejected preparation is an audit record only. begin_agent_launch would
         // cancel the live pending attempt and replace launch_attempt_id.
         let attempt = if prepared.is_err() {
@@ -96,6 +98,14 @@ impl Worker {
             self.report_adopted_session(agent.id, agent.provider, pane.clone(), session)?;
         }
         Ok(())
+    }
+
+    pub(super) fn preflight_resume_gateway(&mut self, agent: &RoomAgent) -> Result<(), String> {
+        let provider = identity::provider_kind(agent.provider);
+        match crate::agents::providers::launch::preflight_gateway(provider) {
+            Ok(()) => Ok(()),
+            Err(error) => self.agent_error(agent.id, error),
+        }
     }
 
     fn prepare_unsubmitted_launch(&self, agent: &RoomAgent) -> Result<LaunchBinding, String> {

@@ -82,6 +82,7 @@ flate2 = "1"
 fontdue = { version = "0.9", optional = true }
 # Decodes chat attachments into Bus room-history thumbnails.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+http = "1"
 interprocess = "2.4.2"
 jsonc-parser = { version = "0.33.1", default-features = false, features = ["cst", "serde_json"] }
 libc = "0.2"

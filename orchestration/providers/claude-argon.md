@@ -52,3 +52,11 @@ bus agent add --room '<room>' --name argon --provider claude-argon --pwd '<proje
 ```
 
 Use the same wrapper configuration when resuming a saved Argon session.
+
+Bus checks the TCP listener before adding, resuming, or restoring an Argon
+agent. It reads `CLAUDE_ARGON_BASE_URL` from the Bus environment and defaults
+to `http://127.0.0.1:3425` when the variable is unset or empty. The 750 ms
+budget covers address resolution and connection attempts. A gateway that
+accepts TCP connections can pass while its HTTP handlers or upstream models
+are busy because the check sends no HTTP request. If the listener is
+unreachable, start Magpie with `magpie serve` and retry.

@@ -127,6 +127,8 @@ const CLAUDE_WRAPPER_SESSION: &str = "00000000-0000-4000-8000-000000000001";
 #[test]
 fn claude_argon_explicit_recovery_keeps_the_wrapper_and_saved_session() {
     let _providers = provider_binaries();
+    let (_listener, url) = listening_gateway();
+    let _gateway = launch::gateway_test_support::GatewayOverride::set(url, None);
     for recovery in [false, true] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeArgon, vec![]);
         let mut state = worker.state.clone();
@@ -175,6 +177,8 @@ impl Transport for ClaudeGptResumeNative {
 #[test]
 fn claude_gpt_explicit_recovery_keeps_the_wrapper_and_saved_session() {
     let _providers = provider_binaries();
+    let (_listener, url) = listening_gateway();
+    let _gateway = launch::gateway_test_support::GatewayOverride::set(url, None);
     for recovery in [false, true] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeGpt, vec![]);
         let mut state = worker.state.clone();
@@ -576,4 +580,173 @@ fn launch_metrics_unsubmitted_recovery_preparation_failure_is_durable() {
     assert_eq!(saved["2"]["kind"], "recovery");
     assert_eq!(saved["2"]["outcome"], "failed");
     assert!(saved["2"]["agent_id"].is_null(), "{saved}");
+}
+
+#[test]
+fn magpie_unreachable_gateway_refuses_add_before_saving_or_opening_a_tab() {
+    let _providers = provider_binaries();
+    let url = closed_gateway_url();
+    let _gateway = launch::gateway_test_support::GatewayOverride::set(url.clone(), None);
+    for provider in [Provider::ClaudeArgon, Provider::ClaudeGpt] {
+        let (mut worker, _, room, dir, calls) = fixture(Provider::Codex, vec![]);
+        let error = add_magpie_agent(&mut worker, provider, room, &dir).unwrap_err();
+        assert_magpie_error(&error, &url);
+        let saved = JsonStore::new(dir.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.agents().count(), 1);
+        assert_eq!(
+            saved.launch_attempts().last().unwrap().outcome,
+            LaunchOutcome::Failed
+        );
+        assert!(!calls.lock().unwrap().contains(&"tab.create"));
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn magpie_unreachable_gateway_refuses_resume_and_recovery_with_persisted_error() {
+    let _providers = provider_binaries();
+    let url = closed_gateway_url();
+    let _gateway = launch::gateway_test_support::GatewayOverride::set(url.clone(), None);
+    for provider in [Provider::ClaudeArgon, Provider::ClaudeGpt] {
+        for recovery in [false, true] {
+            let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+            seed_magpie_session(&mut worker, agent);
+            prepare_resume(
+                &mut worker,
+                agent,
+                recovery.then_some(StartupRecovery::Unsubmitted { args: vec![] }),
+            );
+            worker.transport = Box::new(ResumeNative {
+                state_path: dir.join("state.json"),
+                agent,
+                terminal: "terminal",
+                pane: "pane",
+                started: false,
+                recovery,
+            });
+            let result = worker.resume_room(room).unwrap();
+            assert_eq!(result["agents"][0]["outcome"], "blocked", "{result}");
+            assert_magpie_error(result["agents"][0]["reason"].as_str().unwrap(), &url);
+            let saved = JsonStore::new(dir.join("state.json"))
+                .load()
+                .unwrap()
+                .unwrap();
+            let saved = saved.agent(agent).unwrap();
+            assert_eq!(saved.status, RuntimeStatus::Unavailable);
+            assert_magpie_error(saved.actionable_error.as_deref().unwrap(), &url);
+            drop(worker);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn magpie_argon_uses_custom_url_and_gpt_uses_default() {
+    let _providers = provider_binaries();
+    let (_listener, default) = listening_gateway();
+    let argon = closed_gateway_url();
+    let _gateway = launch::gateway_test_support::GatewayOverride::set(default, Some(argon.clone()));
+    let (mut worker, _, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let error = add_magpie_agent(&mut worker, Provider::ClaudeArgon, room, &dir).unwrap_err();
+    assert_magpie_error(&error, &argon);
+    assert!(!calls.lock().unwrap().contains(&"tab.create"));
+    let error = add_magpie_agent(&mut worker, Provider::ClaudeGpt, room, &dir).unwrap_err();
+    assert!(error.contains("Tab creation"), "{error}");
+    assert!(calls.lock().unwrap().contains(&"tab.create"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn magpie_accepts_fresh_launches_without_waiting_for_gateway_response() {
+    let _providers = provider_binaries();
+    // No accept or HTTP read occurs during the test. The kernel can connect
+    // clients while the application is busy processing earlier requests.
+    let (listener, url) = listening_gateway();
+    let argon = format!(
+        "http://localhost:{}/prefix",
+        listener.local_addr().unwrap().port()
+    );
+    let _gateway = launch::gateway_test_support::GatewayOverride::set(url, Some(argon));
+    for provider in [Provider::ClaudeArgon, Provider::ClaudeGpt] {
+        let (mut worker, _, room, dir, calls) = fixture(
+            Provider::Codex,
+            vec![
+                Ok(ResponseResult::TabCreated {
+                    tab: serde_json::from_value(json!({
+                        "tab_id":"t2","workspace_id":"w1","number":2,"label":"new",
+                        "focused":false,"pane_count":1,"agent_status":"unknown"
+                    }))
+                    .unwrap(),
+                    root_pane: serde_json::from_value(json!({
+                        "pane_id":"new-pane","terminal_id":"new-terminal","workspace_id":"w1",
+                        "tab_id":"t2","focused":false,"agent_status":"unknown","revision":1
+                    }))
+                    .unwrap(),
+                }),
+                Ok(ResponseResult::AgentStarted {
+                    agent: native_info("new-pane", provider.label(), "unbound"),
+                    argv: vec![provider.label().into()],
+                }),
+            ],
+        );
+        add_magpie_agent(&mut worker, provider, room, &dir).unwrap();
+        assert!(calls.lock().unwrap().contains(&"agent.start"));
+        assert!(worker
+            .state
+            .agents()
+            .any(|agent| agent.provider == provider));
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+fn add_magpie_agent(
+    worker: &mut Worker,
+    provider: Provider,
+    room: RoomId,
+    cwd: &Path,
+) -> Result<(), String> {
+    worker.add_agent(
+        AddAgent {
+            room,
+            name: provider.label().into(),
+            provider,
+            cwd: cwd.to_string_lossy().into(),
+            extra_args: String::new(),
+            consent_project_hooks: true,
+        },
+        None,
+        &mpsc::channel().0,
+    )
+}
+
+fn listening_gateway() -> (std::net::TcpListener, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    (listener, url)
+}
+
+fn closed_gateway_url() -> String {
+    listening_gateway().1
+}
+
+fn assert_magpie_error(error: &str, url: &str) {
+    assert!(error.contains("Magpie"), "{error}");
+    assert!(error.contains(url), "{error}");
+    assert!(error.contains("magpie serve"), "{error}");
+}
+
+fn seed_magpie_session(worker: &mut Worker, agent: AgentId) {
+    let mut state = worker.state.clone();
+    let mut saved_identity = state.agent(agent).unwrap().runtime_identity.clone();
+    saved_identity.session_id = Some(CLAUDE_WRAPPER_SESSION.into());
+    state
+        .set_agent_runtime_identity(agent, saved_identity)
+        .unwrap();
+    worker.save(state).unwrap();
 }

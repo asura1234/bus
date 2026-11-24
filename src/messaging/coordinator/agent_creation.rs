@@ -253,6 +253,7 @@ impl Worker {
         input: &AddAgent,
         id: AgentId,
     ) -> Result<(launch::PreparedLaunch, HookContext), String> {
+        launch::preflight_gateway(identity::provider_kind(input.provider))?;
         let binary = self.hook_callback_binary(input.provider)?;
         let launch_id = crate::utils::time::digest(
             format!(
