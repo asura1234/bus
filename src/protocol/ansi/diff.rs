@@ -300,7 +300,9 @@ pub(super) fn blit_frame_to_with_cursor_memory_and_clear_policy(
     } else {
         // On first frame or size change, do a full redraw.
         if clear_before_full_redraw {
-            let _ = writer.write_all(b"\x1b[2J");
+            // ED2 scrolls the previous grid into history in iTerm2.
+            // Home plus erase-to-end clears the whole grid in place.
+            let _ = writer.write_all(b"\x1b[H\x1b[J");
         }
         write_all_cells(&mut writer, frame);
     }

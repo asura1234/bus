@@ -3,7 +3,10 @@ use crate::protocol::wire::{CellData, CursorState, FrameData, PaneSurfacePatchRo
 use std::{
     collections::VecDeque,
     io,
-    sync::{Arc, Condvar, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Condvar, Mutex, MutexGuard,
+    },
     time::Instant,
 };
 
@@ -18,6 +21,7 @@ pub(super) struct Frame {
     pub(super) invalidate: bool,
     pub(super) drawn_cursor: bool,
     pub(super) sequence: u64,
+    pub(super) epoch: u64,
     pub(super) patch: Option<Patch>,
 }
 
@@ -98,6 +102,7 @@ struct State {
 pub(super) struct Shared {
     state: Mutex<State>,
     wake: Condvar,
+    frame_epoch: AtomicU64,
     pub(super) metrics: &'static OutputMetrics,
 }
 
@@ -106,6 +111,7 @@ impl Shared {
         Self {
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
+            frame_epoch: AtomicU64::new(0),
             metrics,
         }
     }
@@ -116,6 +122,14 @@ pub(super) struct Handle(pub(super) Arc<Shared>);
 impl Handle {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.0.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub(super) fn invalidate_frames(&self) {
+        self.0.frame_epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(super) fn frame_epoch(&self) -> u64 {
+        self.0.frame_epoch.load(Ordering::Acquire)
     }
 
     #[cfg(test)]

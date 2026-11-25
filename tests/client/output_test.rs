@@ -48,6 +48,43 @@ fn wait_for_semantic_notification(stream: &mut UnixStream, pane: &str, event: &s
 }
 
 #[test]
+fn client_repaints_in_place_after_pty_resize() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+    let (server, client, output) =
+        attach_thin_client(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let master = client._master.as_ref().unwrap();
+    assert!(wait_until(Duration::from_secs(5), Duration::from_millis(20), || {
+        let captured = read_output(&output);
+        captured.rfind("\x1b[24;1H").is_some_and(|row| captured[row..].contains("\x1b[?2026l"))
+    }));
+
+    for (cols, rows) in [(63, 17), (80, 24)] {
+        let watermark = output_len(&output);
+        master.resize(PtySize { cols, rows, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let last_row = format!("\x1b[{rows};1H");
+        assert!(wait_until(Duration::from_secs(5), Duration::from_millis(20), || {
+            let captured = read_output(&output);
+            captured[watermark..].find(&last_row).is_some_and(|row| {
+                captured[watermark + row..].contains("\x1b[?2026l")
+            })
+        }), "the resize did not paint the new bottom row");
+
+        let captured = read_output(&output);
+        let redraw = &captured[watermark..];
+        assert!(!redraw.contains("\x1b[2J"), "ED2 spills the prior frame into iTerm2 scrollback");
+        assert!(redraw.contains("\x1b[H\x1b[J"), "the resize did not clear from home");
+    }
+
+    drop(client);
+    cleanup_spawned_bus(server, base);
+}
+
+#[test]
 fn client_receives_pane_surface_after_pane_output() {
     let _lock = test_lock();
     let base = unique_test_dir();

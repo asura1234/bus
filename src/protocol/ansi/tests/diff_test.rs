@@ -193,10 +193,13 @@ fn blit_frame_first_frame_produces_output() {
     blit_frame_to(&mut output, &frame, None);
 
     let output_str = String::from_utf8(output).unwrap();
-    // Full redraw should start with clear screen.
     assert!(
-        output_str.contains("\x1b[2J"),
-        "full redraw should clear screen"
+        output_str.contains("\x1b[H\x1b[J"),
+        "full redraw should erase from home so the terminal clears the rest of the grid"
+    );
+    assert!(
+        !output_str.contains("\x1b[2J"),
+        "iTerm2 scrolls the previous screen into history on ED2"
     );
     assert!(
         output_str.contains('H') || output_str.contains('i'),
@@ -282,7 +285,7 @@ fn encoder_forced_repaint_writes_all_cells_without_clearing() {
     let encoded = encoder.encode(&frame, true);
     let output = String::from_utf8(encoded.bytes).unwrap();
 
-    assert!(!output.contains("\x1b[2J"));
+    assert!(!output.contains("\x1b[J") && !output.contains("\x1b[2J"));
     assert!(output.bytes().filter(|byte| *byte == b'A').count() >= 6);
 }
 

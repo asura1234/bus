@@ -1,7 +1,10 @@
 use super::*;
 use crate::protocol::wire::CellData;
 use std::{
-    sync::{mpsc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicU16, Ordering},
+        mpsc, Condvar, Mutex,
+    },
     time::Duration,
 };
 
@@ -66,13 +69,24 @@ fn frame(symbol: &str, width: u16) -> FrameData {
     }
 }
 fn slow(fail_flush: bool) -> SlowHarness {
+    slow_with_grid(fail_flush, || None)
+}
+
+fn slow_with_grid(
+    fail_flush: bool,
+    host_grid: impl Fn() -> Option<(u16, u16)> + Send + 'static,
+) -> SlowHarness {
     let state = Arc::new((Mutex::new(Capture::default()), Condvar::new()));
     let (tx, rx) = mpsc::channel();
-    let output = TerminalOutput::with_writer(SlowWriter {
-        state: state.clone(),
-        entered: Some(tx),
-        fail_flush,
-    })
+    let output = TerminalOutput::spawn(
+        SlowWriter {
+            state: state.clone(),
+            entered: Some(tx),
+            fail_flush,
+        },
+        &super::metrics::OUTPUT,
+        host_grid,
+    )
     .unwrap();
     (output, state, rx)
 }
@@ -204,6 +218,73 @@ fn resize_roundtrip_retains_invalidation_when_text_frames_coalesce() {
     encoder.invalidate();
     expected.extend(encoded(&mut encoder, frame("C", 4), true));
     assert_eq!(state.0.lock().unwrap().bytes, expected);
+}
+
+#[test]
+fn resize_skips_old_frames_queued_behind_terminal_effects() {
+    let (mut output, state, entered) = slow(false);
+    output.frame(frame("A", 4), false, false).unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    output.frame(frame("B", 4), false, false).unwrap();
+    output
+        .handle
+        .push(Command::Bytes(b"effect".to_vec()))
+        .unwrap();
+    output.invalidate();
+    output.frame(frame("C", 2), true, false).unwrap();
+    release(&state);
+    output.finish().unwrap();
+
+    let capture = state.0.lock().unwrap();
+    let bytes = String::from_utf8_lossy(&capture.bytes);
+    assert!(bytes.contains("AAAA"));
+    assert!(bytes.contains("effect"));
+    assert!(bytes.contains("CC"));
+    assert!(
+        !bytes.contains("BBBB"),
+        "a queued pre-resize frame reached the terminal"
+    );
+    assert_eq!(capture.flushes, 3);
+}
+
+#[test]
+fn host_geometry_rejects_old_frames_and_patches_before_the_resize_event() {
+    for patch in [false, true] {
+        let width = Arc::new(AtomicU16::new(4));
+        let reported = width.clone();
+        let (mut output, capture, entered) =
+            slow_with_grid(false, move || Some((reported.load(Ordering::Acquire), 1)));
+        output.frame(frame("A", 4), false, false).unwrap();
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        if patch {
+            let cell = frame("X", 1).cells.remove(0);
+            output
+                .patch(
+                    &[PaneSurfacePatchRow {
+                        x: 0,
+                        y: 0,
+                        cells: vec![cell],
+                    }],
+                    None,
+                    false,
+                )
+                .unwrap();
+        } else {
+            output.frame(frame("X", 4), false, false).unwrap();
+        }
+        width.store(2, Ordering::Release);
+        // Queue the new dimensions without sending the UI's invalidation.
+        output.frame(frame("C", 2), false, false).unwrap();
+        release(&capture);
+        output.finish().unwrap();
+
+        let capture = capture.0.lock().unwrap();
+        let bytes = String::from_utf8_lossy(&capture.bytes);
+        assert!(bytes.contains("AAAA"));
+        assert!(bytes.contains("CC"));
+        assert!(!bytes.contains('X'), "stale output (patch={patch})");
+        assert_eq!(capture.flushes, 2);
+    }
 }
 
 #[test]
