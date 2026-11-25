@@ -348,7 +348,10 @@ impl History {
                 .background
                 .as_ref()
                 .and_then(|background| background.layouts.get(&room))
-                .filter(|layout| layout.filters == filters)
+                .filter(|layout| {
+                    layout.filters == filters
+                        && (filters != Default::default() || layout.key.width == width)
+                })
             {
                 self.record_limit = layout.key.limit;
             }

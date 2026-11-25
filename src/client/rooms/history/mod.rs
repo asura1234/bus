@@ -208,7 +208,8 @@ fn rebuild_reason(previous: Option<LayoutKey>, next: LayoutKey) -> &'static str 
 #[derive(Default)]
 pub(super) struct History {
     key: Option<LayoutKey>,
-    source: Option<(u64, RoomId)>,
+    // Snapshot revision and record limit for the selected room and filters.
+    source: Option<(u64, usize)>,
     signature: u64,
     lines: Arc<[Line]>,
     displayed_filters: crate::messaging::model::RoomHistoryFilters,

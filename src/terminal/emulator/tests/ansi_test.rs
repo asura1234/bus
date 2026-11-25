@@ -47,27 +47,20 @@ fn batched_ascii_diff_replays_to_current_frame() {
 
 #[test]
 fn encoder_size_change_clears_cells_outside_the_new_frame() {
-    let prev = make_frame(3, 2, vec![make_cell("A", 0, 0, 0); 6]);
+    let prev = make_frame(3, 3, vec![make_cell("A", 0, 0, 0); 9]);
     let curr = make_frame(2, 2, vec![make_cell("B", 0, 0, 0); 4]);
     let mut encoder = BlitEncoder::new();
-    let mut terminal = crate::terminal::vt::Terminal::new(3, 2, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(3, 3, 0).unwrap();
     let initial = encoder.encode(&prev, false);
     terminal.write(&initial.bytes);
     encoder.commit(prev, initial);
 
-    // The host grid is still three columns wide; the frame is two.
+    // Keep the host's wider and taller grid to model cells retained on shrink.
     let encoded = encoder.encode(&curr, false);
     terminal.write(&encoded.bytes);
     let output = String::from_utf8(encoded.bytes).unwrap();
-    assert!(output.contains("\x1b[2J"));
-    assert!(output.bytes().filter(|byte| *byte == b'B').count() >= 4);
-    for row in 0..2 {
-        let (_, graphemes) = terminal.screen_cell(2, row).unwrap();
-        assert!(
-            graphemes.iter().all(|code| *code == u32::from(' ')),
-            "row {row} keeps a cell from the wider frame: {graphemes:?}"
-        );
-    }
+    assert!(!output.contains("\x1b[2J"));
+    assert_eq!(host_text(&terminal, 3, 3), ["BB ", "BB ", "   "]);
 }
 
 /// Replays a host terminal that, like Terminal.app, keeps cells beyond a
@@ -97,7 +90,7 @@ fn present_resized(
     // What the client does for every resize event.
     encoder.invalidate();
     let encoded = encoder.encode(&frame, true);
-    assert!(String::from_utf8_lossy(&encoded.bytes).contains("\x1b[2J"));
+    assert!(!String::from_utf8_lossy(&encoded.bytes).contains("\x1b[2J"));
     terminal.write(&encoded.bytes);
     encoder.commit(frame, encoded);
 }

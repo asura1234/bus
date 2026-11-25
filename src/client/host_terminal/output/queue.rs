@@ -1,9 +1,12 @@
 use super::metrics::OutputMetrics;
 use crate::protocol::wire::{CellData, CursorState, FrameData, PaneSurfacePatchRow};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     io,
-    sync::{Arc, Condvar, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Condvar, Mutex, MutexGuard,
+    },
     time::Instant,
 };
 
@@ -18,6 +21,7 @@ pub(super) struct Frame {
     pub(super) invalidate: bool,
     pub(super) drawn_cursor: bool,
     pub(super) sequence: u64,
+    pub(super) epoch: u64,
     pub(super) patch: Option<Patch>,
 }
 
@@ -83,6 +87,13 @@ pub(super) struct Queued {
 }
 
 #[derive(Default)]
+pub(in crate::client) struct Feedback {
+    pub(in crate::client) cleared: Option<bool>,
+    /// Some, even with no Kitty IDs, records a discarded graphics transaction.
+    pub(in crate::client) discarded_graphics: Option<BTreeSet<u32>>,
+}
+
+#[derive(Default)]
 struct State {
     pending: VecDeque<Queued>,
     bytes: usize,
@@ -90,7 +101,7 @@ struct State {
     closed: bool,
     error: Option<(io::ErrorKind, String)>,
     write_failed: bool,
-    acknowledged: Option<bool>,
+    feedback: Feedback,
     #[cfg(test)]
     presented: u64,
 }
@@ -98,6 +109,7 @@ struct State {
 pub(super) struct Shared {
     state: Mutex<State>,
     wake: Condvar,
+    frame_epoch: AtomicU64,
     pub(super) metrics: &'static OutputMetrics,
 }
 
@@ -106,6 +118,7 @@ impl Shared {
         Self {
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
+            frame_epoch: AtomicU64::new(0),
             metrics,
         }
     }
@@ -116,6 +129,14 @@ pub(super) struct Handle(pub(super) Arc<Shared>);
 impl Handle {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.0.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub(super) fn invalidate_frames(&self) {
+        self.0.frame_epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(super) fn frame_epoch(&self) -> u64 {
+        self.0.frame_epoch.load(Ordering::Acquire)
     }
 
     #[cfg(test)]
@@ -211,14 +232,16 @@ impl Handle {
     pub(super) fn busy(&self) -> bool {
         let state = self.lock();
         self.observe_age(&state);
-        state.active.is_some() || !state.pending.is_empty()
+        state.active.is_some()
+            || !state.pending.is_empty()
+            || state.feedback.discarded_graphics.is_some()
     }
 
-    pub(super) fn feedback(&self) -> io::Result<Option<bool>> {
+    pub(super) fn feedback(&self) -> io::Result<Feedback> {
         let mut state = self.lock();
         self.observe_age(&state);
         check(&state)?;
-        Ok(state.acknowledged.take())
+        Ok(std::mem::take(&mut state.feedback))
     }
 
     pub(super) fn wait_idle(&self) {
@@ -258,18 +281,32 @@ impl Handle {
     }
 
     pub(super) fn complete(&self, queued: Queued, result: io::Result<Option<bool>>) {
+        let discarded_images = match (&queued.command, &result) {
+            (Command::Frame(frame), Ok(None)) if !frame.data.graphics.is_empty() => Some(
+                super::super::frame_output::kitty_graphics_image_ids(&frame.data.graphics),
+            ),
+            _ => None,
+        };
         let mut state = self.lock();
         state.active = None;
         state.bytes -= queued.cost;
         match result {
             Ok(Some(cleared)) => {
-                state.acknowledged = Some(state.acknowledged.unwrap_or(false) || cleared);
+                state.feedback.cleared = Some(state.feedback.cleared.unwrap_or(false) || cleared);
                 #[cfg(test)]
                 if let Command::Frame(frame) = &queued.command {
                     state.presented = frame.sequence;
                 }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                if let Some(ids) = discarded_images {
+                    state
+                        .feedback
+                        .discarded_graphics
+                        .get_or_insert_default()
+                        .extend(ids);
+                }
+            }
             Err(error) => {
                 state.write_failed = true;
                 state.error = Some((error.kind(), error.to_string()));

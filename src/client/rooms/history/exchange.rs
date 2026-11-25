@@ -2,13 +2,13 @@
 use super::super::render::{display, wrap, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
 use super::source::{Direction, Exchange};
+use super::window::recent_exchanges;
 use super::{
     rebuild_reason, submission_signature, History, Line, LinkScope, MarkdownSource, RowAnchor,
     RowKind, ThumbnailRow, Tone,
 };
-use crate::messaging::model::{AgentId, Author, BusState, Prompt, Room, RoomId};
+use crate::messaging::model::{Author, BusState, Prompt, Room, RoomId};
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -81,7 +81,7 @@ impl History {
             crate::utils::perf::Timer::new("client.history.rebuild");
         let _lines_timer = LINES.start();
         let filtered = filters != Default::default();
-        let recent = self.prepare_window_source(state, room, revision, filters, submissions);
+        let recent = self.prepare_window_source(state, room, revision, filters);
         let key = (
             self.signature,
             room.id,
@@ -97,13 +97,8 @@ impl History {
         }
         let started = std::time::Instant::now();
         let reason = rebuild_reason(self.key, key);
-        let exchanges = {
-            let _timer = super::phases::GROUPING.start();
-            recent.map_or_else(
-                || super::source::exchanges(state, room),
-                |(entries, _)| entries,
-            )
-        };
+        let exchanges =
+            recent.unwrap_or_else(|| recent_exchanges(state, room, self.record_limit).0);
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
         let mut age_valid = 0..u64::MAX;
@@ -175,29 +170,6 @@ impl History {
             ),
         );
         &self.lines
-    }
-
-    pub(super) fn prepare_source(
-        &mut self,
-        state: &BusState,
-        room: &Room,
-        revision: u64,
-        submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
-    ) {
-        self.rebuilt = 0;
-        self.rendered = 0;
-        self.projected = 0;
-        if self.source != Some((revision, room.id)) {
-            let _timer = super::phases::SIGNATURE.start();
-            let visited = self.room_markdown.len();
-            self.room_markdown.retain(|id, _| state.room(*id).is_some());
-            if self.room_markdown.len() != visited {
-                let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
-                self.markdown.retain(|source, _| shown.contains(source));
-            }
-            self.signature = signature(state, room, submissions);
-            self.source = Some((revision, room.id));
-        }
     }
 
     fn push_prompt_lines(
@@ -455,81 +427,6 @@ fn participant_tone(participant: &Author) -> Tone {
         Author::Bus => Tone::Bus,
         Author::Bot(_) => Tone::Text,
     }
-}
-
-// Prompts are immutable after creation. Check their
-// identity/settlement metadata, not their potentially large text, when a
-// global poll/draft revision arrives. Only a changed room history, names,
-// width, or age label requires sorting and wrapping those immutable bodies.
-fn signature(
-    state: &BusState,
-    room: &Room,
-    submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
-) -> u64 {
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for (prompt, status) in submissions {
-        prompt.0.hash(&mut hash);
-        match status {
-            super::LocalSendStatus::Pending => 0_u8,
-            super::LocalSendStatus::Failed => 1_u8,
-        }
-        .hash(&mut hash);
-    }
-    for request in state.requests().filter(|r| r.room_id == room.id) {
-        request.id.0.hash(&mut hash);
-        request.prompt.id.0.hash(&mut hash);
-        request.prompt.submitted_at_ms.hash(&mut hash);
-        request.group.map(|lead| lead.0).hash(&mut hash);
-        request.history_send_mode().hash(&mut hash);
-        request.history_mode_marker().hash(&mut hash);
-        let outcome = request
-            .group
-            .and_then(|lead| state.request(lead))
-            .unwrap_or(request);
-        outcome.uncertain_outcome.hash(&mut hash);
-        outcome.failure_reason.hash(&mut hash);
-        outcome.submission_error.hash(&mut hash);
-        if let Some(reply) = state.developer_history_reply(request) {
-            reply.received_at_ms.hash(&mut hash);
-            reply.callback_id.hash(&mut hash);
-        }
-    }
-    room.latest_prompt.as_ref().map(|p| p.id.0).hash(&mut hash);
-    state
-        .notices(room.id)
-        .last()
-        .map(|p| p.id.0)
-        .hash(&mut hash);
-    for reply in room.latest_replies.values() {
-        (reply.request_id.0, reply.received_at_ms).hash(&mut hash);
-    }
-    // Headers name prompt authors and recipients from any room (a work room's
-    // MASTER orchestrator), so their names and colors key the layout too.
-    let mut agents: BTreeSet<AgentId> = state
-        .agents()
-        .filter(|a| a.room_id == room.id)
-        .map(|a| a.id)
-        .collect();
-    let prompts = state
-        .requests()
-        .filter(|r| r.room_id == room.id)
-        .map(|r| &r.prompt)
-        .chain(state.notices(room.id))
-        .chain(room.latest_prompt.as_ref());
-    for prompt in prompts {
-        agents.extend(prompt.recipient_ids.iter().copied());
-        if let Author::Agent(id) = prompt.author {
-            agents.insert(id);
-        }
-    }
-    for id in agents {
-        id.0.hash(&mut hash);
-        state
-            .agent(id)
-            .map(|agent| (&agent.name, agent.color))
-            .hash(&mut hash);
-    }
-    hash.finish()
 }
 
 pub(in crate::client::rooms) fn timestamp(at: u64, now: u64) -> String {

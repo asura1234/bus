@@ -40,19 +40,27 @@ impl ClientState {
     }
 
     pub(super) fn check_output(&mut self) -> io::Result<()> {
-        match self.output.feedback() {
-            Ok(Some(cleared)) => {
-                if let Some(shell) = self.shell.as_mut() {
-                    shell.bus_frame_presented(cleared);
-                }
-                Ok(())
-            }
-            Ok(None) => Ok(()),
-            Err(error) => {
-                self.request_repaint();
-                Err(error)
+        let feedback = self
+            .output
+            .feedback()
+            .inspect_err(|_| self.request_repaint())?;
+        let Some(shell) = self.shell.as_mut() else {
+            return Ok(());
+        };
+        if let Some(cleared) = feedback.cleared {
+            shell.bus_frame_presented(cleared);
+        }
+        if let Some(ids) = feedback.discarded_graphics {
+            shell.graphics.recover_discarded_graphics(ids);
+            shell.bus_frame_presented(true);
+            shell.compose_deferred = true;
+            let cleanup = shell.take_pending_graphics_cleanup();
+            self.request_repaint();
+            if self.kitty_graphics_enabled && !cleanup.is_empty() {
+                self.output.graphics(&cleanup)?;
             }
         }
+        Ok(())
     }
 
     pub(super) fn present_graphics(&mut self, graphics: &[u8]) {

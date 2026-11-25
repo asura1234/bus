@@ -11,7 +11,7 @@ use crate::protocol::{
     wire::{CursorState, FrameData, PaneSurfacePatchRow},
 };
 use metrics::OutputMetrics;
-use queue::{Command, Frame, Handle, Patch, Shared};
+use queue::{Command, Feedback, Frame, Handle, Patch, Shared};
 pub(in crate::client) use routing::{busy, stdout, suspend};
 use std::{
     io::{self, Write},
@@ -30,22 +30,36 @@ pub(in crate::client) struct TerminalOutput {
 
 impl TerminalOutput {
     pub(in crate::client) fn start() -> io::Result<Self> {
-        Self::with_writer(io::stdout())
+        Self::spawn(io::stdout(), &metrics::OUTPUT, || {
+            crate::platform::terminal_grid_size()
+                .ok()
+                .filter(|&(cols, rows)| cols > 0 && rows > 0)
+        })
     }
 
+    #[cfg(test)]
     fn with_writer(writer: impl Write + Send + 'static) -> io::Result<Self> {
         Self::with_metrics(writer, &metrics::OUTPUT)
     }
 
+    #[cfg(test)]
     fn with_metrics(
         writer: impl Write + Send + 'static,
         metrics: &'static OutputMetrics,
+    ) -> io::Result<Self> {
+        Self::spawn(writer, metrics, || None)
+    }
+
+    fn spawn(
+        writer: impl Write + Send + 'static,
+        metrics: &'static OutputMetrics,
+        host_grid: impl Fn() -> Option<(u16, u16)> + Send + 'static,
     ) -> io::Result<Self> {
         let handle = Handle(Arc::new(Shared::new(metrics)));
         let owner = handle.clone();
         let worker = std::thread::Builder::new()
             .name("host-output".into())
-            .spawn(move || run(writer, &owner))?;
+            .spawn(move || run(writer, &owner, host_grid))?;
         Ok(Self {
             handle,
             worker: Some(worker),
@@ -60,6 +74,11 @@ impl TerminalOutput {
     }
 
     pub(in crate::client) fn invalidate(&mut self) {
+        self.handle.invalidate_frames();
+        self.reset_baseline();
+    }
+
+    fn reset_baseline(&mut self) {
         self.invalidate = true;
         self.latest = None;
     }
@@ -90,6 +109,7 @@ impl TerminalOutput {
             invalidate: self.invalidate,
             drawn_cursor,
             sequence: self.sequence,
+            epoch: self.handle.frame_epoch(),
             patch,
         }))?;
         self.latest = Some(latest);
@@ -138,11 +158,11 @@ impl TerminalOutput {
 
     /// An encoded legacy frame is a lossless barrier, including its cursor effects.
     pub(in crate::client) fn terminal_bytes(&mut self, bytes: Vec<u8>) -> io::Result<()> {
-        self.invalidate();
+        self.reset_baseline();
         self.handle.push(Command::EncodedFrame(bytes))
     }
 
-    pub(in crate::client) fn feedback(&self) -> io::Result<Option<bool>> {
+    pub(in crate::client) fn feedback(&self) -> io::Result<Feedback> {
         self.handle.feedback()
     }
 
@@ -163,7 +183,7 @@ impl Drop for TerminalOutput {
     }
 }
 
-fn run(mut writer: impl Write, handle: &Handle) {
+fn run(mut writer: impl Write, handle: &Handle, host_grid: impl Fn() -> Option<(u16, u16)>) {
     let mut encoder = BlitEncoder::new();
     let mut sequence = 0;
     while let Some(command) = handle.next() {
@@ -173,7 +193,8 @@ fn run(mut writer: impl Write, handle: &Handle) {
                 &mut encoder,
                 &mut sequence,
                 &command.command,
-                handle.0.metrics,
+                handle,
+                &host_grid,
             )
         }))
         .unwrap_or_else(|_| Err(io::Error::other("host output owner panicked")));
@@ -186,19 +207,41 @@ fn write_command(
     encoder: &mut BlitEncoder,
     sequence: &mut u64,
     command: &Command,
-    metrics: &'static OutputMetrics,
+    handle: &Handle,
+    host_grid: &impl Fn() -> Option<(u16, u16)>,
 ) -> io::Result<Option<bool>> {
+    let metrics = handle.0.metrics;
     match command {
         Command::Frame(request) => {
+            if request.epoch != handle.frame_epoch() {
+                return Ok(None);
+            }
+            // Query at the write boundary, including during the interval
+            // before the resize event reaches the UI.
+            let is_current = || {
+                host_grid().is_none_or(|size| size == (request.data.width, request.data.height))
+                    && request.epoch == handle.frame_epoch()
+            };
             if !request.repaint && !request.invalidate {
                 if let Some(patch) = request
                     .patch
                     .as_ref()
                     .filter(|patch| patch.base == *sequence)
                 {
-                    if write_patch(writer, encoder, patch, request.drawn_cursor, metrics)? {
-                        *sequence = request.sequence;
-                        return Ok(Some(false));
+                    match write_patch(
+                        writer,
+                        encoder,
+                        patch,
+                        request.drawn_cursor,
+                        metrics,
+                        is_current,
+                    )? {
+                        PatchOutcome::Presented => {
+                            *sequence = request.sequence;
+                            return Ok(Some(false));
+                        }
+                        PatchOutcome::NeedsFrame => {}
+                        PatchOutcome::Stale => return Ok(None),
                     }
                 }
             }
@@ -218,6 +261,10 @@ fn write_command(
                 encoder.encode(&frame, request.repaint)
             };
             drop(encode);
+            if !is_current() {
+                encoder.invalidate();
+                return Ok(None);
+            }
             metrics.frame.encoded_bytes.add(
                 encoded.bytes.len() as u64
                     + frame.graphics.len() as u64
@@ -263,27 +310,38 @@ fn write_command(
     }
 }
 
+enum PatchOutcome {
+    Presented,
+    NeedsFrame,
+    Stale,
+}
+
 fn write_patch(
     writer: &mut impl Write,
     encoder: &mut BlitEncoder,
     patch: &Patch,
     drawn_cursor: bool,
     metrics: &'static OutputMetrics,
-) -> io::Result<bool> {
+    is_current: impl FnOnce() -> bool,
+) -> io::Result<PatchOutcome> {
     let encode = metrics.patch.encode.start();
     let rows = if drawn_cursor {
         let Some(rows) = encoder.patch_rows_with_drawn_cursor(&patch.rows, patch.cursor.as_ref())
         else {
-            return Ok(false);
+            return Ok(PatchOutcome::NeedsFrame);
         };
         rows
     } else {
         patch.rows.clone()
     };
     let Some(encoded) = encoder.encode_patch(&rows, patch.cursor.clone(), drawn_cursor) else {
-        return Ok(false);
+        return Ok(PatchOutcome::NeedsFrame);
     };
     drop(encode);
+    if !is_current() {
+        encoder.invalidate();
+        return Ok(PatchOutcome::Stale);
+    }
     metrics.patch.encoded_bytes.add(encoded.bytes.len() as u64);
     {
         let _write = metrics.patch.write.start();
@@ -296,5 +354,5 @@ fn write_patch(
     if !encoder.commit_patch(&rows, patch.cursor.clone(), encoded) {
         return Err(io::Error::other("host output patch baseline lost"));
     }
-    Ok(true)
+    Ok(PatchOutcome::Presented)
 }
