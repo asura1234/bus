@@ -77,10 +77,8 @@ impl BusUi {
     pub(super) fn clamp_recipient_index(&mut self) {
         // The highlight is shared by room views; a room switch or roster
         // shrink must never leave the viewport starting beyond its entries.
-        if let Some(room) = self.room {
-            self.recipient_index = self
-                .recipient_index
-                .min(self.snapshot.state.room_recipients(room).count());
+        if let (Some(room), Some(index)) = (self.room, &mut self.recipient_index) {
+            *index = (*index).min(self.snapshot.state.room_recipients(room).count());
         }
     }
 
@@ -110,8 +108,9 @@ impl BusUi {
         if body.is_empty() {
             return;
         }
-        let selected = self.recipient_index.min(agents.len());
+        let selected = self.recipient_index.map(|index| index.min(agents.len()));
         let start = selected
+            .unwrap_or(0)
             .saturating_sub(usize::from(body.height.saturating_sub(1)))
             .min(entries.saturating_sub(usize::from(body.height)));
         let members: Vec<_> = agents.iter().filter(|a| a.room_id == room.id).collect();
@@ -143,7 +142,7 @@ impl BusUi {
                 Rect::new(body.x, body.y + (index - start) as u16, body.width, 1),
                 label,
                 Some(Action::Recipient(id)),
-                index == selected,
+                selected == Some(index),
             );
         }
     }

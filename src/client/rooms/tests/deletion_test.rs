@@ -404,7 +404,7 @@ fn recipient_menu_enter_does_not_select_all_after_the_highlighted_agent_disappea
     for _ in 0..3 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
-    assert_eq!(ui.recipient_index, 3);
+    assert_eq!(ui.recipient_index, Some(3));
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.state.delete_agent(removed, 0).unwrap();
     ui.receive_snapshot(Arc::new(snapshot));

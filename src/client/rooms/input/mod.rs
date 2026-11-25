@@ -257,11 +257,12 @@ impl BusUi {
             let count = self
                 .room
                 .map_or(0, |room| self.snapshot.state.room_recipients(room).count());
-            self.recipient_index = if mouse.kind == MouseEventKind::ScrollDown {
-                self.recipient_index.saturating_add(3).min(count)
+            let index = self.recipient_index.unwrap_or(0);
+            self.recipient_index = Some(if mouse.kind == MouseEventKind::ScrollDown {
+                index.saturating_add(3).min(count)
             } else {
-                self.recipient_index.saturating_sub(3).min(count)
-            };
+                index.saturating_sub(3).min(count)
+            });
             outcome.repaint = true;
             return true;
         }
@@ -497,7 +498,7 @@ impl BusUi {
         self.main_scroll = 0;
         self.history_follow_tail = true;
         self.recipient_scroll = 0;
-        self.recipient_index = 0;
+        self.recipient_index = Some(0);
         self.queue(BusCommand::SelectRoom(room), Effect::None);
     }
     pub(super) fn is_master_room(&self, room: RoomId) -> bool {
@@ -615,6 +616,9 @@ impl BusUi {
             }
             Action::Recipients => {
                 self.recipient_menu = !self.recipient_menu;
+                if self.recipient_menu {
+                    self.recipient_index.get_or_insert(0);
+                }
             }
             Action::Recipient(id) => self.toggle_recipient(id),
             Action::Files => self.open_form(Form::Files(Editor::new("~/".into()))),

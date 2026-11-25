@@ -651,7 +651,7 @@ fn client_sigterm_stops_server_and_provider_panes() {
 }
 
 #[test]
-fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
+fn a_room_and_a_message_round_trip_through_explicit_recipient_selection() {
     let session = Session::start("flow");
     // The fresh scratch Bus draws its default room.
     session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
@@ -697,13 +697,39 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
         "20s",
     ]);
 
-    // Send through the composer: choose the agent, type, Enter.
-    session.ok(&["click", "--text", "Choose agents"]);
-    session.ok(&["wait", "--text", "[ ] a1"]);
-    session.ok(&["click", "--text", "[ ] a1"]);
-    session.ok(&["press", "esc"]);
-    session.ok(&["click", "--text", "Message selected agents"]);
+    // Repeated submit keys must not select All or post the draft.
+    session.ok(&["click", "--hit", "composer"]);
     session.ok(&["type", "hello from the driver"]);
+    session.ok(&["press", "alt+enter"]);
+    session.ok(&["wait", "--text", "[ ] a1"]);
+    session.ok(&["press", "enter"]);
+    let picker = session.ok(&["hits"]);
+    let agent = picker["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|hit| hit["name"] == "recipient:a1")
+        .expect("agent is in the recipient picker");
+    assert!(
+        agent["text"].as_str().unwrap().starts_with("[ ] a1"),
+        "{picker}"
+    );
+    session.ok(&["press", "esc"]);
+    session.ok(&["press", "enter"]);
+    session.ok(&["wait", "--text", "[ ] a1"]);
+    let (code, history) = parse(scratch_bus(
+        &session,
+        &["history", "--room", "bus", "--limit", "20"],
+    ));
+    assert_eq!(code, 0, "{history}");
+    assert!(
+        !history.to_string().contains("hello from the driver"),
+        "{history}"
+    );
+
+    session.ok(&["click", "--hit", "recipient:a1"]);
+    session.ok(&["press", "esc"]);
+    session.ok(&["wait", "--text", "hello from the driver"]);
     session.ok(&["press", "enter"]);
     session.ok(&[
         "wait",

@@ -160,7 +160,8 @@ impl BusUi {
             .is_none_or(|local| local.recipients.is_empty())
         {
             self.recipient_menu = true;
-            self.recipient_index = 0;
+            // A repeated submit key must not activate the picker's All row.
+            self.recipient_index = None;
             tracing::info!(
                 event = "bus.message.recipients_requested",
                 room_id = room.0,
