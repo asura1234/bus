@@ -310,9 +310,10 @@ fn an_interrupt_supersedes_a_pending_steer() {
         }),
     );
     assert!(interrupt.ok, "{interrupt:?}");
+    assert_eq!(fixture.request(lead).phase, RequestPhase::Queued);
     assert_eq!(
-        fixture.request(lead).failure_reason.as_deref(),
-        Some("interrupted")
+        fixture.request(lead).interrupt_replay_before,
+        Some(sent_request(&interrupt))
     );
     assert_eq!(fixture.request(steer).phase, RequestPhase::Queued);
     assert_eq!(fixture.request(steer).group, None);

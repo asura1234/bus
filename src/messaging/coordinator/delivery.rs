@@ -159,6 +159,7 @@ impl Worker {
             if !can_deliver() {
                 break;
             }
+            self.stop_autonomous_turn_before_delivery(agent.id, now_ms)?;
             let waited = self.note_queued_delivery_wait(&agent);
             match self.delivery_route(&agent) {
                 Some(DeliveryRoute::Steer(request, lead)) => self.steer(&agent, request, lead)?,
@@ -224,7 +225,11 @@ impl Worker {
                     .request(*id)
                     .is_some_and(|request| request.interrupt_delivery)
             });
-        if ((agent.status != RuntimeStatus::Idle || own_turn) && !steer && !interrupt_ready)
+        let background_wake = interrupt_ready
+            && agent.autonomous_stop.task_notification_running()
+            && (agent.status == RuntimeStatus::Working || own_turn);
+        if background_wake
+            || ((agent.status != RuntimeStatus::Idle || own_turn) && !steer && !interrupt_ready)
             || agent.dialog
             || !agent.hook_setup_confirmed
             || agent.session_binding_invalidated
@@ -598,7 +603,13 @@ impl Worker {
         let mut state = self.state.clone();
         self.mark_open_dispatch(&mut state, request, DispatchMark::Started);
         // Messages that piled up while the agent was unavailable go as one prompt.
-        let text = match waited.then(|| state.coalesce_queue(request)).flatten() {
+        let replaying = state
+            .request(request)
+            .is_some_and(|row| row.interrupt_replay_before.is_some());
+        let text = match (waited || replaying)
+            .then(|| state.coalesce_queue(request))
+            .flatten()
+        {
             Some(text) => text,
             None => state
                 .render_request_payload(request)

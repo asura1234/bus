@@ -349,6 +349,7 @@ impl BusState {
                     }
                     agent.actionable_error = None;
                 }
+                self.finish_interrupt_replay(request_id);
                 self.release_parked_prepared_retry(callback.agent_id, request_id);
                 if continuation {
                     CallbackDisposition::AcceptedContinuation

@@ -200,7 +200,7 @@ impl BusState {
         let Some(member) = member else {
             return Some(CallbackDisposition::Rejected(CallbackRejection::WrongTurn));
         };
-        self.retire_retry_turn(hold.lead);
+        self.retire_provider_turn(hold.lead);
         let request = self.requests.get_mut(&member)?;
         request.group = None;
         request.phase = RequestPhase::Active;
@@ -216,7 +216,7 @@ impl BusState {
         Some(CallbackDisposition::AcceptedSteering)
     }
 
-    fn retire_retry_turn(&mut self, id: RequestId) {
+    pub(super) fn retire_provider_turn(&mut self, id: RequestId) {
         let Some(lead) = self.requests.get(&id) else {
             return;
         };
@@ -230,11 +230,14 @@ impl BusState {
         }
     }
 
-    fn prepare_retry_request(&mut self, id: RequestId, attempts: u32, now_ms: u64) {
-        self.retire_retry_turn(id);
-        let request = self.requests.get_mut(&id).expect("held member");
+    pub(super) fn reset_request_for_replay(
+        &mut self,
+        id: RequestId,
+        now_ms: u64,
+    ) -> &mut super::Request {
+        self.retire_provider_turn(id);
+        let request = self.requests.get_mut(&id).expect("retained request");
         request.phase = RequestPhase::Queued;
-        request.provider_retry_attempts = request.provider_retry_attempts.max(attempts);
         request.expected_launch_id = None;
         request.submission_boundary = None;
         request.submission_status_revision = 0;
@@ -257,6 +260,12 @@ impl BusState {
         request.turn_ended_at_ms = None;
         request.awaiting_background = false;
         request.latency.clear_attempt();
+        request
+    }
+
+    fn prepare_retry_request(&mut self, id: RequestId, attempts: u32, now_ms: u64) {
+        let request = self.reset_request_for_replay(id, now_ms);
+        request.provider_retry_attempts = request.provider_retry_attempts.max(attempts);
         let payload = self.render_request_payload(id).expect("retained prompt");
         self.requests.get_mut(&id).expect("held member").submitted_payload = Some(format!(
             "Continue the existing task after a transient provider failure; check completed effects before repeating actions.\n\n{payload}"
@@ -386,7 +395,7 @@ impl BusState {
         let Some(quota) = transient(owner.provider, error) else {
             if let Some(hold) = owner.provider_retry.clone().filter(|h| h.lead != id) {
                 let agent = owner.id;
-                self.retire_retry_turn(id);
+                self.retire_provider_turn(id);
                 self.requests
                     .get_mut(&id)
                     .expect("owned native input")

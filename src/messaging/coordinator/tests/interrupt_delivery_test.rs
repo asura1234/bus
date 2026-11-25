@@ -195,10 +195,8 @@ fn interrupt_send_settles_the_pending_claude_receipt_before_stopping_the_lead() 
         });
         let response = send_msg(&mut fixture, params);
         assert!(response.ok, "{response:?}");
-        assert_eq!(
-            fixture.request(lead).failure_reason.as_deref(),
-            Some("interrupted")
-        );
+        assert_eq!(fixture.request(lead).phase, RequestPhase::Queued);
+        assert!(fixture.request(lead).failure_reason.is_none());
         assert_eq!(fixture.request(next).group, None);
         if code == AGENT_CLAUDE_TURN_BUSY {
             assert_eq!(fixture.request(next).phase, RequestPhase::Queued);
@@ -241,6 +239,21 @@ fn busy_claude_codex_and_agy_interrupt_deliver_without_waiting_for_turn_end() {
             // Deliver WITHOUT waiting for the old turn to end (no Idle status poll).
             fixture.deliver();
 
+            if provider.uses_claude_harness() && matches!(case, StopOutcomeCase::Failed) {
+                assert_eq!(fixture.typed().len(), before_typed);
+                assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
+                assert_eq!(fixture.request(message).phase, RequestPhase::Queued);
+                fixture.stopped("turn-1", "completed despite refused stop");
+                fixture.consume();
+                fixture.status(RuntimeStatus::Idle);
+                fixture.deliver();
+                assert_eq!(fixture.request(message).phase, RequestPhase::Active);
+                assert_eq!(
+                    fixture.reply(lead).as_deref(),
+                    Some("completed despite refused stop")
+                );
+                continue;
+            }
             let typed = fixture.typed_content();
             assert!(
                 typed.len() > before_typed
@@ -258,12 +271,13 @@ fn busy_claude_codex_and_agy_interrupt_deliver_without_waiting_for_turn_end() {
             );
             assert_eq!(
                 fixture.request(message).group,
-                None,
-                "{provider:?}/{case:?}: interrupting message must run as its own turn"
+                provider.uses_claude_harness().then_some(lead),
+                "{provider:?}/{case:?}: Claude replays the original with its replacement"
             );
-            assert!(
+            assert_eq!(
                 fixture.request(lead).settled(),
-                "{provider:?}/{case:?}: interrupted lead must be settled, not held"
+                !provider.uses_claude_harness(),
+                "{provider:?}/{case:?}"
             );
         }
     }
@@ -336,9 +350,13 @@ fn interrupted_agent_queue_always_drains_without_retirement_hold() {
         assert!(response.ok, "{provider:?}: {response:?}");
         let interrupt_second = sent_request(&response);
 
-        // Lead is closed; first queued item delivers immediately without retirement hold.
+        // A pending Claude replay leaves earlier queued work in place.
         fixture.deliver();
-        assert!(fixture.request(lead).settled(), "{provider:?}");
+        assert_eq!(
+            fixture.request(lead).settled(),
+            !provider.uses_claude_harness(),
+            "{provider:?}"
+        );
         assert_eq!(
             fixture.request(queued_first).phase,
             RequestPhase::Active,
@@ -377,6 +395,9 @@ fn interrupted_agent_queue_always_drains_without_retirement_hold() {
             fixture.reply(interrupt_second).as_deref(),
             Some("done second")
         );
+        if provider.uses_claude_harness() {
+            assert_eq!(fixture.reply(lead).as_deref(), Some("done second"));
+        }
     }
 }
 
@@ -417,7 +438,7 @@ fn msg_status(fixture: &mut Fixture, message: PromptId) -> Response {
 }
 
 #[test]
-fn interrupt_delivery_passes_aborted_payload_and_records_discarded_close_detail() {
+fn interrupt_delivery_clears_the_returned_copy_and_replays_the_lead() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = fixture.send("M2_IDLE_PAYLOAD report alpha", false);
     fixture.deliver();
@@ -482,14 +503,13 @@ fn interrupt_delivery_passes_aborted_payload_and_records_discarded_close_detail(
     );
     assert_eq!(fixture.request(incoming).phase, RequestPhase::Active);
 
-    // Closed lead records discarded_aborted_payload as its close detail.
+    // Clearing the terminal copy must leave the original request open.
     let status = msg_status(&mut fixture, lead_msg);
     assert!(status.ok, "{status:?}");
     let row = &status.result["requests"][0];
-    assert_eq!(row["stage"], "abandoned");
-    assert_eq!(row["reason"], "interrupted");
-    assert_eq!(row["detail"], "discarded_aborted_payload");
-    assert!(row["reply"].is_null());
+    assert_eq!(row["stage"], "awaiting_start");
+    assert!(row["reason"].is_null());
+    assert!(sent_prompt.text.contains("M2_IDLE_PAYLOAD report alpha"));
 
     // After confirmation, aborted_payload is cleared so a subsequent delivery carries None.
     let incoming_payload = sent_prompt.text;
@@ -499,6 +519,7 @@ fn interrupt_delivery_passes_aborted_payload_and_records_discarded_close_detail(
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
 
+    assert_eq!(fixture.reply(lead).as_deref(), Some("M3_ACK"));
     let follow = fixture.send("afterward", false);
     fixture.deliver();
     assert_eq!(fixture.request(follow).phase, RequestPhase::Active);
@@ -568,7 +589,7 @@ fn working_steer_refused_then_interrupt_discards_aborted_lead_on_first_queued_de
     fixture.deliver();
     assert_eq!(fixture.request(m2_steer).phase, RequestPhase::Queued);
 
-    // Send M3 in interrupt mode -> closes lead, records lead_payload as aborted_payload.
+    // M3 interrupts the lead and reserves its replay after the earlier M2.
     let room = fixture.room.0.to_string();
     let resp = send_msg(
         &mut fixture,
@@ -587,12 +608,8 @@ fn working_steer_refused_then_interrupt_discards_aborted_lead_on_first_queued_de
     fixture.deliver();
     assert_eq!(fixture.request(m2_steer).phase, RequestPhase::Active);
     let status = msg_status(&mut fixture, lead_msg);
-    assert_eq!(status.result["requests"][0]["stage"], "abandoned");
-    assert_eq!(status.result["requests"][0]["reason"], "interrupted");
-    assert_eq!(
-        status.result["requests"][0]["detail"],
-        "discarded_aborted_payload"
-    );
+    assert_eq!(status.result["requests"][0]["stage"], "queued");
+    assert!(fixture.request(lead).failure_reason.is_none());
 
     // Finish M2 and deliver M3 -> M3 receives discard_aborted_payload: None.
     let m2_prompt = native
@@ -628,4 +645,125 @@ fn working_steer_refused_then_interrupt_discards_aborted_lead_on_first_queued_de
         })
         .expect("expected M3 delivery");
     assert_eq!(m3_prompt.discard_aborted_payload, None);
+    assert!(m3_prompt.text.contains("long glossary turn"));
+    assert!(m3_prompt.text.ends_with("M3_WORKING_INT_B"));
+}
+
+#[test]
+fn claude_interrupt_replays_both_requests_and_settles_them() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let attachment = f.dir.join("reference image.png");
+    std::fs::write(&attachment, b"attachment fixture").unwrap();
+    let attachment = attachment.canonicalize().unwrap();
+    let room = f.room.0.to_string();
+    let sent = send_msg(
+        &mut f,
+        json!({"room": room, "to": ["builder"], "text": "interrupted work", "files": [attachment]}),
+    );
+    let lead = sent_request(&sent);
+    let lead_prompt = f.request(lead).prompt.id;
+    f.deliver();
+    f.started("old-turn", &f.typed().last().unwrap().0);
+    f.consume();
+    f.status(RuntimeStatus::Working);
+    assert!(f.request(lead).trusted_start_bound);
+
+    let sent = send_msg(
+        &mut f,
+        json!({"room": room, "to": ["builder"], "text": "new instruction"}),
+    );
+    let replacement = sent_request(&sent);
+    f.deliver();
+
+    let payload = f.typed().last().unwrap().0.clone();
+    assert!(payload.find("interrupted work").unwrap() < payload.find("new instruction").unwrap());
+    assert_eq!(payload.matches(attachment.to_str().unwrap()).count(), 1);
+    f.started("new-turn", &payload);
+    f.consume();
+    let agent = f.agent.0.to_string();
+    let reply = send_msg(
+        &mut f,
+        json!({
+            "as": agent, "reply_to": lead_prompt.0.to_string(), "text": "answered early"
+        }),
+    );
+    assert!(reply.ok, "{reply:?}");
+    f.stopped("new-turn", "both prompts handled");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    assert_eq!(f.reply(lead).as_deref(), Some("answered early"));
+    assert_eq!(
+        f.reply(replacement).as_deref(),
+        Some("both prompts handled")
+    );
+}
+
+#[test]
+fn claude_interrupt_stops_a_new_autonomous_turn_before_retrying_delivery() {
+    for busy_receipt_first in [false, true] {
+        let mut f = Fixture::new(Provider::ClaudeDs);
+        let lead = running(&mut f, "interrupted work", "old-turn");
+        let room = f.room.0.to_string();
+        let sent = send_msg(
+            &mut f,
+            json!({"room": room, "to": ["builder"], "text": "new instruction"}),
+        );
+        let replacement = sent_request(&sent);
+        if busy_receipt_first {
+            // Claude woke before the native attempt, and its callback
+            // has not reached the coordinator yet.
+            f.worker.transport = Box::new(ScriptedStopTransport::new(
+                f.native.clone(),
+                [Ok(ResponseResult::Ok {})],
+                [Err(TransportError {
+                    code: Some(crate::protocol::api::AGENT_CLAUDE_TURN_BUSY.into()),
+                    message: "Claude turn busy".into(),
+                    definitely_rejected: true,
+                    timestamps: Default::default(),
+                })],
+            ));
+            f.deliver();
+            assert_eq!(f.request(replacement).phase, RequestPhase::Queued);
+        }
+        f.started(
+            "shell-wake",
+            "<task-notification><task-id>shell</task-id></task-notification>",
+        );
+        f.consume();
+        f.status(RuntimeStatus::Working);
+        f.deliver();
+        f.deliver();
+        let stop_count = f
+            .native
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| matches!(method, Method::AgentSendKeys(_)))
+            .count();
+        assert_eq!(stop_count, 2, "one stop for each observed turn");
+
+        f.status(RuntimeStatus::Idle);
+        let mut state = f.worker.state.clone();
+        state.observe_autonomous_idle(f.agent, f.now).unwrap();
+        f.worker.save(state).unwrap();
+        f.worker.submission_rechecks.clear();
+        f.deliver();
+
+        let payload = f.typed().last().unwrap().0.clone();
+        let old = payload
+            .find("interrupted work")
+            .unwrap_or_else(|| panic!("{payload:?}"));
+        let new = payload
+            .find("new instruction")
+            .unwrap_or_else(|| panic!("{payload:?}"));
+        assert!(old < new, "{payload:?}");
+        f.started("new-turn", &payload);
+        f.consume();
+        f.stopped("new-turn", "both prompts handled");
+        f.consume();
+        f.status(RuntimeStatus::Idle);
+        for request in [lead, replacement] {
+            assert_eq!(f.reply(request).as_deref(), Some("both prompts handled"));
+        }
+    }
 }

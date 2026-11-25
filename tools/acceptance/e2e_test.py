@@ -540,7 +540,7 @@ class Run:
         self.verify(statuses[second], {self.agents[provider]: new}, row)
 
     def case_interrupt(self, provider, row, room=None, case="interrupt"):
-        """A developer message mid-turn ends it; the follow-up runs next."""
+        """A developer follow-up stops the turn and Claude replays both requests."""
         self.wait_ready([provider], row.setdefault("ready", {}))
         old, new = self.token(provider, case, 1), self.token(provider, case, 2)
         first = self.send([provider], steering_task(old, room == "master"), row, room=room)["message_id"]
@@ -558,14 +558,24 @@ class Run:
             assert time.monotonic() < deadline, f"task never started working: {agent}"
             time.sleep(0.5)
         time.sleep(3)
-        second = self.send([provider], round_trip_prompt(new), row, room=room)["message_id"]
+        replays = provider in {"claude", orchestrator_key("claude")}
+        follow = round_trip_prompt(new)
+        if replays:
+            follow = ("Stop the sleep from the interrupted request and do not restart it. "
+                      + explicit_reply_instruction(new, every_message=True))
+        second = self.send([provider], follow, row, room=room)["message_id"]
         statuses = self.settle([first, second], row)
         first_request = statuses[first]["requests"][0]
-        assert first_request["stage"] == "abandoned", first_request
-        assert first_request["reason"] == "interrupted", first_request
         joined = statuses[second]["requests"][0]
-        assert joined.get("group") is None, joined
-        self.verify(statuses[second], {self.agents[provider]: new}, row)
+        expected = {self.agents[provider]: new}
+        if replays:
+            assert joined.get("group") == first_request["request_id"], joined
+            self.verify(statuses[first], expected, row)
+        else:
+            assert first_request["stage"] == "abandoned", first_request
+            assert first_request["reason"] == "interrupted", first_request
+            assert joined.get("group") is None, joined
+        self.verify(statuses[second], expected, row)
         row["interrupt"] = {"first": first_request, "second": joined}
 
     def case_background(self, provider, row, room=None, case="background"):
