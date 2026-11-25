@@ -92,6 +92,7 @@ impl ObservedSubmission {
                 lease.restored();
                 return Err(error);
             }
+            lease.clear_claude_submission();
             self.inspect.mark_aborted_payload_discarded();
             self.reset_confirmation(delay);
             initial = InputObservation::Empty;
@@ -121,6 +122,9 @@ impl ObservedSubmission {
                     }
                 }
                 let existing_stash = self.inspect.native_stash_visible(&screen);
+                if self.inspect.waits_for_idle() {
+                    lease.clear_claude_submission();
+                }
                 let result =
                     self.confirm_legacy_submission(self.run(text, delay, withdrawal_lease), lease);
                 if result.is_ok() {
@@ -168,7 +172,7 @@ impl ObservedSubmission {
             DraftPreservation::Copy {
                 snapshot,
                 restore_bytes,
-            } => self.preserve_copy(snapshot, restore_bytes, text, delay, &screen, lease),
+            } => self.preserve_copy(snapshot, restore_bytes, text, delay, lease),
         }
     }
 
@@ -220,25 +224,6 @@ impl ObservedSubmission {
             tracing::warn!(event = "bus.draft.exchange_wait", directory = %directory.display(), %error, "Draft transfer is unavailable; delivery remains queued");
             io::Error::other(PromptNotShown::ComposerBusy)
         })
-    }
-
-    fn transfer_key(&self, key: Bytes) -> io::Result<()> {
-        if self.clock.now() >= self.hard_deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Draft transfer deadline expired",
-            ));
-        }
-        self.io
-            .queue_input_write_scoped(
-                key,
-                Bytes::new(),
-                Duration::ZERO,
-                Some(self.hard_deadline),
-                &self.scope,
-            )?
-            .recv_timeout(self.clock.remaining(self.hard_deadline))
-            .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?
     }
 
     pub(super) fn wait_transfer_until(
@@ -300,6 +285,11 @@ impl ObservedSubmission {
                     self.clock.sleep(CLEAR_KEY_DELAY, generation);
                     break;
                 };
+                if !self.inspect.submission_available(&screen)
+                    || self.provider_queues_input(&screen)
+                {
+                    return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                }
                 let cursor = self
                     .terminal
                     .cursor_state()
@@ -310,7 +300,7 @@ impl ObservedSubmission {
                     pristine,
                     lease.claude_stopped_without_edits(),
                 ) {
-                    InputObservation::Empty => return Ok(()),
+                    InputObservation::Empty => return lease.with_unedited(|| Ok(())),
                     InputObservation::Pending => {}
                     _ => return Err(io::Error::other(PromptNotShown::ComposerBusy)),
                 }
@@ -359,33 +349,25 @@ impl ObservedSubmission {
         let exchange = match self.exchange(directory) {
             Ok(exchange) => exchange,
             Err(error) => {
-                if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease)
-                {
-                    return fallback;
-                }
                 lease.restored();
                 return Err(error);
             }
         };
         if let Err(error) = exchange.save_recovery(&visible) {
-            drop(exchange);
-            if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease) {
-                return fallback;
-            }
             lease.restored();
-            tracing::warn!(event = "bus.draft.copy_loss", %error, "Could not save native recovery backup");
+            tracing::warn!(event = "bus.draft.native_backup_failed", %error, "Could not save native draft backup");
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
-        if let Err(error) = self.swap_key(lease, SwapKey::Transfer(key.clone())) {
-            let _ = exchange.remove_recovery();
-            let path = exchange.path().to_owned();
-            drop(exchange);
-            if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease) {
-                return fallback;
+        if let Err(error) = self.swap_key(lease, SwapKey::Stash(key.clone())) {
+            if PromptNotShown::is(&error) {
+                lease.restored();
+                let _ = exchange.remove_recovery();
+            } else {
+                self.recovery_log(&exchange, &error);
             }
-            tracing::error!(event = "bus.draft.recovery_required", directory = %path.display(), %error, "Draft restoration was not proven; recoverable draft retained");
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
+        lease.clear_claude_submission();
         if let Err(error) = self.wait_transfer_until(self.clock.now() + RESTORE_BUDGET, || {
             Ok(
                 self.observe("await_native_stash") == InputObservation::Empty
@@ -394,13 +376,7 @@ impl ObservedSubmission {
                         .native_stash_visible(&self.terminal.active_ansi()),
             )
         }) {
-            let _ = exchange.remove_recovery();
-            let path = exchange.path().to_owned();
-            drop(exchange);
-            if let Some(fallback) = self.fallback_copy_after_handoff_failure(text, delay, lease) {
-                return fallback;
-            }
-            tracing::error!(event = "bus.draft.recovery_required", directory = %path.display(), %error, "Draft restoration was not proven; recoverable draft retained");
+            self.recovery_log(&exchange, &error);
             return Err(io::Error::other(PromptNotShown::ComposerBusy));
         }
         self.reset_confirmation(delay);
@@ -439,13 +415,15 @@ impl ObservedSubmission {
             .native_draft_restored(&self.terminal.active_ansi())
             && self.observe("native_restore_preflight") == InputObservation::Empty
         {
-            let restored = self.transfer_key(key).and_then(|()| {
-                self.wait_transfer(|| {
-                    Ok(self
-                        .inspect
-                        .native_draft_restored(&self.terminal.active_ansi()))
-                })
-            });
+            let restored = self
+                .swap_key(lease, SwapKey::RestoreStash(key))
+                .and_then(|()| {
+                    self.wait_transfer(|| {
+                        Ok(self
+                            .inspect
+                            .native_draft_restored(&self.terminal.active_ansi()))
+                    })
+                });
             if let Err(error) = restored {
                 self.recovery_log(&exchange, &error);
                 return result;

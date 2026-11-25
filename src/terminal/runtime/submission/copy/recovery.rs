@@ -9,7 +9,7 @@ use std::{
 
 mod admission;
 mod caller;
-pub(super) use admission::{start, start_with_receipt};
+pub(super) use admission::start;
 mod storage;
 pub(in crate::terminal::runtime::submission) use caller::CallerDiagnostics;
 #[cfg(test)]
@@ -41,7 +41,7 @@ struct Context {
 }
 
 enum Work {
-    Save(Context, String, Option<mpsc::Sender<()>>),
+    Save(Context, String),
     Settle(Key),
     Revisit,
 }
@@ -249,9 +249,9 @@ impl Service {
 
     fn step(&self, work: Work) {
         match work {
-            Work::Save(context, snapshot, ready) => {
+            Work::Save(context, snapshot) => {
                 tracing::dispatcher::with_default(&context.dispatch, || {
-                    self.persist(&context.key, snapshot, ready);
+                    self.persist(&context.key, snapshot);
                 });
             }
             Work::Settle(key) => self.settle(&key),
@@ -272,7 +272,7 @@ impl Service {
         }
     }
 
-    fn persist(&self, key: &Key, snapshot: String, ready: Option<mpsc::Sender<()>>) {
+    fn persist(&self, key: &Key, snapshot: String) {
         let should_save = {
             let mut registry = self.registry();
             registry.queued -= 1;
@@ -281,15 +281,9 @@ impl Service {
                 .is_some_and(|state| state.active != 0 || !state.restored)
         };
         if should_save {
-            match save(key, snapshot.as_bytes(), ready.is_some()) {
-                Ok(path) => {
-                    if let Some(ready) = ready {
-                        let _ = ready.send(());
-                    }
-                    self.enforce_retention(key, &path);
-                }
+            match save(key, snapshot.as_bytes()) {
+                Ok(path) => self.enforce_retention(key, &path),
                 Err(error) => {
-                    drop(ready);
                     tracing::warn!(event = "bus.draft.copy_recovery_failed", reason = "snapshot_storage_failed", %error, "Could not save a copied draft recovery record")
                 }
             }
@@ -676,7 +670,6 @@ fn register(
     context: &Context,
     snapshot: &str,
     diagnostics: Option<&CallerDiagnostics>,
-    ready: Option<mpsc::Sender<()>>,
 ) -> (Registration, Option<&'static str>) {
     let mut registry = service.registry();
     let unavailable = (
@@ -716,7 +709,7 @@ fn register(
         Some("snapshot_worker_busy")
     } else if service
         .work
-        .send(Work::Save(context.clone(), snapshot.to_owned(), ready))
+        .send(Work::Save(context.clone(), snapshot.to_owned()))
         .is_err()
     {
         let abandoned = registry.disconnect();

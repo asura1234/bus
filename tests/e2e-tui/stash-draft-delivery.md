@@ -128,21 +128,19 @@ end markers for all payloads.
    without delivery text or an end marker. The incoming request was accepted
    once and reaches the native-completion checkpoint.
 
-### STASH-06 — Claude keeps an occupied native stash during copy/send/restore
+### STASH-06 — Claude defers while both the composer and stash contain drafts
 
 Preconditions: open idle `stash-claude`.
 
 1. Type `fake:draft-bytes HIDDEN`, press Ctrl+S, then type
-   `fake:draft-bytes VISIBLE` → capture the visible draft and `› stashed`.
-2. Send `STASH full native slot` → incoming delivery completes once without a
-   permanent hold. The visible draft is restored and the existing native
-   stash marker is still present. Manually submit the visible draft and
-   decode its bytes to verify exact restoration and separation.
-3. After the manual Enter on VISIBLE, inspect the native composer. If HIDDEN
-   is visible, submit it directly. Use Ctrl+S only if the composer is empty
-   and the stash marker remains, then verify HIDDEN is visible before
-   submitting it. Decode the two manual replies and confirm VISIBLE and
-   HIDDEN were each submitted exactly once with their original bytes.
-   Check the incoming request and its native output count, then stop scratch Bus.
-   The stock fake promotes HIDDEN on manual Enter. Real-Claude behavior is
-   未证明.
+   `fake:draft-bytes VISIBLE`. Capture the visible draft and `› stashed`.
+2. Send `STASH full native slot`. Verify the request stays queued with
+   `agent_composer_busy`, the visible draft and stash marker stay in place,
+   and the fixture receives no Bus input during this attempt.
+3. Manually submit VISIBLE and verify its exact bytes in the decoded reply.
+   If HIDDEN is visible after Enter, submit it directly. If the composer is
+   empty and the stash marker remains, verify HIDDEN when Claude promotes it
+   or after manually restoring it. Decode the reply and confirm both drafts
+   were submitted exactly once with their original bytes.
+4. Follow the original incoming request through retry and confirm it submits
+   once when Claude can accept it. Stop scratch Bus.

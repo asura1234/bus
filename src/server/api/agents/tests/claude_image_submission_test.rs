@@ -234,3 +234,144 @@ async fn focused_claude_image_waits_for_the_native_queue_to_empty() {
         .contains("agent_prompted"));
     assert!(writes.try_recv().is_err(), "no second Enter for an image");
 }
+
+#[tokio::test]
+async fn claude_unverified_stash_binding_defers_without_writing() {
+    let scratch = Scratch::new();
+    let config = scratch.root.join("claude");
+    std::fs::create_dir(&config).unwrap();
+    std::fs::write(config.join("keybindings.json"), "{}").unwrap();
+    let kind = AgentKind::Claude;
+    for draft in ["developer draft", "   "] {
+        let (mut app, method, mut writes) = provider_fixture(kind, true, draft);
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        if draft.trim().is_empty() {
+            app.lookup_runtime_sender(0, pane)
+                .unwrap()
+                .test_process_pty_bytes(b"\x1b[2;6H");
+        }
+        let response = start(&mut app, method).recv_timeout(WAIT).unwrap();
+        assert!(
+            response.contains("agent_composer_busy"),
+            "{draft:?}: {response}"
+        );
+        assert!(
+            writes.try_recv().is_err(),
+            "unverified stash binding received input"
+        );
+    }
+}
+
+#[tokio::test]
+async fn claude_interrupt_replays_returned_image_only_with_bus_ownership() {
+    let _scratch = Scratch::new();
+    let kind = AgentKind::Claude;
+    let aborted = "old prompt\n\"/tmp/t-25.png\"";
+    let combined = format!("{aborted}\n\nnew instruction");
+    let returned = "[Image #8]old prompt";
+    for developer_edited in [true, false] {
+        let (mut app, mut lead, mut writes) = provider_fixture(kind, true, "");
+        let mut follow = lead.clone();
+        let Method::AgentPromptIfIdle(params) = &mut lead else {
+            unreachable!()
+        };
+        params.text = aborted.into();
+        let response = start(&mut app, lead);
+        assert_eq!(
+            step(&mut writes, &response, "lead paste").await,
+            Bytes::from(format!("\x1b[200~{aborted}\x1b[201~"))
+        );
+        redraw(&app, kind, returned);
+        assert_eq!(
+            step(&mut writes, &response, "lead enter").await.as_ref(),
+            b"\r"
+        );
+        redraw(&app, kind, "");
+        assert!(response
+            .recv_timeout(WAIT)
+            .unwrap()
+            .contains("agent_prompted"));
+
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        if developer_edited {
+            let edit = Bytes::from_static(b"local edit");
+            app.lookup_runtime_sender(0, pane)
+                .unwrap()
+                .try_send_developer_bytes(edit.clone())
+                .unwrap();
+            assert_eq!(next_write(&mut writes).await, edit);
+        }
+        let agent = app.agent_info(0, pane).unwrap();
+        let stop = Method::AgentSendKeys(crate::protocol::api::schema::AgentSendKeysParams {
+            target: agent.pane_id,
+            keys: vec!["esc".into()],
+            expected_terminal_id: Some(agent.terminal_id),
+            expected_activity: None,
+            native_interrupt: None,
+        });
+        for attempt in 0..2 {
+            let response = app.handle_api_request(Request {
+                id: format!("stop-{attempt}"),
+                method: stop.clone(),
+            });
+            assert!(response.contains("\"type\":\"ok\""), "{response}");
+            assert_eq!(next_write(&mut writes).await.as_ref(), b"\x1b");
+            redraw(&app, kind, returned);
+        }
+
+        let Method::AgentPromptIfIdle(params) = &mut follow else {
+            unreachable!()
+        };
+        params.text = combined.clone();
+        params.discard_aborted_payload = Some(aborted.into());
+        let response = start(&mut app, follow);
+        if developer_edited {
+            assert_eq!(
+                step(&mut writes, &response, "stash foreign image")
+                    .await
+                    .as_ref(),
+                b"\x13"
+            );
+            app.lookup_runtime_sender(0, pane).unwrap().test_process_pty_bytes(
+                "\x1b[2J\x1b[H› stashed\r\n────────────────────────\r\n❯ \r\n────────────────────────\r\n".as_bytes(),
+            );
+        } else {
+            assert_eq!(
+                step(&mut writes, &response, "clear returned image")
+                    .await
+                    .as_ref(),
+                b"\x01"
+            );
+            redraw(&app, kind, returned);
+            assert_eq!(
+                step(&mut writes, &response, "kill returned image")
+                    .await
+                    .as_ref(),
+                b"\x0b"
+            );
+            redraw(&app, kind, "");
+        }
+        assert_eq!(
+            step(&mut writes, &response, "combined paste").await,
+            Bytes::from(format!("\x1b[200~{combined}\x1b[201~"))
+        );
+        redraw(&app, kind, "[Image #9]old prompt\r\n  new instruction");
+        assert_eq!(
+            step(&mut writes, &response, "combined enter")
+                .await
+                .as_ref(),
+            b"\r"
+        );
+        redraw(&app, kind, if developer_edited { returned } else { "" });
+        let reply: serde_json::Value =
+            serde_json::from_str(&response.recv_timeout(WAIT).unwrap()).unwrap();
+        assert_eq!(reply["result"]["type"], "agent_prompted", "{reply}");
+        assert_eq!(
+            reply["result"]
+                .get("discarded_aborted_payload")
+                .and_then(|value| value.as_bool()),
+            (!developer_edited).then_some(true)
+        );
+        assert!(writes.try_recv().is_err());
+    }
+}

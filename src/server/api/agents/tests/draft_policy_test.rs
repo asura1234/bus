@@ -39,6 +39,35 @@ fn claude_aborted_paste_cleanup_refuses_a_different_chip() {
 }
 
 #[test]
+fn claude_aborted_image_cleanup_pins_the_remaining_chips() {
+    let kind = AgentKind::Claude;
+    let returned = screen(kind, "[Image #7] [Image #8]caption");
+    let remainder = screen(kind, "[Image #8]caption");
+    let replacement = screen(kind, "[Image #9]caption");
+    let mut matcher = AbortedMatcher::new("/tmp/first.png\n/tmp/second.png\ncaption".into());
+    assert_eq!(
+        matcher.observe(kind, &returned, None, false, false),
+        InputObservation::Other
+    );
+    assert_eq!(
+        matcher.observe(kind, &returned, None, false, true),
+        InputObservation::Pending
+    );
+    let progress = matcher.progress;
+    assert_eq!(
+        matcher.observe(kind, &remainder, None, false, true),
+        InputObservation::Pending
+    );
+    assert!(matcher.progress > progress);
+    for (frame, unedited) in [(&returned, true), (&replacement, true), (&remainder, false)] {
+        assert_eq!(
+            matcher.observe(kind, frame, None, false, unedited),
+            InputObservation::Other
+        );
+    }
+}
+
+#[test]
 fn each_supported_provider_selects_its_verified_draft_preservation_path() {
     for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Cursor] {
         let observer = inspector(kind);
@@ -115,20 +144,23 @@ fn claude_accepted_suggestion_with_cursor_at_start_is_preserved() {
 }
 
 #[test]
-fn an_existing_native_stash_and_an_unconfigured_binding_fall_back_to_copy() {
+fn claude_draft_defers_when_native_stash_is_unavailable() {
     let observer = inspector(AgentKind::Claude);
     let occupied_slot = format!(
         "{}\n› stashed",
         screen(AgentKind::Claude, "new developer draft")
     );
-    assert!(matches!(
-        observer.draft_preservation(&occupied_slot),
-        Some(DraftPreservation::Copy {
-            restore_bytes: Some(_),
-            ..
-        })
-    ));
-    for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Cursor] {
+    assert!(observer.draft_preservation(&occupied_slot).is_none());
+    let unconfigured = PreservingComposer::new(
+        AgentKind::Claude,
+        "from bus".into(),
+        "unused".into(),
+        Vec::new(),
+    );
+    assert!(unconfigured
+        .draft_preservation(&screen(AgentKind::Claude, "developer draft"))
+        .is_none());
+    for kind in [AgentKind::Codex, AgentKind::Cursor] {
         let observer =
             PreservingComposer::new(kind, "from bus".into(), "unused".into(), Vec::new());
         assert!(matches!(
