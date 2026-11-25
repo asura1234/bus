@@ -84,6 +84,10 @@ Bus adds one sender header: `name:`; IDs appear only for numeric or historical n
 Include this rule in worker briefs. Any agent can message agents in any room;
 `--to orchestrator` names the sender's home room's orchestrator.
 
+When briefing or steering a worker, copy the developer's original links and
+local file or attachment paths verbatim alongside any summary. Follow the
+[binding rule on original links and file paths](orchestrator-rules.md#pass-original-links-and-file-paths).
+
 ### Move an existing session into MASTER
 
 Use `bus agent add --help` for supported orchestrator providers, session adoption

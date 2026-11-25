@@ -103,6 +103,9 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   constraints and decisions plainly, with concrete reasons; never say who asked
   or approved them, or frame anyone as human or non-human. Apply this to Chinese
   prompts too.
+- Always copy the developer's original URLs and local file or attachment paths
+  verbatim into worker briefs and steering messages, alongside any summary.
+  [Full rule]({{DOCS}}/orchestrator-rules.md#pass-original-links-and-file-paths).
 - Give each task a clear output: what to produce, where to write it, how to
   report. Agents run long commands in the foreground and end their turn only
   with a final result.
