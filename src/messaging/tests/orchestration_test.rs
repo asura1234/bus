@@ -60,6 +60,28 @@ fn written_cli_guide_points_to_command_help() {
 }
 
 #[test]
+fn worker_brief_rule_preserves_original_links_and_file_paths() {
+    let data = temp_root("original-brief-references");
+    let docs = write_docs(&data).unwrap();
+    let rules = flat(&std::fs::read_to_string(docs.join("orchestrator-rules.md")).unwrap());
+    let guide = std::fs::read_to_string(docs.join("orchestrator-guide.md")).unwrap();
+    let prompt = flat(&fill(DEFAULT_PROMPT, &values(Some(("test", 7)), &data)));
+    let anchor = "pass-original-links-and-file-paths";
+
+    assert!(rules.contains(&format!(r#"id="{anchor}""#)));
+    assert!(rules.contains("Always pass original links and file paths to workers"));
+    assert!(rules.contains("verbatim into the worker's brief or steering message"));
+    assert!(rules.contains("Include the originals alongside any summary"));
+    assert!(guide.contains(&format!("orchestrator-rules.md#{anchor}")));
+    assert!(prompt.contains(&format!(
+        "{}#{anchor}",
+        docs.join("orchestrator-rules.md").display()
+    )));
+    assert!(prompt.contains("verbatim into worker briefs and steering messages"));
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
 fn workflow_discovery_and_assumption_rules_are_binding() {
     let rules = include_str!("../../../orchestration/rules.md");
     assert!(rules[rules.find("- **").unwrap()..]

@@ -358,6 +358,14 @@ the wrapper remains held.
   "the human is waiting". This applies to Chinese prompts too. *Why:*
   attribution adds noise and makes workers guess at priority, treating it as
   more or less important.
+
+<a id="pass-original-links-and-file-paths"></a>
+
+- **Always pass original links and file paths to workers.** Copy every external
+  URL (doc, Figma, Bitable, ticket, PR or MR) and local file or attachment path
+  (screenshot, recording, log or spec) the developer supplies for the task
+  verbatim into the worker's brief or steering message. Include the originals
+  alongside any summary, including in briefs shared by file path.
 - **Require a root-cause analysis in every bug-fix brief.** When dispatching a
   bug fix, ask the worker to establish the root cause from evidence (logs, a
   reproduction, a failing test) before changing behavior. If the root cause is
