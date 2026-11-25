@@ -47,6 +47,13 @@ impl ClientState {
         self.reset_pending = true;
     }
 
+    /// The encoder advanced its cache for a frame the host never received.
+    /// Include IDs whose deletion was in that frame and already left the cache.
+    pub(crate) fn recover_discarded_graphics(&mut self, image_ids: impl IntoIterator<Item = u32>) {
+        self.reset_pending = true;
+        self.forced_delete_images.extend(image_ids);
+    }
+
     pub(crate) fn take_pending_cleanup(&mut self) -> Vec<u8> {
         let mut bytes = if self.reset_pending {
             self.reset_pending = false;

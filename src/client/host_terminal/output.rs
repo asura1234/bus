@@ -11,7 +11,7 @@ use crate::protocol::{
     wire::{CursorState, FrameData, PaneSurfacePatchRow},
 };
 use metrics::OutputMetrics;
-use queue::{Command, Frame, Handle, Patch, Shared};
+use queue::{Command, Feedback, Frame, Handle, Patch, Shared};
 pub(in crate::client) use routing::{busy, stdout, suspend};
 use std::{
     io::{self, Write},
@@ -162,7 +162,7 @@ impl TerminalOutput {
         self.handle.push(Command::EncodedFrame(bytes))
     }
 
-    pub(in crate::client) fn feedback(&self) -> io::Result<Option<bool>> {
+    pub(in crate::client) fn feedback(&self) -> io::Result<Feedback> {
         self.handle.feedback()
     }
 

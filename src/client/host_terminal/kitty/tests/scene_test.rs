@@ -84,6 +84,33 @@ fn client_encodes_final_main_origin_upload_once_and_replays_placement() {
 }
 
 #[test]
+fn discarded_upload_and_delete_are_recovered_before_placement() {
+    let mut state = ClientState::default();
+    state.set_scope("endpoint-a:boot-1");
+    state.set_scene(scene(
+        asset(
+            SurfaceGraphicsTarget::Pane { pane_id: "w1:p1".into() },
+            42,
+            vec![1, 2, 3, 4],
+        ),
+        0,
+        0,
+    ));
+    let size = HostCellSize { width_px: 8, height_px: 16 };
+    let discarded = state.encode(Visibility::Main, (5, 2), size);
+    assert!(String::from_utf8_lossy(&discarded).contains("a=t,t=d"));
+
+    // A stale delete has already left the cache. Its ID comes from the
+    // dropped transaction, along with any IDs still in the scene cache.
+    state.recover_discarded_graphics([42]);
+    let bytes = String::from_utf8(state.encode(Visibility::Main, (3, 2), size)).unwrap();
+    let delete = bytes.find("a=d,d=I,i=42").unwrap();
+    let upload = bytes.find("a=t,t=d").unwrap();
+    let placement = bytes.find("a=p").unwrap();
+    assert!(delete < upload && upload < placement, "{bytes}");
+}
+
+#[test]
 fn client_hides_and_restores_without_reuploading_pixels() {
     let mut state = ClientState::default();
     state.set_scope("endpoint-a:boot-1");

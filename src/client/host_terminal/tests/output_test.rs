@@ -288,6 +288,34 @@ fn host_geometry_rejects_old_frames_and_patches_before_the_resize_event() {
 }
 
 #[test]
+fn discarded_graphics_holds_composition_until_the_cache_can_recover() {
+    let (mut output, capture, entered) = slow(false);
+    let _route = output.route();
+    output.frame(frame("A", 4), false, false).unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    let mut stale = frame("X", 4);
+    stale.graphics = b"\x1b_Ga=t,i=41;YQ==\x1b\\\x1b_Ga=d,d=I,i=42;\x1b\\".to_vec();
+    output.frame(stale, false, false).unwrap();
+    output.invalidate();
+    release(&capture);
+    output.handle.wait_idle();
+
+    assert!(
+        busy(),
+        "composition can advance an unreconciled graphics cache"
+    );
+    let feedback = output.feedback().unwrap();
+    assert_eq!(feedback.discarded_graphics, Some([41, 42].into()));
+    assert!(!busy());
+    output.finish().unwrap();
+    let capture = capture.0.lock().unwrap();
+    let bytes = String::from_utf8_lossy(&capture.bytes);
+    assert!(bytes.contains("AAAA"));
+    assert!(!bytes.contains("XXXX"));
+    assert!(!bytes.contains("YQ=="));
+}
+
+#[test]
 fn failed_flush_never_acknowledges_or_commits_a_frame() {
     let (mut output, state, entered) = slow(true);
     output.frame(frame("A", 4), false, false).unwrap();
