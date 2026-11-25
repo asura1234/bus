@@ -413,12 +413,18 @@ async fn claude_existing_stash_waits_for_rich_paste_materialization() {
 const COPIED_DRAFT: &str = "developer draft";
 const INCOMING: &str = "from bus";
 
-fn queue_claude_copy(
+fn paint_copy(runtime: &TerminalRuntime, body: &str) {
+    let frame = format!(" > {body}\n / commands · @ files");
+    runtime
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{}", frame.replace('\n', "\r\n")).as_bytes());
+}
+
+fn queue_cursor_copy(
     runtime: &TerminalRuntime,
     directory: std::path::PathBuf,
     draft: &str,
 ) -> crate::terminal::pty::actor::InputCompletion {
-    paint(runtime, draft, false, "");
+    paint_copy(runtime, draft);
     runtime
         .queue_observed_input_with_inspector(
             Bytes::from_static(INCOMING.as_bytes()),
@@ -427,7 +433,7 @@ fn queue_claude_copy(
             Duration::ZERO,
             None,
             Box::new(PreservingComposer::new(
-                AgentKind::Claude,
+                AgentKind::Cursor,
                 INCOMING.into(),
                 directory,
                 Vec::new(),
@@ -437,8 +443,8 @@ fn queue_claude_copy(
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_retries_delayed_clear_before_submitting_and_restores() {
-    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-clear-retry");
+async fn cursor_copy_fallback_retries_delayed_clear_before_submitting_and_restores() {
+    let directory = crate::utils::test_temp::unique_temp_path("cursor-copy-clear-retry");
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     let clock = runtime.test_submission_clock().unwrap();
     clock.pause();
@@ -460,30 +466,28 @@ async fn claude_copy_fallback_retries_delayed_clear_before_submitting_and_restor
     );
 
     let mut composer = String::new();
-    paint(&runtime, &composer, false, "");
+    paint_copy(&runtime, &composer);
     let pasted = key(&mut writes).await;
     composer.push_str(std::str::from_utf8(&pasted).unwrap());
-    paint(&runtime, &composer, false, "");
+    paint_copy(&runtime, &composer);
     assert_eq!(key(&mut writes).await.as_ref(), b"\r");
     let submitted = std::mem::take(&mut composer);
     assert_eq!(submitted, INCOMING);
     clock.wait_for_enters(1);
 
-    runtime.test_process_pty_bytes(
-        "\x1b[2J\x1b[H> from bus\r\n✻ Working… (0s · esc to interrupt)\r\n".as_bytes(),
-    );
+    runtime.test_process_pty_bytes("\x1b[2J\x1b[HWorking…\r\n".as_bytes());
     let generation = clock.advance(Duration::from_millis(100));
     clock.wait_for_submission_check(generation);
     assert!(
         writes.try_recv().is_err(),
         "restore must wait for an editable composer"
     );
-    paint(&runtime, &composer, false, "");
+    paint_copy(&runtime, &composer);
     assert_eq!(
         key(&mut writes).await.as_ref(),
         b"\x1b[200~developer draft\x1b[201~"
     );
-    paint(&runtime, COPIED_DRAFT, false, "");
+    paint_copy(&runtime, COPIED_DRAFT);
     completion
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
@@ -497,20 +501,20 @@ async fn claude_copy_fallback_retries_delayed_clear_before_submitting_and_restor
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_retains_draft_when_restore_lease_is_invalidated() {
-    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-restore-revoked");
+async fn cursor_copy_fallback_retains_draft_when_restore_lease_is_invalidated() {
+    let directory = crate::utils::test_temp::unique_temp_path("cursor-copy-restore-revoked");
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     let clock = runtime.test_submission_clock().unwrap();
     clock.pause();
     let (completion, events) = captured_copy(&runtime, directory.clone());
     assert_eq!(key(&mut writes).await.as_ref(), b"\x15");
-    paint(&runtime, "", false, "");
+    paint_copy(&runtime, "");
     assert_eq!(key(&mut writes).await.as_ref(), INCOMING.as_bytes());
-    paint(&runtime, INCOMING, false, "");
+    paint_copy(&runtime, INCOMING);
     assert_eq!(key(&mut writes).await.as_ref(), b"\r");
     clock.wait_for_enters(1);
     runtime.invalidate_submission_ownership();
-    paint(&runtime, "", false, "");
+    paint_copy(&runtime, "");
     completion
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
@@ -530,8 +534,8 @@ async fn claude_copy_fallback_retains_draft_when_restore_lease_is_invalidated() 
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_expires_without_paste_when_clear_never_confirms() {
-    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-clear-expired");
+async fn cursor_copy_fallback_expires_without_paste_when_clear_never_confirms() {
+    let directory = crate::utils::test_temp::unique_temp_path("cursor-copy-clear-expired");
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     let clock = runtime.test_submission_clock().unwrap();
     clock.pause();
@@ -563,12 +567,12 @@ async fn claude_copy_fallback_expires_without_paste_when_clear_never_confirms() 
     // time. Its verified restore also retires the earlier recovery copy.
     let (retry, retry_events) = captured_copy(&runtime, directory.clone());
     accept_copy_message(&runtime, &mut writes).await;
-    paint(&runtime, "", false, "");
+    paint_copy(&runtime, "");
     assert_eq!(
         key(&mut writes).await.as_ref(),
         b"\x1b[200~developer draft\x1b[201~"
     );
-    paint(&runtime, COPIED_DRAFT, false, "");
+    paint_copy(&runtime, COPIED_DRAFT);
     retry.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
     copy_event(&retry_events, "bus.draft.copy_recovery_retired");
     assert!(std::fs::read_dir(&directory).unwrap().next().is_none());
@@ -632,7 +636,7 @@ fn captured_copy_with_draft(
             .finish(),
     );
     let completion = tracing::dispatcher::with_default(&dispatch, || {
-        queue_claude_copy(runtime, directory, draft)
+        queue_cursor_copy(runtime, directory, draft)
     });
     (completion, events)
 }
@@ -654,9 +658,9 @@ async fn accept_copy_message(
     writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
 ) {
     assert_eq!(key(writes).await.as_ref(), b"\x15");
-    paint(runtime, "", false, "");
+    paint_copy(runtime, "");
     assert_eq!(key(writes).await.as_ref(), INCOMING.as_bytes());
-    paint(runtime, INCOMING, false, "");
+    paint_copy(runtime, INCOMING);
     assert_eq!(key(writes).await.as_ref(), b"\r");
     runtime.test_submission_clock().unwrap().wait_for_enters(1);
 }
@@ -677,8 +681,8 @@ fn write_private_copy(path: &std::path::Path, text: &str) {
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_storage_failure_still_delivers_and_restores_from_ram() {
-    let directory = crate::utils::test_temp::unique_temp_path("claude-copy-storage-fault");
+async fn cursor_copy_fallback_storage_failure_still_delivers_and_restores_from_ram() {
+    let directory = crate::utils::test_temp::unique_temp_path("cursor-copy-storage-fault");
     // A regular file as the directory yields a deterministic storage failure,
     // even under a privileged test runner.
     std::fs::write(&directory, "blocks recovery storage").unwrap();
@@ -691,12 +695,12 @@ async fn claude_copy_fallback_storage_failure_still_delivers_and_restores_from_r
         () = accept_copy_message(&runtime, &mut writes) => {}
         done = &mut result => panic!("storage failure refused an editable pane: {:?}", done.unwrap()),
     }
-    paint(&runtime, "", false, "");
+    paint_copy(&runtime, "");
     assert_eq!(
         key(&mut writes).await.as_ref(),
         b"\x1b[200~developer draft\x1b[201~"
     );
-    paint(&runtime, COPIED_DRAFT, false, "");
+    paint_copy(&runtime, COPIED_DRAFT);
     result.await.unwrap().unwrap().unwrap();
     assert!(writes.try_recv().is_err());
     let event = copy_event(&events, "bus.draft.copy_recovery_failed");
@@ -705,9 +709,9 @@ async fn claude_copy_fallback_storage_failure_still_delivers_and_restores_from_r
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_replaces_unverified_record_with_verified_alternate() {
+async fn cursor_copy_fallback_replaces_unverified_record_with_verified_alternate() {
     for is_directory in [false, true] {
-        let directory = crate::utils::test_temp::unique_temp_path("claude-copy-conflicting-record");
+        let directory = crate::utils::test_temp::unique_temp_path("cursor-copy-conflicting-record");
         crate::platform::fs::private_dir(&directory).unwrap();
         let conflicting = copy_record(&directory, COPIED_DRAFT);
         if is_directory {
@@ -721,7 +725,7 @@ async fn claude_copy_fallback_replaces_unverified_record_with_verified_alternate
         let (completion, events) = captured_copy(&runtime, directory.clone());
         accept_copy_message(&runtime, &mut writes).await;
         runtime.invalidate_submission_ownership();
-        paint(&runtime, "", false, "");
+        paint_copy(&runtime, "");
         completion
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
@@ -751,10 +755,10 @@ async fn claude_copy_fallback_replaces_unverified_record_with_verified_alternate
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_bounds_recovery_records_and_retires_a_reused_snapshot() {
+async fn cursor_copy_fallback_bounds_recovery_records_and_retires_a_reused_snapshot() {
     // Small records exercise the count cap and large ones exercise the byte cap.
     for record_bytes in [1024, 600 * 1024] {
-        let directory = crate::utils::test_temp::unique_temp_path("claude-copy-bounded-records");
+        let directory = crate::utils::test_temp::unique_temp_path("cursor-copy-bounded-records");
         crate::platform::fs::private_dir(&directory).unwrap();
         for index in 0..20 {
             let old = format!("{index:02}{}", "x".repeat(record_bytes));
@@ -767,12 +771,12 @@ async fn claude_copy_fallback_bounds_recovery_records_and_retires_a_reused_snaps
         runtime.test_submission_clock().unwrap().pause();
         let (completion, events) = captured_copy(&runtime, directory.clone());
         accept_copy_message(&runtime, &mut writes).await;
-        paint(&runtime, "", false, "");
+        paint_copy(&runtime, "");
         assert_eq!(
             key(&mut writes).await.as_ref(),
             b"\x1b[200~developer draft\x1b[201~"
         );
-        paint(&runtime, COPIED_DRAFT, false, "");
+        paint_copy(&runtime, COPIED_DRAFT);
         completion
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
@@ -800,24 +804,24 @@ async fn claude_copy_fallback_bounds_recovery_records_and_retires_a_reused_snaps
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_verifies_collapsed_multiline_and_rejects_edited_words() {
+async fn cursor_copy_fallback_verifies_collapsed_multiline_and_rejects_edited_words() {
     const DRAFT: &str = "review the changes\n\nbefore publishing";
     for (readback, restored) in [
         ("review the changes before merging", false),
         ("review the changes  before publishing", true),
     ] {
-        let directory = crate::utils::test_temp::unique_temp_path("claude-copy-collapsed-readback");
+        let directory = crate::utils::test_temp::unique_temp_path("cursor-copy-collapsed-readback");
         let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
         let clock = runtime.test_submission_clock().unwrap();
         clock.pause();
         let (completion, events) = captured_copy_with_draft(&runtime, directory.clone(), DRAFT);
         accept_copy_message(&runtime, &mut writes).await;
-        paint(&runtime, "", false, "");
+        paint_copy(&runtime, "");
         assert_eq!(
             key(&mut writes).await.as_ref(),
             b"\x1b[200~review the changes\n\nbefore publishing\x1b[201~"
         );
-        paint(&runtime, readback, false, "");
+        paint_copy(&runtime, readback);
         clock.advance(Duration::from_secs(2));
         completion
             .recv_timeout(Duration::from_secs(5))
@@ -858,16 +862,16 @@ async fn restore_copy_message(
     writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
 ) {
     accept_copy_message(runtime, writes).await;
-    paint(runtime, "", false, "");
+    paint_copy(runtime, "");
     assert_eq!(
         key(writes).await.as_ref(),
         b"\x1b[200~developer draft\x1b[201~"
     );
-    paint(runtime, COPIED_DRAFT, false, "");
+    paint_copy(runtime, COPIED_DRAFT);
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_saturation_keeps_terminal_retirement() {
+async fn cursor_copy_fallback_saturation_keeps_terminal_retirement() {
     use crate::terminal::runtime::copy_recovery_test_hooks as hooks;
     let scratch = crate::utils::test_temp::unique_temp_path("copy-saturated");
     let blocker = scratch.join("blocker");
@@ -884,7 +888,7 @@ async fn claude_copy_fallback_saturation_keeps_terminal_retirement() {
     let (old_result, old_events) = captured_copy(&old, pane.clone());
     accept_copy_message(&old, &mut old_writes).await;
     old.invalidate_submission_ownership();
-    paint(&old, "", false, "");
+    paint_copy(&old, "");
     old_result
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
@@ -956,7 +960,7 @@ fn full_copy_directory(directory: &std::path::Path) -> std::path::PathBuf {
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_failed_replacement_never_evicts_oldest() {
+async fn cursor_copy_fallback_failed_replacement_never_evicts_oldest() {
     let directory = crate::utils::test_temp::unique_temp_path("copy-failed-replacement");
     let oldest = full_copy_directory(&directory);
     crate::terminal::runtime::copy_recovery_test_hooks::install(directory.clone(), || {
@@ -970,7 +974,7 @@ async fn claude_copy_fallback_failed_replacement_never_evicts_oldest() {
         captured_copy_with_draft(&runtime, directory.clone(), "distinct snapshot B");
     accept_copy_message(&runtime, &mut writes).await;
     runtime.invalidate_submission_ownership();
-    paint(&runtime, "", false, "");
+    paint_copy(&runtime, "");
     result
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
@@ -982,7 +986,7 @@ async fn claude_copy_fallback_failed_replacement_never_evicts_oldest() {
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_replacement_protects_in_flight_oldest() {
+async fn cursor_copy_fallback_replacement_protects_in_flight_oldest() {
     let scratch = crate::utils::test_temp::unique_temp_path("copy-active-eviction");
     let directory = scratch.join("pane");
     let blocker = scratch.join("blocker");
@@ -1001,7 +1005,7 @@ async fn claude_copy_fallback_replacement_protects_in_flight_oldest() {
         captured_copy_with_draft(&replacing, directory.clone(), "distinct snapshot B");
     accept_copy_message(&replacing, &mut b_writes).await;
     replacing.invalidate_submission_ownership();
-    paint(&replacing, "", false, "");
+    paint_copy(&replacing, "");
     b_result
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
@@ -1014,12 +1018,12 @@ async fn claude_copy_fallback_replacement_protects_in_flight_oldest() {
     copy_event(&b_events, "bus.draft.recovery_required");
     let protected = std::fs::read_to_string(&oldest);
 
-    paint(&retry, "", false, "");
+    paint_copy(&retry, "");
     assert_eq!(
         key(&mut a_writes).await.as_ref(),
         b"\x1b[200~developer draft\x1b[201~"
     );
-    paint(&retry, COPIED_DRAFT, false, "");
+    paint_copy(&retry, COPIED_DRAFT);
     a_result
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
@@ -1063,7 +1067,7 @@ impl Drop for BlockedCopyLog {
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_blocked_recovery_notice_does_not_delay_other_pane_delivery() {
+async fn cursor_copy_fallback_blocked_recovery_notice_does_not_delay_other_pane_delivery() {
     let scratch = crate::utils::test_temp::unique_temp_path("copy-blocked-sink-pty");
     let (messages, events) = std::sync::mpsc::channel();
     let (started, waiting) = std::sync::mpsc::channel();
@@ -1085,11 +1089,11 @@ async fn claude_copy_fallback_blocked_recovery_notice_does_not_delay_other_pane_
     let (first, mut first_keys) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     first.test_submission_clock().unwrap().pause();
     let first_result = tracing::dispatcher::with_default(&dispatch, || {
-        queue_claude_copy(&first, scratch.join("first"), COPIED_DRAFT)
+        queue_cursor_copy(&first, scratch.join("first"), COPIED_DRAFT)
     });
     accept_copy_message(&first, &mut first_keys).await;
     first.invalidate_submission_ownership();
-    paint(&first, "", false, "");
+    paint_copy(&first, "");
     first_result
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
@@ -1120,7 +1124,7 @@ async fn claude_copy_fallback_blocked_recovery_notice_does_not_delay_other_pane_
 }
 
 #[tokio::test]
-async fn claude_copy_fallback_blocked_overload_warning_does_not_delay_its_own_pane() {
+async fn cursor_copy_fallback_blocked_overload_warning_does_not_delay_its_own_pane() {
     use crate::terminal::runtime::copy_recovery_test_hooks as hooks;
 
     let scratch = crate::utils::test_temp::unique_temp_path("copy-blocked-overload-pty");
@@ -1162,7 +1166,7 @@ async fn claude_copy_fallback_blocked_overload_warning_does_not_delay_its_own_pa
     let (runtime, mut writes) = TerminalRuntime::test_with_channel_capacity(100, 24, 16);
     runtime.test_submission_clock().unwrap().pause();
     let completion = tracing::dispatcher::with_default(&dispatch, || {
-        queue_claude_copy(&runtime, scratch.join("pane"), COPIED_DRAFT)
+        queue_cursor_copy(&runtime, scratch.join("pane"), COPIED_DRAFT)
     });
     drop(dispatch);
     let delivery = tokio::time::timeout(Duration::from_secs(2), async {

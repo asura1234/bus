@@ -638,27 +638,27 @@ mod paste_recovery_tests;
 #[path = "owned_draft_cleanup_test.rs"]
 mod owned_draft_cleanup_tests;
 
-// Non-empty opaque drafts cannot block the queue: copy/clear/send delivers anyway
-// and logs the unrestorable loss rather than refusing with `agent_composer_busy`.
 pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
     for draft in [
         "[Image #138] developer draft",
         "[Pasted text #147 +20 lines]",
     ] {
         let (mut app, method, mut writes) = provider_fixture(kind, bound, draft);
-        let repaint_with_stash = |app: &App, body: &str| {
-            let mut frame = screen(kind, body);
-            // Clearing or pasting edits the composer alone. Claude promotes
-            // its occupied stash on Enter, even when the visible draft is opaque.
-            if kind == AgentKind::Claude {
-                frame.push_str("\r\n› stashed");
-            }
+        if kind == AgentKind::Claude {
             let pane = app.state.workspaces[0].tabs[0].root_pane;
+            let frame = format!("{}\r\n› stashed", screen(kind, draft));
             app.lookup_runtime_sender(0, pane)
                 .unwrap()
                 .test_process_pty_bytes(frame.as_bytes());
-        };
-        repaint_with_stash(&app, draft);
+            let response = start(&mut app, method);
+            clock(&app).resume();
+            let reply = response.recv_timeout(WAIT).unwrap();
+            assert!(reply.contains("agent_composer_busy"), "{draft}: {reply}");
+            assert!(writes.try_recv().is_err(), "occupied stash received input");
+            let visible = app.lookup_runtime_sender(0, pane).unwrap().visible_text();
+            assert!(visible.contains(draft) && visible.contains("› stashed"));
+            continue;
+        }
         let response = start(&mut app, method);
         clock(&app).resume();
         let mut response =
@@ -672,13 +672,13 @@ pub(super) async fn preserve_existing_draft(kind: AgentKind, bound: bool) {
                 .and_then(|s| s.strip_suffix("\x1b[201~"))
             {
                 current.push_str(pasted);
-                repaint_with_stash(&app, current);
+                redraw(&app, kind, current);
             } else if text == "\r" {
                 submitted.push(std::mem::take(current));
                 redraw(&app, kind, "");
             } else if text == "\x0b" || text == "\x15" {
                 current.clear();
-                repaint_with_stash(&app, "");
+                redraw(&app, kind, "");
             }
         };
         let reply = loop {

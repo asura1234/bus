@@ -1708,8 +1708,10 @@ async fn developer_follow_up_interrupts_the_orchestrator_turn_without_blocking_t
 }
 
 #[tokio::test]
-async fn queue_steer_and_interrupt_snapshot_and_restore_at_pane_delivery_time() {
-    // Queue mode must snapshot at actual pane delivery time, NOT at room enqueue time.
+async fn delivery_uses_the_composer_state_at_pane_delivery_time() {
+    let _draft_environment =
+        crate::server::api::test_support::DraftTestEnvironment::new("reply-delivery-draft");
+    // Queue mode checks the composer when the pane is ready for delivery.
     for provider in [Provider::ClaudeCode, Provider::Codex] {
         let mut f = Delivery::new(&[provider], false);
         let worker = f.agents[0];
@@ -1730,13 +1732,34 @@ async fn queue_steer_and_interrupt_snapshot_and_restore_at_pane_delivery_time() 
             RequestPhase::Queued
         );
 
-        // Person types into the agent's composer AFTER room enqueue, while turn 1 still runs.
+        // The developer types after enqueue, while the first turn still runs.
+        if provider == Provider::ClaudeCode {
+            f.captured_composer(
+                worker,
+                "› stashed\r\n────────────────────────\r\n❯ typed after room enqueue\r\n────────────────────────",
+            );
+        }
         f.set_composer_draft(worker, "typed after room enqueue");
         f.stop(worker, "t1", "turn one done", json!([]), json!([]));
         f.status(worker, AgentState::Idle);
         f.tick();
         f.pump();
         f.assert_reply(lead, "turn one done");
+        if provider == Provider::ClaudeCode {
+            let response = f.last_submission_response().unwrap();
+            assert_eq!(
+                response["error"]["code"],
+                crate::protocol::api::AGENT_COMPOSER_BUSY,
+                "{response}"
+            );
+            assert_eq!(
+                f.state().request(queued).unwrap().phase,
+                RequestPhase::Queued
+            );
+            assert_eq!(f.typed_content(worker), ["turn one"]);
+            assert_eq!(f.composer_draft(worker), "typed after room enqueue");
+            continue;
+        }
         assert!(
             f.typed_content(worker)
                 .last()

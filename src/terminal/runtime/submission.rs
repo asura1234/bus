@@ -139,8 +139,7 @@ pub(crate) trait SubmissionInspector: Send {
     fn native_draft_preserved(&self) -> bool {
         false
     }
-    fn clear_native_draft(&self) {}
-    /// Snapshot the current composer content for universal copy-send-restore fallback.
+    /// Snapshot the composer for providers that support screen-copy fallback.
     fn composer_copy_fallback(
         &self,
         _screen: &str,
@@ -197,23 +196,6 @@ pub(crate) trait SubmissionInspector: Send {
         self.draft_preservation_with_cursor(screen, cursor)
     }
     fn native_stash_visible(&self, _screen: &str) -> bool {
-        false
-    }
-    fn mark_occupied_stash_for_copy(&self, _screen: &str) -> bool {
-        false
-    }
-    fn copy_stash_key(&self) -> Option<Bytes> {
-        None
-    }
-    /// Return a recovery snapshot and whether the live readback allows a native move.
-    fn copy_stash_readback(
-        &self,
-        _screen: &str,
-        _cursor: Option<(u16, u16)>,
-    ) -> Option<(String, bool)> {
-        None
-    }
-    fn copy_stash_payload_is_distinct(&self, _screen: &str, _cursor: Option<(u16, u16)>) -> bool {
         false
     }
     fn native_draft_restored(&self, _screen: &str) -> bool {

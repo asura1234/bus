@@ -11,15 +11,6 @@ pub(in crate::terminal::runtime::submission::copy) fn start<'a>(
     snapshot: &str,
     diagnostics: &'a CallerDiagnostics,
 ) -> Option<Attempt<'a>> {
-    start_with_receipt(directory, snapshot, diagnostics, None)
-}
-
-pub(in crate::terminal::runtime::submission::copy) fn start_with_receipt<'a>(
-    directory: &Path,
-    snapshot: &str,
-    diagnostics: &'a CallerDiagnostics,
-    ready: Option<mpsc::Sender<()>>,
-) -> Option<Attempt<'a>> {
     if snapshot.is_empty() {
         return None;
     }
@@ -50,8 +41,7 @@ pub(in crate::terminal::runtime::submission::copy) fn start_with_receipt<'a>(
         },
         dispatch: tracing::dispatcher::get_default(Clone::clone),
     };
-    let (registration, skipped_reason) =
-        register(service, &context, snapshot, Some(diagnostics), ready);
+    let (registration, skipped_reason) = register(service, &context, snapshot, Some(diagnostics));
     if let Some(reason) = skipped_reason {
         diagnostics.admission_skipped(reason);
     }

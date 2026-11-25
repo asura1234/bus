@@ -10,6 +10,8 @@ use std::{
 
 pub(super) enum SwapKey<'a> {
     Transfer(Bytes),
+    Stash(Bytes),
+    RestoreStash(Bytes),
     Enter,
     Resume(Option<&'a str>),
     EraseMarker {
@@ -37,7 +39,13 @@ impl ObservedSubmission {
                 .active_ansi_if_complete()
                 .filter(|screen| self.inspect.submission_available(screen))
                 .ok_or_else(|| {
-                    if matches!(action, SwapKey::Resume(_) | SwapKey::EraseMarker { .. }) {
+                    if matches!(
+                        action,
+                        SwapKey::Resume(_)
+                            | SwapKey::EraseMarker { .. }
+                            | SwapKey::Stash(_)
+                            | SwapKey::RestoreStash(_)
+                    ) {
                         io::Error::other(PromptNotShown::ComposerBusy)
                     } else {
                         io::Error::other("Native input is blocked")
@@ -65,6 +73,22 @@ impl ObservedSubmission {
                     return Err(io::Error::other(PromptNotShown::ComposerBusy));
                 }
             }
+            match &action {
+                SwapKey::Stash(_)
+                    if self.provider_queues_input(&screen)
+                        || !self.inspect.native_draft_restored(&screen) =>
+                {
+                    return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                }
+                SwapKey::RestoreStash(_)
+                    if self.provider_queues_input(&screen)
+                        || !self.inspect.native_stash_visible(&screen)
+                        || self.observe("native_restore_preflight") != InputObservation::Empty =>
+                {
+                    return Err(io::Error::other(PromptNotShown::ComposerBusy));
+                }
+                _ => {}
+            }
             if self.clock.now() >= deadline {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -72,7 +96,10 @@ impl ObservedSubmission {
                 ));
             }
             let key = match action {
-                SwapKey::Transfer(key) | SwapKey::EraseMarker { keys: key, .. } => key,
+                SwapKey::Transfer(key)
+                | SwapKey::Stash(key)
+                | SwapKey::RestoreStash(key)
+                | SwapKey::EraseMarker { keys: key, .. } => key,
                 SwapKey::Enter | SwapKey::Resume(_) => {
                     self.inspect.editor_submit_key(&screen, &self.enter)
                 }

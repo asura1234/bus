@@ -230,6 +230,48 @@ impl App {
 }
 #[cfg(test)]
 pub(super) mod test_support {
+    use std::{ffi::OsString, path::PathBuf};
+
+    pub(crate) struct DraftTestEnvironment {
+        _env: crate::utils::test_env::EnvLock,
+        pub(crate) root: PathBuf,
+        previous: [(&'static str, Option<OsString>); 2],
+    }
+
+    impl DraftTestEnvironment {
+        pub(crate) fn new(label: &str) -> Self {
+            let env = crate::utils::test_env::env_lock();
+            let root = crate::utils::test_temp::unique_temp_path(label);
+            crate::platform::fs::create_private_directory(&root).unwrap();
+            let previous = [
+                ("BUS_DATA_DIR", root.clone()),
+                ("CLAUDE_CONFIG_DIR", root.join("claude")),
+            ]
+            .map(|(key, value)| {
+                let previous = std::env::var_os(key);
+                std::env::set_var(key, value);
+                (key, previous)
+            });
+            Self {
+                _env: env,
+                root,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for DraftTestEnvironment {
+        fn drop(&mut self) {
+            for (key, value) in &self.previous {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
     pub(crate) fn exiting_test_command() -> &'static str {
         #[cfg(windows)]
         {

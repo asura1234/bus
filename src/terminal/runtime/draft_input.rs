@@ -113,10 +113,16 @@ impl DraftInput {
         if result.is_ok() {
             state.revision = state.revision.wrapping_add(1);
             state.pending = None;
-            state.claude_prompt = (claude_stop
-                && state.buffered.is_none()
-                && matches!(state.claude_prompt, Some(ClaudePrompt::Submitted)))
-            .then_some(ClaudePrompt::Stopped);
+            // A second Bus Esc can stop an autonomous task wake while the
+            // original interrupted composer is still in Claude's custody.
+            state.claude_prompt = match state.claude_prompt {
+                Some(ClaudePrompt::Submitted | ClaudePrompt::Stopped)
+                    if claude_stop && state.buffered.is_none() =>
+                {
+                    Some(ClaudePrompt::Stopped)
+                }
+                _ => None,
+            };
         }
         result
     }
@@ -198,6 +204,12 @@ impl DraftInputLease {
         if let Ok(mut state) = self.state.lock() {
             state.claude_prompt =
                 (state.revision == self.revision).then_some(ClaudePrompt::Submitted);
+        }
+    }
+
+    pub(super) fn clear_claude_submission(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.claude_prompt = None;
         }
     }
 

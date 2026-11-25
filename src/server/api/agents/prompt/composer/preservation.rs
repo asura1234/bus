@@ -27,7 +27,7 @@ pub(super) struct PreservingComposer {
 struct AbortedMatcher {
     payload: String,
     normalized: String,
-    collapsed: Option<String>,
+    opaque: Option<String>,
     started: bool,
     last_len: usize,
     progress: u64,
@@ -39,7 +39,7 @@ impl AbortedMatcher {
         Self {
             payload,
             normalized,
-            collapsed: None,
+            opaque: None,
             started: false,
             last_len: usize::MAX,
             progress: 0,
@@ -65,8 +65,9 @@ impl AbortedMatcher {
             };
         }
         if !self.started {
-            let collapsed = kind == AgentKind::Claude && super::pasted_text_count(&body).is_some();
-            if collapsed && !unedited_stop {
+            let opaque = kind == AgentKind::Claude
+                && (super::pasted_text_count(&body).is_some() || super::image_chips(&body).0 > 0);
+            if opaque && !unedited_stop {
                 return InputObservation::Other;
             }
             if super::observe_since_launch(kind, screen, &self.payload, cursor, pristine)
@@ -75,28 +76,26 @@ impl AbortedMatcher {
                 self.started = true;
                 self.last_len = body.len();
                 self.progress = self.progress.wrapping_add(1);
-                if collapsed {
-                    self.collapsed = Some(body);
+                if opaque {
+                    self.opaque = Some(body);
                 }
                 return InputObservation::Pending;
             }
             return InputObservation::Other;
         }
-        // Claude renders a collapsed paste as one atom. A cursor move leaves
-        // its label unchanged, and a line kill removes it in one edit.
-        if let Some(collapsed) = &self.collapsed {
-            return if unedited_stop && *collapsed == body {
-                InputObservation::Pending
-            } else {
-                InputObservation::Other
-            };
+        // Keep the exact chip identities pinned while moving the cursor and
+        // clearing the returned prompt. The chip shape alone is ambiguous.
+        if let Some(previous) = &mut self.opaque {
+            if !unedited_stop || !Self::chip_remainder(previous, &body) {
+                return InputObservation::Other;
+            }
+            if body.len() < previous.len() {
+                self.progress = self.progress.wrapping_add(1);
+                *previous = body;
+            }
+            return InputObservation::Pending;
         }
-        let norm: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-        let mut hay = self.normalized.chars();
-        if body.len() <= self.last_len
-            && norm.len() <= self.normalized.len()
-            && norm.chars().all(|c| hay.any(|h| h == c))
-        {
+        if body.len() <= self.last_len && Self::text_remainder(&self.normalized, &body) {
             if body.len() < self.last_len {
                 self.last_len = body.len();
                 self.progress = self.progress.wrapping_add(1);
@@ -106,12 +105,40 @@ impl AbortedMatcher {
             InputObservation::Other
         }
     }
+
+    fn chip_remainder(previous: &str, body: &str) -> bool {
+        let (_, previous_text) = super::image_chips(previous);
+        let (_, text) = super::image_chips(body);
+        let mut previous_chips = previous[..previous.len() - previous_text.len()]
+            .split_inclusive(']')
+            .map(str::trim);
+        let same_chips = body[..body.len() - text.len()]
+            .split_inclusive(']')
+            .map(str::trim)
+            .all(|chip| previous_chips.any(|previous| previous == chip));
+        let previous_text = previous_text.trim();
+        let text = text.trim();
+        same_chips
+            && if super::pasted_text_count(previous_text).is_some()
+                || super::pasted_text_count(text).is_some()
+            {
+                text.is_empty() || text == previous_text
+            } else {
+                Self::text_remainder(previous_text, text)
+            }
+    }
+
+    fn text_remainder(previous: &str, body: &str) -> bool {
+        let mut previous = previous.chars();
+        body.chars()
+            .filter(|c| !c.is_whitespace())
+            .all(|c| previous.any(|old| old == c))
+    }
 }
 
 enum NativeDraft {
     Captured(String),
     ExistingStash,
-    OccupiedCopy,
 }
 
 impl PreservingComposer {
@@ -155,15 +182,6 @@ impl PreservingComposer {
         self
     }
 
-    fn copy_lost_stash_marker(&self, screen: &str) -> bool {
-        self.kind == AgentKind::Claude
-            && self
-                .native_draft
-                .lock()
-                .is_ok_and(|draft| matches!(draft.as_ref(), Some(NativeDraft::OccupiedCopy)))
-            && !native_stash_present(screen)
-    }
-
     fn copy_draft(&self, body: String) -> DraftPreservation {
         let restore_bytes = (!body.is_empty() && !opaque(&body)).then(|| {
             Bytes::from(crate::terminal::driver::input::paste(
@@ -190,27 +208,30 @@ impl PreservingComposer {
         if body.is_empty() && !allow_empty {
             return None;
         }
-        if self.keys.len() == 3 {
-            match self.kind {
-                AgentKind::Claude if !native_stash_present(screen) => {
-                    *self.native_draft.lock().ok()? = Some(NativeDraft::Captured(body.clone()));
-                    return Some(DraftPreservation::Native {
-                        key: self.keys[0].clone(),
-                        directory: self.directory.clone(),
-                        visible_draft: body,
-                    });
-                }
-                AgentKind::Codex | AgentKind::Cursor | AgentKind::Kimi
-                    if !body.is_empty() && !opaque(&body) =>
-                {
-                    return Some(DraftPreservation::Editor {
-                        key: self.keys[1].clone(),
-                        backspace: self.keys[2].clone(),
-                        directory: self.directory.clone(),
-                    });
-                }
-                _ => {}
+        if self.kind == AgentKind::Claude {
+            if self.keys.len() != 3 || native_stash_present(screen) {
+                return None;
             }
+            *self.native_draft.lock().ok()? = Some(NativeDraft::Captured(body.clone()));
+            return Some(DraftPreservation::Native {
+                key: self.keys[0].clone(),
+                directory: self.directory.clone(),
+                visible_draft: body,
+            });
+        }
+        if self.keys.len() == 3
+            && matches!(
+                self.kind,
+                AgentKind::Codex | AgentKind::Cursor | AgentKind::Kimi
+            )
+            && !body.is_empty()
+            && !opaque(&body)
+        {
+            return Some(DraftPreservation::Editor {
+                key: self.keys[1].clone(),
+                backspace: self.keys[2].clone(),
+                directory: self.directory.clone(),
+            });
         }
         Some(self.copy_draft(body))
     }
@@ -255,17 +276,15 @@ impl SubmissionInspector for PreservingComposer {
             .lock()
             .map_or(true, |draft| draft.is_some())
     }
-    fn clear_native_draft(&self) {
-        if let Ok(mut draft) = self.native_draft.lock() {
-            *draft = None;
-        }
-    }
     fn composer_copy_fallback(
         &self,
         screen: &str,
         cursor: Option<(u16, u16)>,
         pristine: bool,
     ) -> Option<(String, Option<Bytes>)> {
+        if self.kind == AgentKind::Claude {
+            return None;
+        }
         let body = super::input_since_launch(self.kind, screen, cursor, pristine)?;
         let restore = (!body.is_empty() && !opaque(&body)).then(|| {
             Bytes::from(crate::terminal::driver::input::paste(
@@ -282,7 +301,7 @@ impl SubmissionInspector for PreservingComposer {
         self.owned.confirm_consumption()
     }
     fn recoverable_input(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
-        !self.copy_lost_stash_marker(screen) && self.owned.recoverable_input(screen, cursor)
+        self.owned.recoverable_input(screen, cursor)
     }
     fn owned_popup_escape(&self, screen: &str) -> Option<bytes::Bytes> {
         self.owned.owned_popup_escape(screen)
@@ -291,9 +310,7 @@ impl SubmissionInspector for PreservingComposer {
         super::submission_available(self.kind, screen)
     }
     fn paste_ready(&self, screen: &str) -> bool {
-        if self.copy_lost_stash_marker(screen)
-            || !super::paste_ready(self.kind, screen, &self.expected)
-        {
+        if !super::paste_ready(self.kind, screen, &self.expected) {
             return false;
         }
         if self.kind != AgentKind::Claude {
@@ -305,7 +322,7 @@ impl SubmissionInspector for PreservingComposer {
         let wait_for_input = match saved.as_ref() {
             Some(NativeDraft::Captured(body)) => opaque(body),
             Some(NativeDraft::ExistingStash) => true,
-            Some(NativeDraft::OccupiedCopy) | None => false,
+            None => false,
         };
         drop(saved);
         // A prior timeout may retain the native stash after its late paste is
@@ -346,9 +363,11 @@ impl SubmissionInspector for PreservingComposer {
         pristine: bool,
     ) -> InputObservation {
         let observation = self.owned.observe_with_launch(screen, cursor, pristine);
-        if observation == InputObservation::Pending && self.copy_lost_stash_marker(screen) {
-            // The former stash may have promoted text equal to the prompt.
-            // It cannot authorize a withdrawal or another Enter.
+        if observation == InputObservation::Empty
+            && self.kind == AgentKind::Claude
+            && invisible_content(self.kind, screen, cursor)
+        {
+            // A blank-looking composer can still contain whitespace.
             InputObservation::Other
         } else {
             observation
@@ -418,7 +437,7 @@ impl SubmissionInspector for PreservingComposer {
         }
         self.choose(screen, cursor, invisible, pristine)
             .or_else(|| {
-                invisible.then(|| DraftPreservation::Copy {
+                (invisible && self.kind != AgentKind::Claude).then(|| DraftPreservation::Copy {
                     snapshot: String::new(),
                     restore_bytes: None,
                 })
@@ -426,44 +445,6 @@ impl SubmissionInspector for PreservingComposer {
     }
     fn native_stash_visible(&self, screen: &str) -> bool {
         native_stash_present(screen)
-    }
-
-    fn mark_occupied_stash_for_copy(&self, screen: &str) -> bool {
-        if self.kind != AgentKind::Claude || !native_stash_present(screen) {
-            return false;
-        }
-        self.native_draft.lock().is_ok_and(|mut draft| {
-            *draft = Some(NativeDraft::OccupiedCopy);
-            true
-        })
-    }
-
-    fn copy_stash_key(&self) -> Option<Bytes> {
-        (self.kind == AgentKind::Claude && self.keys.len() == 3).then(|| self.keys[0].clone())
-    }
-
-    fn copy_stash_readback(
-        &self,
-        screen: &str,
-        cursor: Option<(u16, u16)>,
-    ) -> Option<(String, bool)> {
-        let parsed = super::input_with_cursor(self.kind, screen, cursor)?;
-        let rendered = rendered_claude_draft(screen);
-        // Rows can soft-wrap, and the shared parser trims indentation. Use
-        // rendered text for recovery but only trust a matching plain line
-        // to authorize moving the native object into the stash.
-        let attested = rendered.as_ref().is_some_and(|body| {
-            !body.is_empty() && !body.contains('\n') && *body == parsed && !opaque(body)
-        });
-        let snapshot = rendered
-            .filter(|body| !parsed.is_empty() || body.chars().all(char::is_whitespace))
-            .unwrap_or(parsed);
-        Some((snapshot, attested))
-    }
-
-    fn copy_stash_payload_is_distinct(&self, screen: &str, cursor: Option<(u16, u16)>) -> bool {
-        super::observe_with_cursor(self.kind, screen, &self.expected, cursor)
-            == InputObservation::Other
     }
 
     fn native_draft_restored(&self, screen: &str) -> bool {
@@ -476,10 +457,6 @@ impl SubmissionInspector for PreservingComposer {
         match saved.as_ref() {
             Some(NativeDraft::Captured(draft)) => input(self.kind, screen).as_ref() == Some(draft),
             Some(NativeDraft::ExistingStash) => input(self.kind, screen).is_some(),
-            Some(NativeDraft::OccupiedCopy) => {
-                self.owned.submitted_prompt_visible(screen)
-                    || self.copy_stash_payload_is_distinct(screen, None)
-            }
             None => false,
         }
     }
@@ -596,23 +573,6 @@ fn exact_codex_editor_line(screen: &str, y: u16, literal: &str, expected: &str) 
             .strip_prefix('›')
             .and_then(|text| text.strip_prefix([' ', '\0']))
             == Some(expected)
-}
-
-fn rendered_claude_draft(screen: &str) -> Option<String> {
-    let plain = super::super::plain_screen(screen);
-    let rows: Vec<_> = plain.lines().map(str::to_owned).collect();
-    let region = crate::terminal::driver::editable_composer_region(&rows)?;
-    let (prompt, continuation) = rows
-        .get(region.start..region.end.checked_sub(1)?)?
-        .split_first()?;
-    let prompt = prompt.trim_start().strip_prefix('❯')?;
-    let mut body = prompt.strip_prefix(' ').unwrap_or(prompt).to_owned();
-    for row in continuation {
-        body.push('\n');
-        // Only strip the UI's two-column continuation indent.
-        body.push_str(row.strip_prefix("  ").unwrap_or(row));
-    }
-    Some(body)
 }
 
 fn invisible_content(kind: AgentKind, screen: &str, cursor: Option<(u16, u16)>) -> bool {

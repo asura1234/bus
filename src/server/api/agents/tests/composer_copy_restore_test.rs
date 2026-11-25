@@ -86,9 +86,8 @@ fn apply_simple_chunk(
             draft.clear();
             paint_pane(app, kind, "");
         }
-    } else if text == "\x13" || text == "\x07" {
-        // Simulate a terminal without native Ctrl+S stash / external editor handling so
-        // unified copy/send/restore is exercised without holding.
+    } else if text == "\x07" {
+        // Simulate an unavailable external editor to exercise copy/send/restore.
         *saw_clear_or_stash = true;
     }
 }
@@ -120,7 +119,9 @@ async fn pump_simple_composer(
 
 #[tokio::test]
 async fn shared_delivery_copy_and_restore_round_trip_for_queue_steer_and_interrupt() {
-    for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Antigravity] {
+    let _draft_environment =
+        crate::server::api::test_support::DraftTestEnvironment::new("copy-restore-delivery");
+    for kind in [AgentKind::Codex, AgentKind::Antigravity] {
         for timing in [
             DeliveryTiming::Queue,
             DeliveryTiming::Steer,
@@ -208,7 +209,7 @@ async fn shared_delivery_skips_snapshot_and_restore_when_composer_is_empty() {
 
 #[tokio::test]
 async fn shared_delivery_delivers_anyway_when_composer_has_opaque_chip() {
-    for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Antigravity] {
+    for kind in [AgentKind::Codex, AgentKind::Antigravity] {
         let (mut app, method, mut writes) = setup_pane(
             kind,
             DeliveryTiming::Interrupt,
