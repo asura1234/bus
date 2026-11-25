@@ -9,6 +9,7 @@
       --sidebar-width: 148px;
       --col-width: 160px;
       --col-gap: 8px;
+      --board-end-padding: 16px;
       --card-min-height: 138px;
       --bg-page: #0b0f17;
       --bg-surface: #111827;
@@ -42,10 +43,17 @@
       padding: 0;
       background: var(--bg-page);
       overflow: auto;
+      scrollbar-gutter: stable;
       overflow-anchor: none;
     }
 
     body {
+      /* Size the primary columns to the viewport before adding the Won't Work track. */
+      --primary-columns: 7;
+      --column-track: max(var(--col-width), calc(
+        (100vw - var(--sidebar-width) - var(--col-gap)) / var(--primary-columns) - var(--col-gap)
+      ));
+      --board-tracks: var(--sidebar-width) repeat(calc(var(--primary-columns) + 1), var(--column-track));
       margin: 0;
       overflow-anchor: none;
       padding: 0;
@@ -56,11 +64,14 @@
       line-height: 1.4;
       overflow: visible;
       min-height: 100vh;
-      width: 100%;
-      min-width: calc(var(--sidebar-width) + 7 * var(--col-width) + 7 * var(--col-gap) + 16px);
+      width: calc(var(--sidebar-width) + (var(--primary-columns) + 1) *
+        (var(--column-track) + var(--col-gap)) + var(--board-end-padding));
     }
 
-    /* Frozen top band: keeps topbar + global 7-column header pinned at top for the entire page scroll */
+    body.hide-done { --primary-columns: 6; }
+    body.hide-done [data-col="done"] { display: none; }
+
+    /* Frozen top band: keeps the controls and global column headers pinned while scrolling. */
     .sticky-header-band {
       position: sticky;
       top: 0;
@@ -70,7 +81,6 @@
       width: 100%;
     }
 
-    /* Top bar: only the View selector and the Clear session history control */
     .topbar {
       position: sticky;
       left: 0;
@@ -197,9 +207,9 @@
     /* Global sticky column-name row: frozen top row + frozen top-left corner cell */
     .global-columns-bar {
       display: grid;
-      grid-template-columns: var(--sidebar-width) repeat(7, minmax(var(--col-width), 1fr));
+      grid-template-columns: var(--board-tracks);
       gap: var(--col-gap);
-      padding: 8px 16px 8px 0;
+      padding: 8px var(--board-end-padding) 8px 0;
       background: var(--bg-surface);
       width: 100%;
       align-items: stretch;
@@ -254,10 +264,11 @@
     .column-header[data-col="testing"] { border-bottom-color: var(--col-testing); color: #fcd34d; }
     .column-header[data-col="review"] { border-bottom-color: var(--col-review); color: #67e8f9; }
     .column-header[data-col="done"] { border-bottom-color: var(--col-done); color: #6ee7b7; }
+    .column-header[data-col="wont_work"] { border-bottom-color: var(--text-muted); color: var(--text-secondary); }
 
-    /* Main board area: stacked section rows with continuous sticky left sidebar rail + universal 7-column tracks */
+    /* Main board area: stacked section rows with a continuous sticky left sidebar rail. */
     .board-container {
-      padding: 0 16px 0 0;
+      padding: 0 var(--board-end-padding) 0 0;
       display: flex;
       flex-direction: column;
       gap: 0;
@@ -274,10 +285,10 @@
       );
     }
 
-    /* Each section row aligns its sticky left room-name cell with the 7 universal column tracks */
+    /* Each section row shares its column tracks with the global column headers. */
     .room-section {
       display: grid;
-      grid-template-columns: var(--sidebar-width) repeat(7, minmax(var(--col-width), 1fr));
+      grid-template-columns: var(--board-tracks);
       column-gap: var(--col-gap);
       row-gap: 0;
       width: 100%;
@@ -456,6 +467,11 @@
           </select>
         </div>
 
+        <div class="control-group">
+          <input type="checkbox" id="hide-done" />
+          <label for="hide-done">Hide Done</label>
+        </div>
+
         <button type="button" class="btn btn-danger" id="clear-history-btn">
           Clear session history
         </button>
@@ -471,6 +487,7 @@
       <div class="column-header" data-col="testing">testing</div>
       <div class="column-header" data-col="review">review</div>
       <div class="column-header" data-col="done">done</div>
+      <div class="column-header" data-col="wont_work">Won't Work</div>
     </div>
   </div>
 
@@ -507,7 +524,8 @@
       { key: "implementation", label: "implementation" },
       { key: "testing", label: "testing" },
       { key: "review", label: "review" },
-      { key: "done", label: "done" }
+      { key: "done", label: "done" },
+      { key: "wont_work", label: "Won't Work" }
     ];
     const columnHeaders = new Map(Array.from(document.querySelectorAll(".column-header"),
       header => [header.dataset.col, header]));
@@ -549,9 +567,14 @@
       } catch (_) {}
     }
 
+    function normalizeColumn(column) {
+      return column === "wont-work" ? "wont_work" : column;
+    }
+
     function updateColumnTotals(tickets) {
       const totals = new Map();
-      for (const { column } of tickets) {
+      for (const ticket of tickets) {
+        const column = normalizeColumn(ticket.column);
         totals.set(column, (totals.get(column) || 0) + 1);
       }
       for (const { key, label } of COLUMNS) {
@@ -561,13 +584,15 @@
       }
     }
 
-    function formatTicketAge(createdAt, now) {
-      return `${Math.max(0, Math.floor((now - createdAt) / 60000))} min`;
+    function formatTicketAge(createdAt, endAt) {
+      const minutes = Math.max(0, Math.floor((endAt - createdAt) / 60000));
+      if (minutes < 60) return `${minutes} min`;
+      return `${Math.floor(minutes / 60)} hr ${minutes % 60} min`;
     }
 
     function updateTicketAges() {
       const now = Date.now();
-      for (const label of document.querySelectorAll("#board-container .ticket-age")) {
+      for (const label of document.querySelectorAll("#board-container .ticket-age[data-created-at-ms]")) {
         const text = formatTicketAge(Number(label.dataset.createdAtMs), now);
         if (label.textContent !== text) label.textContent = text;
       }
@@ -586,7 +611,7 @@
       const roomsHtml = rooms.map(room => {
         const roomTickets = tickets.filter(t => t.room_id === room.id);
         const colsHtml = COLUMNS.map(col => {
-          const colTickets = roomTickets.filter(t => t.column === col.key);
+          const colTickets = roomTickets.filter(t => normalizeColumn(t.column) === col.key);
           const cardsHtml = colTickets.length === 0
             ? `<div class="empty-col">—</div>`
             : colTickets.map(t => renderTicketCard(t, now)).join("");
@@ -622,8 +647,13 @@
         ? `<a class="mr-link" href="${escapeHtml(t.mr_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(formatShortPull(t.mr_url))} ↗</a>`
         : "";
       const createdAt = t.created_at_ms;
-      const ageHtml = Number.isFinite(createdAt)
-        ? `<span class="ticket-age" data-created-at-ms="${createdAt}">${formatTicketAge(createdAt, now)}</span>`
+      const terminal = [t.column, t.status].some(value => {
+        const column = normalizeColumn(value);
+        return column === "done" || column === "wont_work";
+      });
+      const endAt = terminal ? t.updated_at_ms : now;
+      const ageHtml = Number.isFinite(createdAt) && Number.isFinite(endAt)
+        ? `<span class="ticket-age"${terminal ? "" : ` data-created-at-ms="${createdAt}"`}>${formatTicketAge(createdAt, endAt)}</span>`
         : "";
       const footer = mrHtml || ageHtml ? `<div class="ticket-mr-row">${mrHtml}${ageHtml}</div>` : "";
 
@@ -641,6 +671,19 @@
     document.getElementById("view-select").addEventListener("change", (e) => {
       currentView = e.target.value;
       fetchBoard();
+    });
+
+    const hideDone = document.getElementById("hide-done");
+    const hideDoneKey = "agile-board.hide-done";
+    try {
+      hideDone.checked = localStorage.getItem(hideDoneKey) === "true";
+    } catch (_) {}
+    document.body.classList.toggle("hide-done", hideDone.checked);
+    hideDone.addEventListener("change", () => {
+      document.body.classList.toggle("hide-done", hideDone.checked);
+      try {
+        localStorage.setItem(hideDoneKey, String(hideDone.checked));
+      } catch (_) {}
     });
 
     const clearBtn = document.getElementById("clear-history-btn");

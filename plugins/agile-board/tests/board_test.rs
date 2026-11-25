@@ -34,7 +34,7 @@ fn headless_chrome() -> Option<PathBuf> {
 
 #[test]
 fn transition_matrix_enforces_normal_investigation_only_and_blocked_escape_hatch() {
-    // 1. Exhaustive 7x7 transition matrix check for both investigation_only=false and true
+    // 1. Exhaustive transition matrix check for both investigation_only=false and true
     for &inv_only in &[false, true] {
         for &from in &ALL_COLUMNS {
             for &to in &ALL_COLUMNS {
@@ -46,8 +46,9 @@ fn transition_matrix_enforces_normal_investigation_only_and_blocked_escape_hatch
                     continue;
                 }
                 let expected_ok = match (from, to) {
-                    (_, Column::Blocked) => true,
+                    (_, Column::Blocked | Column::WontWork) => true,
                     (Column::Blocked, _) => true,
+                    (Column::WontWork, Column::Todo) => true,
                     (Column::Todo, Column::Investigation) => true,
                     (Column::Investigation, Column::Implementation) => true,
                     (Column::Investigation, Column::Done) => inv_only,
@@ -360,6 +361,40 @@ fn cli_and_http_page_contract_round_trip() {
         .unwrap();
     assert_eq!(bad_move.status.code(), Some(3));
 
+    let move_output = Command::new(bin())
+        .args([
+            "--data-dir",
+            &data_dir,
+            "ticket",
+            "move",
+            "T-1",
+            "--column",
+            "wont-work",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(move_output.status.success(), "{:?}", move_output);
+    let moved: serde_json::Value = serde_json::from_slice(&move_output.stdout).unwrap();
+    assert_eq!(moved["ticket"]["column"], "wont_work");
+
+    let list_output = Command::new(bin())
+        .args([
+            "--data-dir",
+            &data_dir,
+            "ticket",
+            "list",
+            "--column",
+            "wont_work",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(list_output.status.success(), "{:?}", list_output);
+    let listed: serde_json::Value = serde_json::from_slice(&list_output.stdout).unwrap();
+    assert_eq!(listed["tickets"][0]["id"], "T-1");
+    assert_eq!(listed["tickets"][0]["column"], "wont_work");
+
     // Clear without --confirm returns exit 2
     let no_confirm = Command::new(bin())
         .args(["--data-dir", &data_dir, "history", "clear"])
@@ -368,11 +403,9 @@ fn cli_and_http_page_contract_round_trip() {
     assert_eq!(no_confirm.status.code(), Some(2));
 
     // Verify page HTML contract: Agile Board title, viewport scrolling (`html { overflow: auto }` and
-    // `body { overflow: visible; min-height: 100vh }`), universal 7-column template,
-    // global sticky header band + sticky left section sidebar (frozen row + frozen column),
-    // near-square card min-height, plain solid 1px card border (no per-column card border accent),
-    // double confirmation popups for Clear session history, no modal, no hidden/rendered ticket IDs,
-    // and only the 2 topbar controls (view selector + clear history button)
+    // `body { overflow: visible; min-height: 100vh }`), global sticky header band + sticky left
+    // section sidebar, near-square card min-height, plain solid 1px card border, double confirmation
+    // for Clear session history, no modal, and no hidden/rendered ticket IDs.
     assert!(server::PAGE_HTML.contains("<title>Agile Board</title>"));
     assert!(server::PAGE_HTML.contains("overflow: auto;"));
     assert!(server::PAGE_HTML.contains("overflow: visible;"));
@@ -388,9 +421,6 @@ fn cli_and_http_page_contract_round_trip() {
     assert!(server::PAGE_HTML.contains("position: sticky;"));
     assert!(server::PAGE_HTML.contains("left: 0;"));
     assert!(server::PAGE_HTML.contains("room-sidebar-cell"));
-    assert!(server::PAGE_HTML.contains(
-        "grid-template-columns: var(--sidebar-width) repeat(7, minmax(var(--col-width), 1fr));"
-    ));
     assert!(server::PAGE_HTML.contains("border: 1px solid var(--border-strong);"));
     assert!(!server::PAGE_HTML.contains(".ticket-card[data-col="));
     assert!(!server::PAGE_HTML.contains("border-left-color"));
@@ -690,8 +720,8 @@ window.fetch = async url => ({
 
 function checkTotals(expected, phase) {
   const labels = [...document.querySelectorAll(".column-header")].map(header => header.textContent);
-  const expectedLabels = ["todo", "blocked", "investigation", "implementation", "testing", "review", "done"]
-    .map((column, index) => `${column} ${expected[index]}`);
+  const expectedLabels = ["todo", "blocked", "investigation", "implementation", "testing", "review", "done", "Won't Work"]
+    .map((column, index) => `${column} ${expected[index] ?? 0}`);
   if (labels.join() !== expectedLabels.join()) {
     throw new Error(`${phase}: expected ${expectedLabels.join(", ")}, got ${labels.join(", ")}`);
   }
@@ -780,6 +810,75 @@ window.addEventListener("load", async () => {
 }
 
 #[test]
+fn headless_page_scrolls_to_wont_work_and_remembers_hide_done() {
+    assert_headless_board_probe_at_size(
+        r#"<script>
+const rooms = [{ id: 1, name: "First" }, { id: 2, name: "Second" }];
+let tickets = [
+  { room_id: 1, column: "done", title: "Completed one" },
+  { room_id: 2, column: "done", title: "Completed two" },
+  { room_id: 2, column: "wont_work", title: "Closed without a fix" }
+];
+let poll;
+window.setInterval = (callback, delay) => { if (delay === 3000) poll = callback; };
+window.fetch = async () => ({ ok: true, json: async () => ({ rooms, tickets }) });
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    const done = document.querySelector('.column-header[data-col="done"]');
+    const wontWork = document.querySelector('.column-header[data-col="wont_work"]');
+    const check = (condition, message) => { if (!condition) throw new Error(message); };
+    const visible = element => element.getClientRects().length > 0;
+    check(wontWork?.textContent === "Won't Work 1" && done.nextElementSibling === wontWork,
+      "Expected Won't Work after Done with a ticket count");
+    const viewport = document.documentElement.clientWidth;
+    check(done.getBoundingClientRect().right <= viewport + 1, "Done does not fit in the initial viewport");
+    check(wontWork.getBoundingClientRect().left >= viewport - 1, "Won't Work is visible before scrolling");
+    window.scrollTo(document.documentElement.scrollWidth, 0);
+    const closed = document.querySelector('.kanban-column[data-col="wont_work"]:has(.ticket-card)');
+    check(window.scrollX > 0 && wontWork.getBoundingClientRect().right <= viewport + 1,
+      "Could not scroll to the Won't Work header");
+    check(closed?.querySelector('.ticket-title').textContent === "Closed without a fix" &&
+      Math.abs(closed.getBoundingClientRect().left - wontWork.getBoundingClientRect().left) <= 1,
+      "Won't Work column did not align with its header");
+    window.scrollTo(0, 0);
+
+    const toggle = document.getElementById("hide-done");
+    check(toggle && !toggle.checked && visible(done), "Done should initially be visible");
+    const checkDone = shouldShow => {
+      const columns = [...document.querySelectorAll('.kanban-column[data-col="done"]')];
+      check(visible(done) === shouldShow && columns.length === rooms.length &&
+        columns.every(column => visible(column) === shouldShow), "Hide Done did not update every room and the header");
+    };
+    toggle.click();
+    checkDone(false);
+    check(wontWork.getBoundingClientRect().left >= viewport - 1, "Won't Work moved into the initial viewport");
+    check(localStorage.getItem("agile-board.hide-done") === "true", "Hide Done preference was not saved");
+    await poll();
+    checkDone(false);
+    tickets = [{ ...tickets[0], title: "Updated completion" }, ...tickets.slice(1)];
+    await poll();
+    checkDone(false);
+    check(document.querySelector('.kanban-column[data-col="done"] .ticket-title').textContent === "Updated completion",
+      "Expected the changed poll to update the hidden column");
+    toggle.click();
+    checkDone(true);
+    check(localStorage.getItem("agile-board.hide-done") === "false", "Show Done preference was not saved");
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>"#,
+        "1728,900",
+    );
+}
+
+#[test]
 fn headless_page_ticks_ticket_age_without_rebuilding() {
     assert_headless_board_probe(
         r#"<script>
@@ -789,7 +888,8 @@ Date.now = () => now;
 const tickets = [
   { room_id: 1, column: "review", title: "Recent", created_at_ms: now - 12.75 * 60000,
     mr_url: "https://github.com/example/platform/pull/41" },
-  { room_id: 1, column: "review", title: "Older", created_at_ms: now - 2500.75 * 60000 }
+  { room_id: 1, column: "review", title: "Near one hour", created_at_ms: now - 59.75 * 60000 },
+  { room_id: 1, column: "review", title: "Older", created_at_ms: now - 1323.75 * 60000 }
 ];
 const intervals = new Map();
 window.setInterval = (callback, delay) => { intervals.set(delay, callback); };
@@ -812,7 +912,7 @@ window.addEventListener("load", async () => {
       const labels = ages.map(age => age?.textContent);
       if (labels.join() !== expected.join()) throw new Error(`Expected ${expected}, got ${labels}`);
     };
-    checkAges(["12 min", "2500 min"]);
+    checkAges(["12 min", "59 min", "22 hr 3 min"]);
     cards.forEach((card, i) => {
       const footer = card.lastElementChild;
       const age = ages[i];
@@ -842,13 +942,87 @@ window.addEventListener("load", async () => {
     if (!tick) throw new Error("Expected a 30000-ms age ticker");
     now += 30000;
     tick();
-    checkAges(["13 min", "2501 min"]);
+    checkAges(["13 min", "1 hr 0 min", "22 hr 4 min"]);
     if (board.firstElementChild !== section || cards.some((card, i) => !card.contains(ages[i]))) {
       throw new Error("The age tick rebuilt ticket markup");
     }
     await intervals.get(3000)();
-    checkAges(["13 min", "2501 min"]);
+    checkAges(["13 min", "1 hr 0 min", "22 hr 4 min"]);
     if (board.firstElementChild !== section) throw new Error("A clock-only poll rebuilt the board");
+    result.textContent = "PASS";
+  } catch (error) {
+    result.textContent = error.message;
+  }
+});
+</script>"#,
+    );
+}
+
+#[test]
+fn headless_page_freezes_done_ticket_ages() {
+    assert_headless_board_probe(
+        r#"<script>
+const rooms = [{ id: 1, name: "Requests" }];
+let now = 1760000000000;
+Date.now = () => now;
+const minute = 60000;
+const active = { room_id: 1, column: "review", title: "Finishing", created_at_ms: now - 15 * minute };
+const tickets = [
+  active,
+  { room_id: 1, column: "review", status: "done", title: "Done status",
+    created_at_ms: now - 25 * minute, updated_at_ms: now - 5 * minute },
+  { room_id: 1, column: "done", title: "Done column",
+    created_at_ms: now - 85 * minute, updated_at_ms: now - 10 * minute },
+  { room_id: 1, column: "wont_work", title: "Won't Work column",
+    created_at_ms: now - 35 * minute, updated_at_ms: now - 10 * minute },
+  { room_id: 1, column: "wont-work", title: "Won't Work alias",
+    created_at_ms: now - 40 * minute, updated_at_ms: now - 10 * minute },
+  { room_id: 1, column: "done", title: "Negative duration",
+    created_at_ms: now - 5 * minute, updated_at_ms: now - 6 * minute }
+];
+const intervals = new Map();
+window.setInterval = (callback, delay) => { intervals.set(delay, callback); };
+window.fetch = async url => ({
+  ok: url === "/api/board?view=session",
+  json: async () => ({ rooms, tickets, now_ms: now })
+});
+
+window.addEventListener("load", async () => {
+  const result = document.createElement("pre");
+  result.id = "board-probe-result";
+  result.hidden = true;
+  document.body.appendChild(result);
+  try {
+    const board = document.getElementById("board-container");
+    const checkAges = expected => {
+      for (const card of board.querySelectorAll(".ticket-card")) {
+        const title = card.querySelector(".ticket-title").textContent;
+        const label = card.querySelector(".ticket-age")?.textContent;
+        if (label !== expected[title]) throw new Error(`${title}: expected ${expected[title]}, got ${label}`);
+      }
+      if (board.querySelectorAll(".ticket-age").length !== tickets.length) {
+        throw new Error("Expected one age label per ticket");
+      }
+    };
+    const expected = { "Finishing": "15 min", "Done status": "20 min", "Done column": "1 hr 15 min",
+      "Won't Work column": "25 min", "Won't Work alias": "30 min", "Negative duration": "0 min" };
+    checkAges(expected);
+    const tick = intervals.get(30000);
+    for (let i = 0; i < 2; i++) {
+      now += 30000;
+      tick();
+    }
+    expected.Finishing = "16 min";
+    checkAges(expected);
+    active.column = "done";
+    active.updated_at_ms = now;
+    await intervals.get(3000)();
+    checkAges(expected);
+    for (let i = 0; i < 2; i++) {
+      now += 30000;
+      tick();
+    }
+    checkAges(expected);
     result.textContent = "PASS";
   } catch (error) {
     result.textContent = error.message;
@@ -974,6 +1148,10 @@ window.addEventListener("load", () => {
 }
 
 fn assert_headless_board_probe(fixture: &str) {
+    assert_headless_board_probe_at_size(fixture, "600,500");
+}
+
+fn assert_headless_board_probe_at_size(fixture: &str, window_size: &str) {
     let Some(chrome) = headless_chrome() else {
         eprintln!("Skipping browser probe: Chrome or Chromium is unavailable");
         return;
@@ -986,7 +1164,7 @@ fn assert_headless_board_probe(fixture: &str) {
         .args([
             "--headless=new",
             "--disable-gpu",
-            "--window-size=600,500",
+            &format!("--window-size={window_size}"),
             "--dump-dom",
         ])
         .arg(format!(

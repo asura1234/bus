@@ -4,7 +4,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-pub const ALL_COLUMNS: [Column; 7] = [
+pub const ALL_COLUMNS: [Column; 8] = [
     Column::Todo,
     Column::Blocked,
     Column::Investigation,
@@ -12,6 +12,7 @@ pub const ALL_COLUMNS: [Column; 7] = [
     Column::Testing,
     Column::Review,
     Column::Done,
+    Column::WontWork,
 ];
 
 #[derive(
@@ -26,6 +27,9 @@ pub enum Column {
     Testing,
     Review,
     Done,
+    #[serde(rename = "wont_work", alias = "wont-work")]
+    #[value(name = "wont_work", alias = "wont-work")]
+    WontWork,
 }
 
 impl Column {
@@ -38,15 +42,18 @@ impl Column {
             Column::Testing => "testing",
             Column::Review => "review",
             Column::Done => "done",
+            Column::WontWork => "wont_work",
         }
     }
 
     pub fn allowed_targets(self, investigation_only: bool) -> Vec<Column> {
-        match self {
-            Column::Blocked => ALL_COLUMNS
-                .into_iter()
-                .filter(|c| *c != Column::Blocked)
-                .collect(),
+        let mut targets = match self {
+            Column::Blocked => {
+                return ALL_COLUMNS
+                    .into_iter()
+                    .filter(|c| *c != Column::Blocked)
+                    .collect();
+            }
             Column::Todo => vec![Column::Investigation, Column::Blocked],
             Column::Investigation => {
                 if investigation_only {
@@ -59,7 +66,10 @@ impl Column {
             Column::Testing => vec![Column::Review, Column::Implementation, Column::Blocked],
             Column::Review => vec![Column::Done, Column::Implementation, Column::Blocked],
             Column::Done => vec![Column::Blocked],
-        }
+            Column::WontWork => return vec![Column::Todo, Column::Blocked],
+        };
+        targets.push(Column::WontWork);
+        targets
     }
 
     pub fn validate_transition(

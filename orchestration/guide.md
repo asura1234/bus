@@ -142,19 +142,21 @@ agile-board --data-dir "$BOARD_DATA_DIR" ticket update T-1 --mr "https://github.
 agile-board --data-dir "$BOARD_DATA_DIR" ticket move T-1 --column implementation --note "Root cause confirmed"
 ```
 
-Map each MR work item's status to the board's seven columns:
+Map each work item's status to the board's eight columns.
 
 | Status / phase | Board column | Allowed next columns |
 |---|---|---|
-| Deferred or held before kickoff | `todo` | `investigation`, `blocked` |
-| Needs a developer decision or missing information or context | `blocked` | Any column (`todo`, `investigation`, `implementation`, `testing`, `review`, `done`) |
-| Root-cause analysis, enumeration or spike | `investigation` | `implementation`, `blocked` (and `done` only if created with `--investigation-only`) |
-| Coding or addressing review/test findings | `implementation` | `testing`, `blocked` |
-| Implementation complete and in verification, including waiting for a build, test, gate, or merge window | `testing` | `review`, `implementation`, `blocked` |
-| Independent peer or bot review in progress | `review` | `done`, `implementation`, `blocked` |
-| MR merged (or `--investigation-only` concluded) | `done` | `blocked` |
+| Deferred or held before kickoff | `todo` | `investigation`, `blocked`, `wont_work` |
+| Needs a developer decision or missing information or context | `blocked` | Any other column |
+| Root-cause analysis, enumeration or spike | `investigation` | `implementation`, `blocked`, `wont_work` (and `done` only if created with `--investigation-only`) |
+| Coding or addressing review/test findings | `implementation` | `testing`, `blocked`, `wont_work` |
+| Implementation complete and in verification, including waiting for a build, test, gate, or merge window | `testing` | `review`, `implementation`, `blocked`, `wont_work` |
+| Independent peer or bot review in progress | `review` | `done`, `implementation`, `blocked`, `wont_work` |
+| MR merged (or `--investigation-only` concluded) | `done` | `blocked`, `wont_work` |
+| Work declined, or a report closed as unverified, unreproducible, or expected behavior | `wont_work` | `todo`, `blocked` |
 
 Use `blocked` only when a decision or missing context prevents work from proceeding.
+Use `wont_work` to record a decision to close the ticket. Include the reason in `--note` and move it to `todo` if new evidence warrants reopening it.
 
 ## Open peer messaging
 
