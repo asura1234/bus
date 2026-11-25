@@ -119,6 +119,8 @@ async fn pump_simple_composer(
 
 #[tokio::test]
 async fn shared_delivery_copy_and_restore_round_trip_for_queue_steer_and_interrupt() {
+    let _draft_environment =
+        crate::server::api::test_support::DraftTestEnvironment::new("copy-restore-delivery");
     for kind in [AgentKind::Codex, AgentKind::Antigravity] {
         for timing in [
             DeliveryTiming::Queue,

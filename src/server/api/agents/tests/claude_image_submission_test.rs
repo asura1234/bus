@@ -1,48 +1,6 @@
 use super::*;
 
-struct Scratch {
-    _env: crate::utils::test_env::EnvLock,
-    root: std::path::PathBuf,
-    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
-}
-
-impl Scratch {
-    fn new() -> Self {
-        let env = crate::utils::test_env::env_lock();
-        let root = crate::utils::test_temp::unique_temp_path("claude-image-delivery");
-        std::fs::create_dir_all(&root).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let mut previous = Vec::new();
-        for (key, value) in [
-            ("BUS_DATA_DIR", root.clone()),
-            ("CLAUDE_CONFIG_DIR", root.join("claude")),
-        ] {
-            previous.push((key, std::env::var_os(key)));
-            std::env::set_var(key, value);
-        }
-        Self {
-            _env: env,
-            root,
-            previous,
-        }
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        for (key, value) in self.previous.drain(..) {
-            match value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
-            }
-        }
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
-}
+use crate::server::api::test_support::DraftTestEnvironment;
 
 async fn step(
     writes: &mut tokio::sync::mpsc::Receiver<Bytes>,
@@ -61,7 +19,7 @@ async fn step(
 }
 
 async fn focused_delivery(draft: &str, image: bool) {
-    let _scratch = Scratch::new();
+    let _scratch = DraftTestEnvironment::new("claude-image-delivery");
     let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, draft);
     let pane = app.state.workspaces[0].tabs[0].root_pane;
     assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(pane));
@@ -148,7 +106,7 @@ async fn focused_idle_claude_submits_text_and_restores_half_typed_draft() {
 
 #[tokio::test]
 async fn focused_idle_claude_submits_a_shell_escaped_screenshot_only_after_its_chip() {
-    let _scratch = Scratch::new();
+    let _scratch = DraftTestEnvironment::new("claude-image-delivery");
     let text =
         "/tmp/Screenshot\\ 2026-11-15\\ at\\ 10.27.59\u{202f}PM.png \nkeep the green background";
     let (mut app, mut method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
@@ -237,7 +195,7 @@ async fn focused_claude_image_waits_for_the_native_queue_to_empty() {
 
 #[tokio::test]
 async fn claude_unverified_stash_binding_defers_without_writing() {
-    let scratch = Scratch::new();
+    let scratch = DraftTestEnvironment::new("claude-image-delivery");
     let config = scratch.root.join("claude");
     std::fs::create_dir(&config).unwrap();
     std::fs::write(config.join("keybindings.json"), "{}").unwrap();
@@ -264,7 +222,7 @@ async fn claude_unverified_stash_binding_defers_without_writing() {
 
 #[tokio::test]
 async fn claude_interrupt_replays_returned_image_only_with_bus_ownership() {
-    let _scratch = Scratch::new();
+    let _scratch = DraftTestEnvironment::new("claude-image-delivery");
     let kind = AgentKind::Claude;
     let aborted = "old prompt\n\"/tmp/t-25.png\"";
     let combined = format!("{aborted}\n\nnew instruction");
