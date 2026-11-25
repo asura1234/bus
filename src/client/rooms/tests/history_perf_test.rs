@@ -107,7 +107,8 @@ fn large_room_phase_profile() {
 }
 
 #[test]
-fn large_room_compose_does_not_rebuild_exchanges() {
+fn large_room_compose_and_resize_project_only_the_newest_page() {
+    use super::super::window::INITIAL_UNFILTERED_RECORDS;
     let (state, room) = large_room();
     let snapshot = Arc::new(crate::messaging::coordinator::BusSnapshot {
         state,
@@ -134,7 +135,17 @@ fn large_room_compose_does_not_rebuild_exchanges() {
         1_800_000_010_000,
         &mut thumbnails,
     );
-    assert!(ui.history.cached().len() >= 35_000);
+    assert!(!ui.history.cached().is_empty());
+    assert!(
+        ui.history
+            .background
+            .as_ref()
+            .unwrap()
+            .test_progress()
+            .exchanges
+            <= INITIAL_UNFILTERED_RECORDS as u64,
+        "the first unfiltered layout visited more than one page"
+    );
     let original = Arc::clone(&ui.history.lines);
     ui.history.request_lines(
         Arc::clone(&snap),
@@ -147,6 +158,7 @@ fn large_room_compose_does_not_rebuild_exchanges() {
         Arc::ptr_eq(&original, &ui.history.lines),
         "minute reuses the full layout"
     );
+    ui.main_scroll = ui.history.cached().len().saturating_sub(40);
     ui.compute_view(100, 40);
     assert_eq!(
         ui.history.rebuilt, 0,
@@ -161,7 +173,17 @@ fn large_room_compose_does_not_rebuild_exchanges() {
         1_800_000_070_000,
         &mut thumbnails,
     );
-    assert!(ui.history.cached().len() >= 35_000);
+    assert!(!ui.history.cached().is_empty());
+    assert!(
+        ui.history
+            .background
+            .as_ref()
+            .unwrap()
+            .test_progress()
+            .exchanges
+            <= 2 * INITIAL_UNFILTERED_RECORDS as u64,
+        "opening and resizing visited more than one page each"
+    );
     assert_eq!(
         ui.history
             .background
@@ -558,7 +580,7 @@ fn snapshot_revisions_do_not_starve_a_cold_history_layout() {
         assert_worker_progress(&history, &mut last_progress, &mut progressed_at);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    assert!(history.cached().len() >= 35_000);
+    assert!(!history.cached().is_empty());
     eprintln!(
         "cold revisions={revision} elapsed_ms={} progress={:?}",
         began.elapsed().as_millis(),
@@ -1222,6 +1244,36 @@ fn pagination_preserves_loaded_window_after_room_return() {
             .any(|line| line.text == "page-record-100"),
         "returning to the room shrank the loaded window"
     );
+}
+
+#[test]
+fn unfiltered_history_loads_older_records_on_demand() {
+    let (state, room) = large_room();
+    let snapshot = snapshot(state, 1);
+    let mut history = History::default();
+    history.enable_background().unwrap();
+    let mut thumbnails = Thumbnails::default();
+    let mut request_layout = |history: &mut History, width| {
+        await_layout(
+            history,
+            Arc::clone(&snapshot),
+            room,
+            width,
+            1_800_000_010_000,
+            &mut thumbnails,
+        );
+    };
+
+    request_layout(&mut history, 100);
+    let contains = |history: &History, text| history.cached().iter().any(|line| line.text == text);
+    assert!(contains(&history, "Prompt 2499"));
+    assert!(!contains(&history, "Prompt 2200"));
+    assert!(history.load_older());
+    request_layout(&mut history, 100);
+    assert!(contains(&history, "Prompt 2200"));
+    assert!(contains(&history, "Prompt 2499"));
+    request_layout(&mut history, 80);
+    assert!(contains(&history, "Prompt 2200"));
 }
 
 #[test]

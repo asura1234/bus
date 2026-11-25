@@ -1,6 +1,6 @@
-//! Newest-first filtered history windows. Older records are requested on scroll.
+//! Newest-first history windows. Older records are requested on scroll.
 use super::{
-    source::{visible_request, Exchange, Exchanges, Window},
+    source::{visible_request, window_signature, Exchange, Exchanges},
     History, LayoutKey, MarkdownSource,
 };
 use crate::messaging::model::{BusState, Room};
@@ -8,6 +8,9 @@ use crate::messaging::model::{RoomHistoryFilters, RoomId};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const PAGE_RECORDS: usize = 256;
+// Unfiltered records lay out both sides of each exchange. A smaller initial
+// page keeps the first layout bounded with the same scrollback page size.
+pub(super) const INITIAL_UNFILTERED_RECORDS: usize = PAGE_RECORDS / 2;
 
 impl History {
     pub(super) fn layout_reusable(&self, key: LayoutKey, now: u64) -> bool {
@@ -28,23 +31,30 @@ impl History {
         room: &'a Room,
         revision: u64,
         filters: RoomHistoryFilters,
-        submissions: &BTreeMap<crate::messaging::model::PromptId, super::LocalSendStatus>,
-    ) -> Window<'a> {
+    ) -> Option<Exchanges<'a>> {
         self.select_window(room.id, filters);
-        let recent = (filters != Default::default())
-            .then(|| recent_exchanges(state, room, self.record_limit));
-        if let Some((_, has_older)) = &recent {
-            self.rebuilt = 0;
-            self.rendered = 0;
-            self.projected = 0;
-            // A filtered revision examines only its bounded newest window.
-            self.signature = revision ^ (self.record_limit as u64).rotate_left(32);
-            self.has_older = *has_older;
-        } else {
-            self.prepare_source(state, room, revision, submissions);
-            self.has_older = false;
+        self.rebuilt = 0;
+        self.rendered = 0;
+        self.projected = 0;
+        let source = (revision, self.record_limit);
+        if self.source == Some(source) {
+            return None;
         }
-        recent
+        let (exchanges, has_older) = recent_exchanges(state, room, self.record_limit);
+        self.has_older = has_older;
+        self.signature = if filters == Default::default() {
+            let visited = self.room_markdown.len();
+            self.room_markdown.retain(|id, _| state.room(*id).is_some());
+            if self.room_markdown.len() != visited {
+                let shown: BTreeSet<_> = self.room_markdown.values().flatten().copied().collect();
+                self.markdown.retain(|source, _| shown.contains(source));
+            }
+            window_signature(state, &exchanges)
+        } else {
+            revision
+        } ^ (self.record_limit as u64).rotate_left(32);
+        self.source = Some(source);
+        Some(exchanges)
     }
 
     pub(super) fn retain_window_markdown(
@@ -72,7 +82,12 @@ impl History {
     pub(super) fn select_window(&mut self, room: RoomId, filters: RoomHistoryFilters) {
         if self.window_room != Some((room, filters)) {
             self.window_room = Some((room, filters));
-            self.record_limit = PAGE_RECORDS;
+            self.source = None;
+            self.record_limit = if filters == Default::default() {
+                INITIAL_UNFILTERED_RECORDS
+            } else {
+                PAGE_RECORDS
+            };
             self.loaded_limit = 0;
             self.has_older = false;
         }
@@ -95,6 +110,7 @@ pub(super) fn recent_exchanges<'a>(
     room: &'a Room,
     limit: usize,
 ) -> (Exchanges<'a>, bool) {
+    let _timer = super::phases::GROUPING.start();
     let mut requests = state.recent_room_requests(room.id, u64::MAX).peekable();
     let mut notices = state.notices(room.id).rev().peekable();
     let mut exchanges = BTreeMap::new();
@@ -119,7 +135,7 @@ pub(super) fn recent_exchanges<'a>(
                     prompt,
                     requests: state
                         .requests_for_message(prompt.id)
-                        .filter(|request| visible_request(request))
+                        .filter(|request| request.room_id == room.id && visible_request(request))
                         .map(|request| (request.agent_id, request))
                         .collect(),
                 });
