@@ -1042,9 +1042,13 @@ fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: Option<&st
     );
 
     session.ok(&["click", "--hit", "recipients"]);
+    session.ok(&["wait", "--text", "[ ] c1"]);
     session.ok(&["click", "--hit", "recipient:c1"]);
+    session.ok(&["wait", "--text", "[x] c1"]);
     session.ok(&["press", "esc"]);
+    session.ok(&["wait", "--text", "[x] c1", "--gone"]);
     session.ok(&["click", "--hit", "delivery-mode"]);
+    session.ok(&["wait", "--text", "● Interrupt"]);
     session.ok(&["click", "--hit", "delivery-mode:queue"]);
     let queue = |text: &str| {
         session.ok(&["type", text]);
