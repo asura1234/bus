@@ -68,9 +68,6 @@
         (var(--column-track) + var(--col-gap)) + var(--board-end-padding));
     }
 
-    body.hide-done { --primary-columns: 6; }
-    body.hide-done [data-col="done"] { display: none; }
-
     /* Frozen top band: keeps the controls and global column headers pinned while scrolling. */
     .sticky-header-band {
       position: sticky;
@@ -263,8 +260,28 @@
     .column-header[data-col="implementation"] { border-bottom-color: var(--col-implementation); color: #93c5fd; }
     .column-header[data-col="testing"] { border-bottom-color: var(--col-testing); color: #fcd34d; }
     .column-header[data-col="review"] { border-bottom-color: var(--col-review); color: #67e8f9; }
-    .column-header[data-col="done"] { border-bottom-color: var(--col-done); color: #6ee7b7; }
+    .column-header[data-col="done"] {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-block: 2px;
+      border-bottom-color: var(--col-done);
+      color: #6ee7b7;
+    }
     .column-header[data-col="wont_work"] { border-bottom-color: var(--text-muted); color: var(--text-secondary); }
+
+    .done-toggle {
+      padding: 2px 6px;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .done-toggle:hover { background: var(--bg-elevated); }
 
     /* Main board area: stacked section rows with a continuous sticky left sidebar rail. */
     .board-container {
@@ -333,6 +350,10 @@
       height: auto;
       container-type: inline-size;
     }
+
+    body.hide-done .kanban-column[data-col="done"] { display: none; }
+    /* Keep Won't Work aligned with its header when the Done cells are hidden. */
+    body.hide-done .kanban-column[data-col="wont_work"] { grid-column: -2; }
 
     /* Subtle translucent red tint overlay (蒙层) on the blocked column surface */
     .kanban-column[data-col="blocked"] {
@@ -467,11 +488,6 @@
           </select>
         </div>
 
-        <div class="control-group">
-          <input type="checkbox" id="hide-done" />
-          <label for="hide-done">Hide Done</label>
-        </div>
-
         <button type="button" class="btn btn-danger" id="clear-history-btn">
           Clear session history
         </button>
@@ -480,14 +496,17 @@
 
     <div class="global-columns-bar" aria-label="Board columns">
       <div class="sidebar-corner-header">Section</div>
-      <div class="column-header" data-col="todo">todo</div>
-      <div class="column-header" data-col="blocked">blocked</div>
-      <div class="column-header" data-col="investigation">investigation</div>
-      <div class="column-header" data-col="implementation">implementation</div>
-      <div class="column-header" data-col="testing">testing</div>
-      <div class="column-header" data-col="review">review</div>
-      <div class="column-header" data-col="done">done</div>
-      <div class="column-header" data-col="wont_work">Won't Work</div>
+      <div class="column-header" data-col="todo"><span class="column-label">todo</span></div>
+      <div class="column-header" data-col="blocked"><span class="column-label">blocked</span></div>
+      <div class="column-header" data-col="investigation"><span class="column-label">investigation</span></div>
+      <div class="column-header" data-col="implementation"><span class="column-label">implementation</span></div>
+      <div class="column-header" data-col="testing"><span class="column-label">testing</span></div>
+      <div class="column-header" data-col="review"><span class="column-label">review</span></div>
+      <div class="column-header" data-col="done">
+        <span class="column-label">done</span>
+        <button type="button" class="done-toggle" id="done-toggle" aria-label="Hide Done cards">Hide</button>
+      </div>
+      <div class="column-header" data-col="wont_work"><span class="column-label">Won't Work</span></div>
     </div>
   </div>
 
@@ -527,8 +546,8 @@
       { key: "done", label: "done" },
       { key: "wont_work", label: "Won't Work" }
     ];
-    const columnHeaders = new Map(Array.from(document.querySelectorAll(".column-header"),
-      header => [header.dataset.col, header]));
+    const columnLabels = new Map(Array.from(document.querySelectorAll(".column-label"),
+      label => [label.parentElement.dataset.col, label]));
 
     let currentView = "session";
     let lastRenderedContent = null;
@@ -578,9 +597,9 @@
         totals.set(column, (totals.get(column) || 0) + 1);
       }
       for (const { key, label } of COLUMNS) {
-        const header = columnHeaders.get(key);
+        const columnLabel = columnLabels.get(key);
         const text = `${label} ${totals.get(key) || 0}`;
-        if (header.textContent !== text) header.textContent = text;
+        if (columnLabel.textContent !== text) columnLabel.textContent = text;
       }
     }
 
@@ -673,16 +692,24 @@
       fetchBoard();
     });
 
-    const hideDone = document.getElementById("hide-done");
+    const doneToggle = document.getElementById("done-toggle");
     const hideDoneKey = "agile-board.hide-done";
+
+    function setDoneHidden(hidden) {
+      document.body.classList.toggle("hide-done", hidden);
+      const action = hidden ? "Show" : "Hide";
+      doneToggle.textContent = action;
+      doneToggle.setAttribute("aria-label", `${action} Done cards`);
+    }
+
     try {
-      hideDone.checked = localStorage.getItem(hideDoneKey) === "true";
+      setDoneHidden(localStorage.getItem(hideDoneKey) === "true");
     } catch (_) {}
-    document.body.classList.toggle("hide-done", hideDone.checked);
-    hideDone.addEventListener("change", () => {
-      document.body.classList.toggle("hide-done", hideDone.checked);
+    doneToggle.addEventListener("click", () => {
+      const hidden = !document.body.classList.contains("hide-done");
+      setDoneHidden(hidden);
       try {
-        localStorage.setItem(hideDoneKey, String(hideDone.checked));
+        localStorage.setItem(hideDoneKey, String(hidden));
       } catch (_) {}
     });
 

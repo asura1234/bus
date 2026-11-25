@@ -719,7 +719,7 @@ window.fetch = async url => ({
 });
 
 function checkTotals(expected, phase) {
-  const labels = [...document.querySelectorAll(".column-header")].map(header => header.textContent);
+  const labels = [...document.querySelectorAll(".column-header .column-label")].map(label => label.textContent);
   const expectedLabels = ["todo", "blocked", "investigation", "implementation", "testing", "review", "done", "Won't Work"]
     .map((column, index) => `${column} ${expected[index] ?? 0}`);
   if (labels.join() !== expectedLabels.join()) {
@@ -833,42 +833,60 @@ window.addEventListener("load", async () => {
     const wontWork = document.querySelector('.column-header[data-col="wont_work"]');
     const check = (condition, message) => { if (!condition) throw new Error(message); };
     const visible = element => element.getClientRects().length > 0;
+    const toggle = done.querySelector("button");
+    const label = done.querySelector(".column-label");
+    const checkDone = (shouldShow, count) => {
+      const cards = [...document.querySelectorAll('.kanban-column[data-col="done"] .ticket-card')];
+      const closed = document.querySelector('.kanban-column[data-col="wont_work"]:has(.ticket-card)');
+      const action = shouldShow ? "Hide" : "Show";
+      check(visible(done) && visible(toggle) && label.textContent === `done ${count}`,
+        "The Done header, toggle, and count should remain visible");
+      check(toggle.textContent === action && toggle.getAttribute("aria-label") === `${action} Done cards`,
+        `Expected the toggle to say ${action}`);
+      check(cards.length === count && cards.every(card => visible(card) === shouldShow),
+        "The Done toggle did not update the cards across all rooms");
+      check(visible(closed) && Math.abs(closed.getBoundingClientRect().left - wontWork.getBoundingClientRect().left) <= 1,
+        "Won't Work column did not align with its header");
+    };
+    const storageKey = "agile-board.hide-done";
+    if (performance.getEntriesByType("navigation")[0].type === "reload") {
+      checkDone(false, 2);
+      toggle.click();
+      checkDone(true, 2);
+      check(localStorage.getItem(storageKey) === "false", "Show Done preference was not saved");
+      result.textContent = "PASS";
+      return;
+    }
+
+    check(!document.querySelector('.topbar input[type="checkbox"]') &&
+      !document.querySelector('.topbar').textContent.includes("Hide Done"),
+      "The old Hide Done checkbox pill is still in the toolbar");
     check(wontWork?.textContent === "Won't Work 1" && done.nextElementSibling === wontWork,
       "Expected Won't Work after Done with a ticket count");
+    checkDone(true, 2);
     const viewport = document.documentElement.clientWidth;
     check(done.getBoundingClientRect().right <= viewport + 1, "Done does not fit in the initial viewport");
     check(wontWork.getBoundingClientRect().left >= viewport - 1, "Won't Work is visible before scrolling");
     window.scrollTo(document.documentElement.scrollWidth, 0);
-    const closed = document.querySelector('.kanban-column[data-col="wont_work"]:has(.ticket-card)');
     check(window.scrollX > 0 && wontWork.getBoundingClientRect().right <= viewport + 1,
       "Could not scroll to the Won't Work header");
-    check(closed?.querySelector('.ticket-title').textContent === "Closed without a fix" &&
-      Math.abs(closed.getBoundingClientRect().left - wontWork.getBoundingClientRect().left) <= 1,
-      "Won't Work column did not align with its header");
     window.scrollTo(0, 0);
 
-    const toggle = document.getElementById("hide-done");
-    check(toggle && !toggle.checked && visible(done), "Done should initially be visible");
-    const checkDone = shouldShow => {
-      const columns = [...document.querySelectorAll('.kanban-column[data-col="done"]')];
-      check(visible(done) === shouldShow && columns.length === rooms.length &&
-        columns.every(column => visible(column) === shouldShow), "Hide Done did not update every room and the header");
-    };
+    const firstRoom = document.querySelector('.room-section');
+    const expandedHeight = firstRoom.offsetHeight;
+    toggle.focus();
     toggle.click();
-    checkDone(false);
+    checkDone(false, 2);
+    check(firstRoom.offsetHeight < expandedHeight, "The hidden Done cards still take up room");
     check(wontWork.getBoundingClientRect().left >= viewport - 1, "Won't Work moved into the initial viewport");
-    check(localStorage.getItem("agile-board.hide-done") === "true", "Hide Done preference was not saved");
+    check(localStorage.getItem(storageKey) === "true", "Hide Done preference was not saved");
     await poll();
-    checkDone(false);
-    tickets = [{ ...tickets[0], title: "Updated completion" }, ...tickets.slice(1)];
+    checkDone(false, 2);
+    tickets = [...tickets, { room_id: 1, column: "done", title: "Another completion" }];
     await poll();
-    checkDone(false);
-    check(document.querySelector('.kanban-column[data-col="done"] .ticket-title').textContent === "Updated completion",
-      "Expected the changed poll to update the hidden column");
-    toggle.click();
-    checkDone(true);
-    check(localStorage.getItem("agile-board.hide-done") === "false", "Show Done preference was not saved");
-    result.textContent = "PASS";
+    checkDone(false, 3);
+    check(document.activeElement === toggle, "The Done toggle lost focus on a changed poll");
+    location.reload();
   } catch (error) {
     result.textContent = error.message;
   }
@@ -1165,6 +1183,8 @@ fn assert_headless_board_probe_at_size(fixture: &str, window_size: &str) {
             "--headless=new",
             "--disable-gpu",
             &format!("--window-size={window_size}"),
+            // Allow the probe to finish through a page reload before dumping the DOM.
+            "--virtual-time-budget=1000",
             "--dump-dom",
         ])
         .arg(format!(
