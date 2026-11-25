@@ -789,7 +789,7 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
 
 #[test]
 fn a_fake_claude_agent_replays_an_interrupted_prompt_with_its_follow_up() {
-    room_prompts_reach_a_fake(Session::start("claude-interrupt"), "claude", None);
+    room_prompts_reach_a_fake(Session::start("cl-int"), "claude", None);
 }
 
 #[test]
