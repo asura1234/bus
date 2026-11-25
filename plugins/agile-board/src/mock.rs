@@ -450,5 +450,26 @@ pub fn seed_mock_state(state: &mut BoardState, now_ms: i64) -> Result<()> {
         now_ms - 10 * day + 5 * hour,
     )?;
 
+    let unreproduced = state.add_ticket(
+        NewTicketInput {
+            room: "web-client".into(),
+            title: "Investigate blank filter results after restoring a tab".into(),
+            description: Some("Reported after a browser session restore.".into()),
+            column: Column::Investigation,
+            mr_url: None,
+            author_model: None,
+            reviewer_model: None,
+            investigation_only: false,
+            note: None,
+        },
+        now_ms - 3 * hour,
+    )?;
+    state.move_ticket(
+        &unreproduced.id,
+        Column::WontWork,
+        Some("Could not reproduce after restoring tabs with saved filters.".into()),
+        now_ms - hour,
+    )?;
+
     Ok(())
 }

@@ -8,8 +8,8 @@
 
 The board layout and ticket model borrow ideas from six open-source Kanban projects without adopting their stacks:
 
-- **Kanboard & Wekan (Horizontal Swimlanes):** Each registered section is stacked vertically on the page as a horizontal swimlane in a frozen-row + frozen-column layout: a global sticky header band (`position: sticky; top: 0`) pins the top bar and the seven workflow column names (`todo`, `blocked`, `investigation`, `implementation`, `testing`, `review`, `done`) across the entire vertical scroll, a continuous full-height sticky left sidebar rail (`position: sticky; left: 0`, `--bg-sidebar: #141d2f`, with zero vertical gaps between section cells) pins the `Section` corner header and each section name next to its row during horizontal scrolling, and every section row shares the identical full-width grid template (`var(--sidebar-width) repeat(7, minmax(var(--col-width), 1fr))` with `160px` minimum column width and `width: 100%` so columns stretch equally to fill wide screens while preserving horizontal scroll on narrow windows).
-- **Planka & Vikunja (Activity Log & View Windows):** Every state change is recorded in the board's chronological `session_history`, and the top bar provides only two controls: the `View` (`day`, `week`, `session`) time-window selector and the `Clear session history` button protected by a two-step double confirmation popup.
+- **Kanboard & Wekan (Horizontal Swimlanes):** Each registered section occupies one row. The top bar and column headers stay visible during vertical scrolling, and section names stay visible during horizontal scrolling. On wide screens the columns through **Done** fill the available width. Scroll right to see **Won't Work**.
+- **Planka & Vikunja (Activity Log & View Windows):** Every state change is recorded in the board's chronological `session_history`. The top bar includes the `View` (`day`, `week`, `session`) time-window selector, the `Hide Done` toggle, and the `Clear session history` button with two-step confirmation.
 - **Focalboard & Taiga (Self-Contained Card Properties):** Each ticket card is a near-square rounded rectangle (slightly wider than tall via `container-type: inline-size` on `.kanban-column` and `min-height: 86cqi; height: auto` on `.ticket-card` so longer descriptions grow the card vertically without truncation and the MR badge always stays inside the border, plus a plain 1px solid border in one consistent color without per-column accents, gradients, or glow) displaying the plain-text title, a one-sentence sanitized Markdown description with clickable external links, and a distinct MR/PR link (internal ticket IDs like `T-1` are kept for CLI commands and hidden on the web page).
 
 ---
@@ -18,11 +18,11 @@ The board layout and ticket model borrow ideas from six open-source Kanban proje
 
 ### Sections (`room`)
 
-A section (addressed as `room` in the CLI) is an opaque grouping label with a numeric `id` and a `name` (for example `backend-api`, `web-client`, `storage-engine`). Each section is rendered as its own horizontal band containing the seven workflow columns.
+A section (addressed as `room` in the CLI) is an opaque grouping label with a numeric `id` and a `name` (for example `backend-api`, `web-client`, `storage-engine`). Each section has its own horizontal band of workflow columns.
 
 ### Tickets (`ticket`)
 
-A ticket represents a work item that results in a Merge Request / Pull Request (MR/PR), or an investigation-only task (`--investigation-only`) that concludes without requiring a code MR.
+A ticket tracks a proposed work item through delivery, investigation, or a decision to close it as **Won't Work**.
 
 | Field | Type | Description |
 |---|---|---|
@@ -30,7 +30,7 @@ A ticket represents a work item that results in a Merge Request / Pull Request (
 | `room_id` / `room_name` | `u64` / `String` | The section that owns the ticket |
 | `title` | `String` | Plain-text ticket name |
 | `description` | `String` | Short one-sentence Markdown description; rendered into sanitized HTML (`description_html`) with clickable external links |
-| `column` | `Column` | Current stage (`todo`, `blocked`, `investigation`, `implementation`, `testing`, `review`, `done`) |
+| `column` | `Column` | Current stage (`todo`, `blocked`, `investigation`, `implementation`, `testing`, `review`, `done`, `wont_work`) |
 | `investigation_only` | `bool` | Set via `--investigation-only` at creation; allows jumping `investigation -> done` directly |
 | `mr_url` | `Option<String>` | Separate MR/PR URL rendered distinctly from the description |
 | `author_model` | `Option<String>` | Internal author model identifier (`--author-model`); not displayed on the board |
@@ -51,23 +51,25 @@ A ticket represents a work item that results in a Merge Request / Pull Request (
 
 ## 3. Column Semantics and Allowed Transitions
 
-Inside each section, the seven columns run horizontally:
+Inside each section, eight columns run horizontally.
 
 | Column | Meaning | Allowed Outgoing Transitions |
 |---|---|---|
-| `todo` | Work held or deferred | `investigation`, `blocked` |
-| `blocked` | Needs a developer decision or missing information or context | Any column (`todo`, `investigation`, `implementation`, `testing`, `review`, `done`) |
-| `investigation` | Root-cause analysis or design exploration | `implementation`, `blocked`, plus `done` **only if** `--investigation-only` |
-| `implementation` | Active implementation | `testing`, `blocked` |
-| `testing` | Work is implemented and undergoing verification, including time spent waiting for a build, test, gate, or merge window | `review`, `implementation`, `blocked` |
-| `review` | Independent review in progress | `done`, `implementation`, `blocked` |
-| `done` | MR/PR has merged, or an investigation-only ticket has concluded | `blocked` |
+| `todo` | Work held or deferred | `investigation`, `blocked`, `wont_work` |
+| `blocked` | Needs a developer decision or missing information or context | Any other column |
+| `investigation` | Root-cause analysis or design exploration | `implementation`, `blocked`, `wont_work`, plus `done` **only if** `--investigation-only` |
+| `implementation` | Active implementation | `testing`, `blocked`, `wont_work` |
+| `testing` | Work is implemented and undergoing verification, including time spent waiting for a build, test, gate, or merge window | `review`, `implementation`, `blocked`, `wont_work` |
+| `review` | Independent review in progress | `done`, `implementation`, `blocked`, `wont_work` |
+| `done` | MR/PR has merged, or an investigation-only ticket has concluded | `blocked`, `wont_work` |
+| `wont_work` | Work declined, or a report closed as unverified, unreproducible, or expected behavior | `todo`, `blocked` |
 
 ### Transition Rules
 
 - **Standard flow:** `todo -> investigation -> implementation -> testing -> review -> done` (with rework loops `testing -> implementation` and `review -> implementation`).
-- **Investigation-only rule:** Tickets created with `--investigation-only` may transition directly `investigation -> done`. Normal tickets attempting `investigation -> done` are refused with exit code `3` and a message listing the allowed targets (`[implementation, blocked]`).
+- **Investigation-only rule:** Tickets created with `--investigation-only` may transition directly `investigation -> done`. Normal tickets attempting `investigation -> done` are refused with exit code `3` and a message listing the allowed targets (`[implementation, blocked, wont_work]`).
 - **Universal `blocked` escape hatch:** Any ticket may move to `blocked` from any column, and from `blocked` to any column. Use it only for a decision or missing context. Record what is needed in `--description` or `--note`.
+- **Closing and reopening:** Use `ticket move ID --column wont_work --note "Could not reproduce"` to close a ticket and record the reason. The CLI also accepts `wont-work`. Move the ticket to `todo` to reopen it, or to `blocked` when a decision or context is still needed.
 
 ---
 

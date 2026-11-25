@@ -34,17 +34,18 @@ agile-board --version
 
 ### Columns and Transition Matrix
 
-Valid `COLUMN` values: `todo`, `blocked`, `investigation`, `implementation`, `testing`, `review`, `done`.
+Valid `COLUMN` values are `todo`, `blocked`, `investigation`, `implementation`, `testing`, `review`, `done`, and `wont_work`. The CLI accepts `wont-work` as an alias for `wont_work`. JSON output and persisted state use `wont_work`.
 
-| From \ To | `todo` | `blocked` | `investigation` | `implementation` | `testing` | `review` | `done` |
-|---|---|---|---|---|---|---|---|
-| `todo` | — | yes | yes | no | no | no | no |
-| `blocked` | yes | — | yes | yes | yes | yes | yes |
-| `investigation` | no | yes | — | yes | no | no | only if `investigation_only` |
-| `implementation` | no | yes | no | — | yes | no | no |
-| `testing` | no | yes | no | yes | — | yes | no |
-| `review` | no | yes | no | yes | no | — | yes |
-| `done` | no | yes | no | no | no | no | — |
+| From \ To | `todo` | `blocked` | `investigation` | `implementation` | `testing` | `review` | `done` | `wont_work` |
+|---|---|---|---|---|---|---|---|---|
+| `todo` | — | yes | yes | no | no | no | no | yes |
+| `blocked` | yes | — | yes | yes | yes | yes | yes | yes |
+| `investigation` | no | yes | — | yes | no | no | only if `investigation_only` | yes |
+| `implementation` | no | yes | no | — | yes | no | no | yes |
+| `testing` | no | yes | no | yes | — | yes | no | yes |
+| `review` | no | yes | no | yes | no | — | yes | yes |
+| `done` | no | yes | no | no | no | no | — | yes |
+| `wont_work` | yes | yes | no | no | no | no | no | — |
 
 Creating a ticket directly in `done` without `--investigation-only` is also refused with exit code `3`.
 
@@ -54,7 +55,7 @@ Creating a ticket directly in `done` without `--investigation-only` is also refu
 
 | Method & Path | Description |
 |---|---|
-| `GET /` or `GET /index.html` | Returns the single-page read-only HTML/CSS/JS Kanban board (`text/html; charset=utf-8`) with universal `160px` 7-column tracks across all sections, self-contained growing cards (title, Markdown description links, separate MR link; internal ticket IDs hidden), and two top-bar controls (`View` selector and `Clear session history` button with confirmation). |
+| `GET /` or `GET /index.html` | Returns the read-only Kanban board (`text/html; charset=utf-8`). Scroll right past **Done** to see **Won't Work**. The top bar provides `View`, `Hide Done`, and `Clear session history` controls. |
 | `GET /healthz` | Returns `{"ok":true}` (`200 OK`). |
 | `GET /api/board?view=day\|week\|session` | Returns the board JSON (`ok`, `version`, `view`, `now_ms`, `local_midnight_ms`, `columns`, `rooms`, filtered `tickets`, `all_tickets`, `total_session_tickets`, `session_history`). |
 | `GET /api/history` | Returns `{"ok":true,"count":N,"history":[...]}`. |
