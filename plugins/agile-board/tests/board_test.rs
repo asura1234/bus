@@ -825,9 +825,8 @@ fn terminal_column_headers_include_hide_buttons() {
 }
 
 #[test]
-fn headless_page_scrolls_to_wont_work_and_remembers_both_toggles() {
-    assert_headless_board_probe_at_size(
-        r#"<script>
+fn headless_page_fits_visible_columns_and_remembers_both_toggles() {
+    let fixture = r#"<script>
 const rooms = [{ id: 1, name: "First" }, { id: 2, name: "Second" }];
 let tickets = [
   { room_id: 1, column: "done", title: "Completed one" },
@@ -865,59 +864,100 @@ window.addEventListener("load", async () => {
       check(cells.length === rooms.length && cells.every(cell => visible(cell) === shouldShow) &&
         cards.length === count && cards.every(card => visible(card) === shouldShow),
         `${name} visibility did not match across all rooms`);
-      if (shouldShow) {
-        check(cells.every(cell => Math.abs(cell.getBoundingClientRect().left - header.getBoundingClientRect().left) <= 1),
-          `${name} column did not align with its header`);
-      }
     };
     const checkColumns = (showDone, showWontWork, count = 2) => {
       checkColumn(done, "Done", showDone, count);
       checkColumn(wontWork, "Won't Work", showWontWork, count);
     };
-    const clickWontWork = () => {
-      window.scrollTo(document.documentElement.scrollWidth, 0);
-      const rect = wontWorkToggle.getBoundingClientRect();
+    const viewport = document.documentElement.clientWidth;
+    const grid = document.querySelector(".global-columns-bar");
+    const gridHeaders = () => [...grid.querySelectorAll(".column-header")];
+    const section = grid.querySelector(".sidebar-corner-header");
+    const gap = parseFloat(getComputedStyle(grid).columnGap);
+    const fits = element => {
+      const rect = element.getBoundingClientRect();
+      return rect.left >= -1 && rect.right <= viewport + 1;
+    };
+    const checkLayout = (showDone, showWontWork) => {
+      const headers = gridHeaders();
+      const visibleColumns = ["todo", "blocked", "investigation", "implementation", "testing", "review"];
+      if (showDone) visibleColumns.push("done");
+      if (showWontWork) visibleColumns.push("wont_work");
+      check(headers.map(header => header.dataset.col).join() === visibleColumns.join(),
+        `Unexpected header order for ${visibleColumns.join()}`);
+      const viewportColumns = Math.min(headers.length, 7);
+      const expectedWidth = (viewport - section.offsetWidth - gap) / viewportColumns - gap;
+      check(headers.every(header => Math.abs(header.getBoundingClientRect().width - expectedWidth) <= 1),
+        `Expected ${viewportColumns} full columns across the viewport`);
+      for (const room of document.querySelectorAll(".room-section")) {
+        const cells = [...room.querySelectorAll(".kanban-column")].filter(visible);
+        check(cells.length === headers.length && cells.every((cell, i) => {
+          const rect = cell.getBoundingClientRect();
+          const header = headers[i].getBoundingClientRect();
+          return Math.abs(rect.left - header.left) <= 1 && Math.abs(rect.right - header.right) <= 1;
+        }), "Room columns did not match the header tracks");
+      }
+      const inView = headers.slice(0, viewportColumns);
+      check(inView.every(fits) && Math.abs(inView.at(-1).getBoundingClientRect().right - (viewport - gap)) <= 1,
+        `The ${viewportColumns} visible tracks should fill the viewport`);
+      if (showDone && showWontWork) {
+        check(wontWork.getBoundingClientRect().left >= viewport - 1 && !fits(wontWork),
+          "Won't Work should overflow to the right when all eight columns are visible");
+      } else {
+        check(window.scrollX === 0 && document.documentElement.scrollWidth <= viewport + 1,
+          "The board should fit without horizontal scrolling after hiding a column");
+      }
+      for (const header of [done, wontWork].filter(header => !headers.includes(header))) {
+        check(fits(header) && fits(header.querySelector("button")), "A restore control is outside the viewport");
+      }
+    };
+    const clickToggle = toggle => {
+      const rect = toggle.getBoundingClientRect();
       const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      check(target === wontWorkToggle, "Won't Work toggle could not be clicked");
+      check(target === toggle, `${toggle.getAttribute("aria-label")} could not be clicked`);
       target.click();
     };
     const doneKey = "agile-board.hide-done";
     const wontWorkKey = "agile-board.hide-wont-work";
     if (performance.getEntriesByType("navigation")[0].type === "reload") {
       checkColumns(false, false);
-      doneToggle.click();
+      checkLayout(false, false);
+      clickToggle(doneToggle);
       checkColumns(true, false);
+      checkLayout(true, false);
       check(localStorage.getItem(doneKey) === "false" && localStorage.getItem(wontWorkKey) === "true",
         "Showing Done changed the Won't Work preference");
-      clickWontWork();
+      clickToggle(wontWorkToggle);
       checkColumns(true, true);
+      checkLayout(true, true);
       check(localStorage.getItem(wontWorkKey) === "false", "Show Won't Work preference was not saved");
       result.textContent = "PASS";
       return;
     }
 
-    check(!document.querySelector('.topbar input[type="checkbox"]') &&
-      !document.querySelector('.topbar').textContent.includes("Hide Done"),
-      "The old Hide Done checkbox pill is still in the toolbar");
-    check(done.nextElementSibling === wontWork, "Expected Won't Work after Done");
+    check(!document.querySelector('.topbar input[type="checkbox"]'), "The old Hide Done checkbox is still in the toolbar");
     checkColumns(true, true);
-    const viewport = document.documentElement.clientWidth;
-    check(done.getBoundingClientRect().right <= viewport + 1, "Done does not fit in the initial viewport");
-    check(wontWork.getBoundingClientRect().left >= viewport - 1, "Won't Work is visible before scrolling");
+    checkLayout(true, true);
 
     const firstRoom = document.querySelector('.room-section');
     const expandedHeight = firstRoom.offsetHeight;
-    clickWontWork();
+    window.scrollTo(document.documentElement.scrollWidth, 0);
+    clickToggle(wontWorkToggle);
     checkColumns(true, false);
+    checkLayout(true, false);
     await poll();
     checkColumns(true, false);
-    clickWontWork();
+    checkLayout(true, false);
+    clickToggle(wontWorkToggle);
     window.scrollTo(0, 0);
-    doneToggle.click();
+    doneToggle.focus();
+    clickToggle(doneToggle);
+    check(document.activeElement === doneToggle, "The Done toggle lost focus when it moved to the toolbar");
     checkColumns(false, true);
-    check(wontWork.getBoundingClientRect().left >= viewport - 1, "Won't Work moved into the initial viewport");
-    clickWontWork();
+    checkLayout(false, true);
+    clickToggle(wontWorkToggle);
     checkColumns(false, false);
+    checkLayout(false, false);
     check(firstRoom.offsetHeight < expandedHeight, "The hidden cards still take up room");
     check(localStorage.getItem(doneKey) === "true" && localStorage.getItem(wontWorkKey) === "true",
       "Hide preferences were not saved independently");
@@ -928,15 +968,17 @@ window.addEventListener("load", async () => {
     ];
     await poll();
     checkColumns(false, false, 3);
+    checkLayout(false, false);
     check(document.activeElement === wontWorkToggle, "The Won't Work toggle lost focus on a changed poll");
     location.reload();
   } catch (error) {
     result.textContent = error.message;
   }
 });
-</script>"#,
-        "1728,900",
-    );
+</script>"#;
+    for window_size in ["1440,900", "1728,900"] {
+        assert_headless_board_probe_at_size(fixture, window_size);
+    }
 }
 
 #[test]

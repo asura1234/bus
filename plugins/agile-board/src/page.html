@@ -9,7 +9,7 @@
       --sidebar-width: 148px;
       --col-width: 160px;
       --col-gap: 8px;
-      --board-end-padding: 16px;
+      --board-end-padding: var(--col-gap);
       --card-min-height: 138px;
       --bg-page: #0b0f17;
       --bg-surface: #111827;
@@ -48,12 +48,13 @@
     }
 
     body {
-      /* Size the primary columns to the viewport before adding the Won't Work track. */
-      --primary-columns: 7;
+      /* Reserve a seventh viewport track until both terminal columns are hidden. */
+      --visible-columns: 8;
+      --viewport-columns: min(var(--visible-columns), 7);
       --column-track: max(var(--col-width), calc(
-        (100vw - var(--sidebar-width) - var(--col-gap)) / var(--primary-columns) - var(--col-gap)
+        (100vw - var(--sidebar-width) - var(--board-end-padding)) / var(--viewport-columns) - var(--col-gap)
       ));
-      --board-tracks: var(--sidebar-width) repeat(calc(var(--primary-columns) + 1), var(--column-track));
+      --board-tracks: var(--sidebar-width) repeat(var(--visible-columns), var(--column-track));
       margin: 0;
       overflow-anchor: none;
       padding: 0;
@@ -64,9 +65,12 @@
       line-height: 1.4;
       overflow: visible;
       min-height: 100vh;
-      width: calc(var(--sidebar-width) + (var(--primary-columns) + 1) *
+      width: calc(var(--sidebar-width) + var(--visible-columns) *
         (var(--column-track) + var(--col-gap)) + var(--board-end-padding));
     }
+
+    body:is(.hide-done, .hide-wont-work) { --visible-columns: 7; }
+    body.hide-done.hide-wont-work { --visible-columns: 6; }
 
     /* Frozen top band: keeps the controls and global column headers pinned while scrolling. */
     .sticky-header-band {
@@ -82,6 +86,7 @@
       position: sticky;
       left: 0;
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
@@ -283,6 +288,20 @@
 
     .column-toggle:hover { background: var(--bg-elevated); }
 
+    .collapsed-columns {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--col-gap);
+      margin-inline-end: auto;
+    }
+
+    .collapsed-columns:empty { display: none; }
+
+    .collapsed-columns .column-header {
+      width: auto;
+      min-width: 0;
+    }
+
     /* Main board area: stacked section rows with a continuous sticky left sidebar rail. */
     .board-container {
       padding: 0 var(--board-end-padding) 0 0;
@@ -353,8 +372,6 @@
 
     body.hide-done .kanban-column[data-col="done"],
     body.hide-wont-work .kanban-column[data-col="wont_work"] { display: none; }
-    /* Keep Won't Work aligned with its header when the Done cells are hidden. */
-    body.hide-done .kanban-column[data-col="wont_work"] { grid-column: -2; }
 
     /* Subtle translucent red tint overlay (蒙层) on the blocked column surface */
     .kanban-column[data-col="blocked"] {
@@ -478,6 +495,7 @@
   <div class="sticky-header-band">
     <header class="topbar">
       <h1 class="brand-title">Agile Board</h1>
+      <div class="collapsed-columns" id="collapsed-columns" role="group" aria-label="Hidden columns"></div>
 
       <div class="controls">
         <div class="control-group">
@@ -696,16 +714,26 @@
       fetchBoard();
     });
 
+    const collapsedColumns = document.getElementById("collapsed-columns");
+
     function setupColumnToggle(column, label) {
       const toggle = document.getElementById(`${column}-toggle`);
+      const header = toggle.parentElement;
+      // Keep the header's grid position even if the adjacent header is collapsed too.
+      const gridPosition = document.createComment("");
+      header.before(gridPosition);
       const hiddenClass = `hide-${column}`;
       const storageKey = `agile-board.${hiddenClass}`;
 
       function setHidden(hidden) {
+        const focused = document.activeElement === toggle;
         document.body.classList.toggle(hiddenClass, hidden);
         const action = hidden ? "Show" : "Hide";
         toggle.textContent = action;
         toggle.setAttribute("aria-label", `${action} ${label} cards`);
+        if (hidden) collapsedColumns.append(header);
+        else gridPosition.after(header);
+        if (focused) toggle.focus({ preventScroll: hidden });
       }
 
       try {
