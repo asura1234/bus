@@ -1688,23 +1688,25 @@ async fn developer_follow_up_interrupts_the_orchestrator_turn_without_blocking_t
     let lead = f.send(orch, f.master, "first", false, None);
     f.tick();
     f.start(orch, "shared", "first");
-    let folded = f.send(orch, f.master, "folded followup", false, None);
+    let follow_up = f.send(orch, f.master, "follow-up", false, None);
     f.tick();
-    // The developer's message interrupts the old turn and delivers immediately
-    // as its own turn without waiting for Idle or holding the inbox.
-    assert_eq!(f.state().request(folded).unwrap().group, None);
-    assert_eq!(
-        f.state().request(lead).unwrap().failure_reason.as_deref(),
-        Some("interrupted")
-    );
     f.pump();
+
+    // Claude stops the old turn and replays its unfinished request with the
+    // follow-up in a new turn without waiting for an Idle observation.
     assert_eq!(f.stop_keys(orch), 1);
-    let payload = f.typed(orch).last().unwrap().clone();
-    assert!(payload.ends_with("folded followup"), "{payload}");
-    f.start(orch, "folded", &payload);
-    f.stop(orch, "folded", "folded answer", json!([]), json!([]));
+    assert_eq!(f.state().request(follow_up).unwrap().group, Some(lead));
+    let submitted = f.typed(orch);
+    assert_eq!(submitted.len(), 2, "{submitted:?}");
+    let payload = &submitted[1];
+    assert!(payload.contains("\nfirst\n"), "{payload}");
+    assert!(payload.ends_with("\nfollow-up"), "{payload}");
+
+    f.start(orch, "replayed", payload);
+    f.stop(orch, "replayed", "replayed answer", json!([]), json!([]));
     f.elapse(31_000);
-    f.assert_reply(folded, "folded answer");
+    f.assert_reply(lead, "replayed answer");
+    f.assert_reply(follow_up, "replayed answer");
 }
 
 #[tokio::test]
