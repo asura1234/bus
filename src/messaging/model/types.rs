@@ -612,6 +612,9 @@ pub(crate) struct Request {
     /// Sent in interrupt mode: deliver as soon as the pane accepts input without waiting for turn end.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) interrupt_delivery: bool,
+    /// An unfinished Claude request goes immediately before this queued follow-up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) interrupt_replay_before: Option<RequestId>,
     /// Native launch/draft/recovery detail belongs to this send, beyond agent changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) submission_error: Option<String>,
@@ -719,15 +722,6 @@ pub(crate) const UNBOUND_SETTLE_MS: u64 = 5_000;
 
 /// Allow completion hooks and transcript writes to arrive after the idle poll.
 pub(crate) const TURN_SETTLE_MS: u64 = 5_000;
-/// Local wall-clock `HH:MM` of a millisecond timestamp, for coalesced prompts.
-pub(super) fn clock(at_ms: u64) -> String {
-    i64::try_from(at_ms / 1000)
-        .ok()
-        .and_then(crate::platform::local_datetime_at)
-        .map(|local| format!("{:02}:{:02}", local.hour(), local.minute()))
-        .unwrap_or_else(|| "--:--".into())
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SubmissionOutcome {
     /// No input was sent: retain the message until its composer is available.

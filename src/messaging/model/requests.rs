@@ -1,5 +1,4 @@
 //! Requests operations for the messaging state.
-use super::types::clock;
 use super::{
     AgentId, Author, BusState, Draft, ModelError, Prompt, PromptId, Request, RequestId,
     RequestPhase, RoomId, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, BUS_SENDER,
@@ -188,6 +187,7 @@ impl BusState {
                 provider_session_id,
                 provider_turn_id,
             } => {
+                self.finish_interrupt_replay(request);
                 self.release_parked_prepared_retry(agent_id, request);
                 if let Some(agent) = self.agents.get_mut(&agent_id) {
                     agent.autonomous_stop = Default::default();
@@ -646,19 +646,26 @@ impl BusState {
         // `can_join_turn` is false for this lead so another turn cannot absorb
         // it. That must not also drop the bus-generated envelope behind it.
         let anchors_own_envelope = self.agent_request_queues(agent_id, &author, generated);
-        if queue.first() != Some(&lead) || !(self.can_join_turn(request) || anchors_own_envelope) {
+        if queue.first() != Some(&lead) {
             return None;
         }
-        let members: Vec<RequestId> = queue[1..]
-            .iter()
-            .copied()
-            .take_while(|id| {
-                self.requests
-                    .get(id)
-                    .is_some_and(|r| self.can_join_turn(r) && r.room_id == room)
-                    && priority.is_none_or(|class| self.orchestrator_queue_class(*id) == class)
-            })
-            .collect();
+        let members: Vec<RequestId> = if let Some(replacement) = request.interrupt_replay_before {
+            self.interrupted_batch(&queue[1..], replacement)
+        } else {
+            if !(self.can_join_turn(request) || anchors_own_envelope) {
+                return None;
+            }
+            queue[1..]
+                .iter()
+                .copied()
+                .take_while(|id| {
+                    self.requests
+                        .get(id)
+                        .is_some_and(|r| self.can_join_turn(r) && r.room_id == room)
+                        && priority.is_none_or(|class| self.orchestrator_queue_class(*id) == class)
+                })
+                .collect()
+        };
         if members.is_empty() {
             return None;
         }
@@ -711,6 +718,15 @@ impl BusState {
                 .map_or_else(|| "an agent".into(), |agent| agent.name.clone()),
         }
     }
+}
+
+/// Local wall-clock `HH:MM` of a millisecond timestamp, for coalesced prompts.
+fn clock(at_ms: u64) -> String {
+    i64::try_from(at_ms / 1000)
+        .ok()
+        .and_then(crate::platform::local_datetime_at)
+        .map(|local| format!("{:02}:{:02}", local.hour(), local.minute()))
+        .unwrap_or_else(|| "--:--".into())
 }
 
 /// The recovery reason for a native refusal to type a request. The native

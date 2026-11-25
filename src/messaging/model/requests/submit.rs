@@ -267,6 +267,7 @@ impl BusState {
                     send_interrupt_claim: None,
                     send_interrupt_outcome: None,
                     interrupt_delivery: false,
+                    interrupt_replay_before: None,
                     submission_error: None,
                     dialog_delivery: None,
                     pending_final: None,

@@ -178,6 +178,14 @@ impl Worker {
             state.mark_unowned_background_turn(&callback);
         }
         let autonomous_turn = state.autonomous_callback_turn(&callback);
+        let task_notification = autonomous_turn.is_some()
+            && state
+                .agent(id)
+                .is_some_and(|agent| agent.provider.uses_claude_harness())
+            && callback.prompt_payload.as_deref().is_some_and(|prompt| {
+                crate::agents::providers::claude_code::hooks::task_notification_body(prompt)
+                    .is_some()
+            });
         let turn_ended = matches!(
             callback.kind,
             CallbackEventKind::Final { .. }
@@ -204,13 +212,13 @@ impl Worker {
             ) => {
                 self.own_turns.insert(id, std::time::Instant::now());
                 if let Some(turn) = autonomous_turn {
-                    state.observe_autonomous_turn(id, turn, true);
+                    state.observe_autonomous_turn(id, turn, true, task_notification);
                 }
             }
             (_, false) if !late_final => {
                 self.own_turns.remove(&id);
                 if let Some(turn) = autonomous_turn.filter(|_| turn_ended) {
-                    state.observe_autonomous_turn(id, turn, false);
+                    state.observe_autonomous_turn(id, turn, false, false);
                 }
             }
             _ => {}

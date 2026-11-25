@@ -3,6 +3,10 @@ use super::{AgentId, Author, BusState, RequestId, RequestPhase};
 
 impl BusState {
     pub(super) fn orchestrator_queue_class(&self, id: RequestId) -> u8 {
+        let id = self
+            .request(id)
+            .and_then(|request| request.interrupt_replay_before)
+            .unwrap_or(id);
         if self.request(id).is_some_and(|r| r.restart_continuation) {
             0
         } else if self.is_dialog_notice(id) {

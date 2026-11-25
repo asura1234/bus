@@ -63,6 +63,17 @@ fn assert_typed(fixture: &Fixture, expected: &str, steer: bool) {
     );
 }
 
+fn assert_interrupted_lead(fixture: &Fixture, lead: RequestId, replacement: RequestId) {
+    let row = fixture.request(lead);
+    if fixture.provider.uses_claude_harness() {
+        assert_eq!(row.phase, RequestPhase::Queued);
+        assert_eq!(row.interrupt_replay_before, Some(replacement));
+        assert!(row.failure_reason.is_none());
+    } else {
+        assert_eq!(row.failure_reason.as_deref(), Some("interrupted"));
+    }
+}
+
 /// An orchestrator bound to the fixture room, as MASTER agents are.
 fn orchestrator(fixture: &mut Fixture) -> AgentId {
     let mut state = fixture.worker.state.clone();
@@ -133,11 +144,7 @@ fn a_developer_send_interrupts_the_running_turn_and_runs_as_the_next_turn() {
             [vec!["esc".to_owned()]],
             "{provider:?}: the developer's message must press the stop key once"
         );
-        assert_eq!(
-            fixture.request(lead).failure_reason.as_deref(),
-            Some("interrupted"),
-            "{provider:?}: interrupted turn closes immediately without waiting for Idle"
-        );
+        assert_interrupted_lead(&fixture, lead, message);
         assert!(
             !fixture
                 .worker
@@ -157,14 +164,17 @@ fn a_developer_send_interrupts_the_running_turn_and_runs_as_the_next_turn() {
         // Interrupt-mode sends deliver immediately without waiting for Idle.
         fixture.deliver();
         assert_typed(&fixture, "change course now", false);
-        assert_eq!(fixture.request(message).group, None, "{provider:?}");
+        assert_eq!(
+            fixture.request(message).group,
+            provider.uses_claude_harness().then_some(lead),
+            "{provider:?}"
+        );
     }
 }
 
-/// An interrupting message starts its own turn. The stopped execution's Stop
-/// cannot become that message's answer; its own final does.
+/// The old execution cannot answer the requests replayed into a new turn.
 #[test]
-fn an_interrupting_message_gets_its_own_answer_not_the_stopped_turns_final() {
+fn an_interrupted_claude_batch_settles_from_its_new_final() {
     let mut fixture = fixture_for(Provider::ClaudeCode);
     let lead = running(&mut fixture, "run the old plan", "1");
     let params = send_params(&fixture, "change course now");
@@ -183,11 +193,7 @@ fn an_interrupting_message_gets_its_own_answer_not_the_stopped_turns_final() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.reply(message).as_deref(), Some("new plan done"));
-    assert_ne!(
-        fixture.reply(lead).as_deref(),
-        Some("new plan done"),
-        "the interrupting message's answer stays on the new request"
-    );
+    assert_eq!(fixture.reply(lead).as_deref(), Some("new plan done"));
 }
 
 #[test]
@@ -216,7 +222,7 @@ fn a_second_developer_send_while_the_stop_is_in_flight_does_not_press_again() {
 #[test]
 fn messages_queued_before_the_interrupt_survive_and_keep_their_order() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
-    running(&mut fixture, "run the old plan", "1");
+    let lead = running(&mut fixture, "run the old plan", "1");
     let follower = fixture.send("earlier queued work", true);
     let params = send_params(&fixture, "change course now");
     let response = send(&mut fixture, params);
@@ -224,7 +230,7 @@ fn messages_queued_before_the_interrupt_survive_and_keep_their_order() {
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(
         fixture.worker.state.queued_requests(fixture.agent),
-        &[follower, message]
+        &[follower, lead, message]
     );
     assert!(fixture.request(follower).failure_reason.is_none());
     assert!(fixture.request(message).failure_reason.is_none());
@@ -328,11 +334,7 @@ fn orchestrator_interrupt_ends_the_turn_and_runs_next() {
         );
         assert!(fixture.request(message).queue_only, "{provider:?}");
         fixture.status(RuntimeStatus::Idle);
-        assert_eq!(
-            fixture.request(lead).failure_reason.as_deref(),
-            Some("interrupted"),
-            "{provider:?}"
-        );
+        assert_interrupted_lead(&fixture, lead, message);
         fixture.deliver();
         assert_typed(&fixture, "stop and do this", false);
     }
@@ -505,16 +507,13 @@ fn room_composer_developer_send_interrupts_the_running_turn() {
         [vec!["esc".to_owned()]],
         "a developer message from the room composer must press the stop key"
     );
-    assert_eq!(
-        fixture.request(lead).failure_reason.as_deref(),
-        Some("interrupted")
-    );
     let message = *fixture
         .worker
         .state
         .queued_requests(fixture.agent)
         .last()
         .unwrap();
+    assert_interrupted_lead(&fixture, lead, message);
     assert!(fixture.request(message).queue_only);
     assert!(fixture.request(message).interrupt_delivery);
     assert_eq!(fixture.request(message).group, None);
@@ -590,17 +589,13 @@ fn the_room_composer_interrupts_the_running_turn_for_either_key() {
                 [vec!["esc".to_owned()]],
                 "{provider:?}"
             );
-            assert_eq!(
-                fixture.request(lead).failure_reason.as_deref(),
-                Some("interrupted"),
-                "{provider:?}"
-            );
             let message = *fixture
                 .worker
                 .state
                 .queued_requests(fixture.agent)
                 .last()
                 .unwrap();
+            assert_interrupted_lead(&fixture, lead, message);
             assert!(fixture.request(message).queue_only, "{provider:?}");
             assert!(fixture.request(message).interrupt_delivery, "{provider:?}");
             assert_eq!(fixture.request(message).group, None, "{provider:?}");
@@ -673,6 +668,32 @@ fn reopen_after_interrupt(f: &mut Fixture) {
     let scratch = Worker::open(f.dir.join("scratch"), Box::new(Native(f.native.clone()))).unwrap();
     drop(std::mem::replace(&mut f.worker, scratch));
     f.worker = Worker::open(f.dir.clone(), Box::new(Native(f.native.clone()))).unwrap();
+}
+
+#[test]
+fn claude_reconciles_a_lost_stop_receipt_without_pressing_escape_again() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "old work", "old-turn");
+    f.worker.transport = Box::new(FailAtFirstStop(f.native.clone()));
+    let params = send_params(&f, "next work");
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send(&mut f, params)));
+    assert!(crashed.is_err());
+
+    reopen_after_interrupt(&mut f);
+    f.status(RuntimeStatus::Working);
+    let replacement = f.worker.state.queued_requests(f.agent)[0];
+    f.worker.replay_queued_send_interrupts(f.now).unwrap();
+    assert_eq!(stop_keys(&f), [vec!["esc".to_owned()]]);
+    assert_eq!(
+        f.worker.state.queued_requests(f.agent),
+        &[lead, replacement]
+    );
+
+    f.status(RuntimeStatus::Idle);
+    f.deliver();
+    let (payload, _) = last_typed(&f);
+    assert!(payload.contains("old work"), "{payload:?}");
+    assert!(payload.ends_with("next work"), "{payload:?}");
 }
 
 #[test]
@@ -1213,7 +1234,7 @@ fn authenticated_autonomous_claim_deduplicates_if_its_turn_reappears_after_idle(
     reopen_after_interrupt(&mut f);
     poll_autonomous(&mut f, "working", 12, false, None);
     let mut state = f.worker.state.clone();
-    state.observe_autonomous_turn(autonomous, "autonomous-turn".into(), true);
+    state.observe_autonomous_turn(autonomous, "autonomous-turn".into(), true, false);
     f.worker.save(state).unwrap();
     let params = json!({"room":f.room.0.to_string(),"to":["autonomous"],"text":"same turn"});
     let result = send(&mut f, params);

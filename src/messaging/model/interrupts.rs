@@ -7,6 +7,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
+mod replay;
+
 /// The reason an interrupted request closed with, which `wait` reports as
 /// `message_interrupted`.
 pub(crate) const INTERRUPTED: &str = "interrupted";
@@ -39,6 +41,8 @@ pub(crate) struct AutonomousStopState {
     pub(super) activity: Option<(u64, u64)>,
     #[serde(default)]
     pub(super) turn_activity: Option<(u64, u64)>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    task_notification: bool,
     pub(super) claim: Option<SendInterrupt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) aborted_payload: Option<AbortedPayload>,
@@ -49,10 +53,15 @@ impl AutonomousStopState {
         self == &Self::default()
     }
 
+    pub(crate) fn task_notification_running(&self) -> bool {
+        self.task_notification
+    }
+
     fn clear_activity(&mut self) {
         self.provider_turn_id = None;
         self.activity = None;
         self.turn_activity = None;
+        self.task_notification = false;
     }
 }
 
@@ -219,7 +228,13 @@ impl BusState {
             .filter(|turn| !turn.is_empty())
     }
 
-    pub(crate) fn observe_autonomous_turn(&mut self, id: AgentId, turn: String, started: bool) {
+    pub(crate) fn observe_autonomous_turn(
+        &mut self,
+        id: AgentId,
+        turn: String,
+        started: bool,
+        task_notification: bool,
+    ) {
         if let Some(owner) = self.agents.get_mut(&id) {
             let activity = &mut owner.autonomous_stop;
             if started {
@@ -240,9 +255,11 @@ impl BusState {
                 }
                 activity.provider_turn_id = Some(turn);
                 activity.turn_activity = activity.activity;
+                activity.task_notification = task_notification;
             } else if activity.provider_turn_id.as_ref() == Some(&turn) {
                 activity.provider_turn_id = None;
                 activity.turn_activity = None;
+                activity.task_notification = false;
                 if activity.claim.as_ref().is_some_and(|claim| {
                     claim
                         .provider_turn_id
@@ -281,6 +298,19 @@ impl BusState {
         let intent = row.send_interrupt.take();
         row.send_interrupt_outcome = Some(outcome);
         if let Some(intent) = intent.filter(|_| claim) {
+            // A crash after the claim can leave the old Claude request
+            // attached even though Esc reached the pane. Reconcile that
+            // request on replay while the claim prevents a second Esc.
+            if intent.target.is_some_and(|id| {
+                self.request(id)
+                    .is_some_and(|request| !is_provisional_stop_owner(request))
+            }) && self.can_replay_interrupted_turn(recipient)
+            {
+                self.requests
+                    .get_mut(&request)
+                    .expect("queued interrupt")
+                    .send_interrupt = Some(intent.clone());
+            }
             if let Some(slot) = self.send_interrupt_claim_mut(recipient, intent.target) {
                 *slot = Some(intent);
             }
@@ -295,9 +325,19 @@ impl BusState {
     ) -> bool {
         let owner = self.agent(recipient);
         let Some(id) = intent.target else {
-            return owner
-                .and_then(|owner| owner.autonomous_stop.claim.as_ref())
-                .is_some_and(|claim| claim.same_turn(intent));
+            return owner.is_some_and(|owner| {
+                let activity = &owner.autonomous_stop;
+                activity.claim.as_ref().is_some_and(|claim| {
+                    claim.same_turn(intent)
+                        // A returned Claude prompt can outlive the stop. A
+                        // transient Working frame with no new turn identity
+                        // cannot authorize a second Esc for the same prompt.
+                        || owner.provider.uses_claude_harness()
+                            && activity.aborted_payload.is_some()
+                            && intent.provider_turn_id.is_none()
+                            && intent.same_turn(claim)
+                })
+            });
         };
         let Some(row) = self.request(id) else {
             return false;
@@ -422,9 +462,19 @@ impl BusState {
     /// back-to-back interrupt send before the next turn delivers does not press
     /// the provider's stop key a second time.
     pub(crate) fn retain_interrupt_stop_claim(&mut self, agent: AgentId) {
+        let stopped_turn = self
+            .agent(agent)
+            .filter(|owner| owner.provider.uses_claude_harness())
+            .and_then(|owner| owner.current_request)
+            .and_then(|id| self.request(id))
+            .and_then(|request| request.provider_turn_id.clone());
         if let Some(owner) = self.agents.get_mut(&agent) {
             if owner.autonomous_stop.claim.is_none() {
-                owner.autonomous_stop.claim = Some(SendInterrupt::autonomous(owner));
+                let mut claim = SendInterrupt::autonomous(owner);
+                if stopped_turn.is_some() {
+                    claim.provider_turn_id = stopped_turn;
+                }
+                owner.autonomous_stop.claim = Some(claim);
             }
         }
     }

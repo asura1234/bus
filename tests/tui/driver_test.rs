@@ -788,13 +788,22 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
 }
 
 #[test]
+fn a_fake_claude_agent_replays_an_interrupted_prompt_with_its_follow_up() {
+    room_prompts_reach_a_fake(Session::start("claude-interrupt"), "claude", None);
+}
+
+#[test]
 fn a_fake_codex_agent_gets_room_prompts_and_replies() {
-    room_prompts_reach_a_fake(Session::start("codex"), "codex", ".codex/hooks.json");
+    room_prompts_reach_a_fake(Session::start("codex"), "codex", Some(".codex/hooks.json"));
 }
 
 #[test]
 fn a_fake_cursor_agent_gets_room_prompts_and_replies() {
-    room_prompts_reach_a_fake(Session::start("cursor"), "cursor", ".cursor/hooks.json");
+    room_prompts_reach_a_fake(
+        Session::start("cursor"),
+        "cursor",
+        Some(".cursor/hooks.json"),
+    );
 }
 
 #[test]
@@ -824,7 +833,7 @@ PS1='HOST_PROMPT> '
     // Model a host-wide login profile at the scratch shell's equivalent
     // startup boundary without modifying /etc/profile.
     std::fs::write(scratch_home.join(".bash_profile"), rc).unwrap();
-    room_prompts_reach_a_fake(session, "cursor", ".cursor/hooks.json");
+    room_prompts_reach_a_fake(session, "cursor", Some(".cursor/hooks.json"));
     assert!(!home.join("host-shell-startup").exists());
     std::fs::remove_dir_all(home).unwrap();
 }
@@ -964,7 +973,7 @@ fn wait_grok_compactions(session: &Session, want: u64) -> u64 {
 
 /// Adds a fake `provider` worker and sends it room messages: each must be
 /// typed into its composer and settle with its reply.
-fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: &str) {
+fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: Option<&str>) {
     session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
     let work = session_dir(&session.0).join("work");
     let added = scratch_bus(
@@ -984,7 +993,9 @@ fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: &str) {
         ],
     );
     assert!(added.status.success(), "{added:?}");
-    assert!(work.join(hooks).is_file());
+    if let Some(hooks) = hooks {
+        assert!(work.join(hooks).is_file());
+    }
     let shell_marker = session_dir(&session.0).join("home/host-shell-startup");
     assert!(
         !shell_marker.exists(),
@@ -1031,8 +1042,8 @@ fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: &str) {
         );
     }
 
-    // A developer message sent while the fake works interrupts that turn and
-    // runs as the next turn; it never joins the turn it ends.
+    // Interrupt ends the running turn. Claude replays its prompt as part
+    // of the next turn; Codex and Cursor keep the replacement independent.
     let long_task = "fake:work 6 long task";
     queue(long_task);
     session.ok(&[
@@ -1047,10 +1058,10 @@ fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: &str) {
     wait_for_scripted_screen(
         &session,
         "c1",
-        if provider == "codex" {
-            " Working ("
-        } else {
-            " Generating ("
+        match provider {
+            "claude" => " Working… (",
+            "codex" => " Working (",
+            _ => " Generating (",
         },
     );
     let lead = composer_message_id(&session, long_task);
@@ -1074,21 +1085,30 @@ fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: &str) {
         &session.0,
         &["wait", "--message", &lead, "--timeout", "40s"],
     );
-    assert_eq!(
-        code, 1,
-        "the interrupted turn must not settle as a reply: {interrupted}"
-    );
-    assert_eq!(
-        interrupted["error"]["code"], "message_interrupted",
-        "{interrupted}"
-    );
     let settled = session.ok(&["wait", "--message", &follow, "--timeout", "40s"]);
     assert_turn_ended(&settled);
-    let screen = agent_screen(&session, "c1");
-    assert!(
-        screen.contains("fake reply: stop and take the next task"),
-        "the message must answer in its own turn: {screen}"
-    );
+    if provider == "claude" {
+        assert_eq!(code, 0, "{interrupted}");
+        assert_turn_ended(&interrupted);
+        let original = &interrupted["message"]["result"]["requests"][0];
+        let replacement = &settled["message"]["result"]["requests"][0];
+        assert_eq!(replacement["group"], original["request_id"]);
+        let reply = original["reply"]["text"].as_str().unwrap();
+        assert!(reply.contains(long_task), "{reply}");
+        assert!(reply.contains("stop and take the next task"), "{reply}");
+        assert_eq!(replacement["reply"]["text"], reply);
+    } else {
+        assert_eq!(code, 1, "{interrupted}");
+        assert_eq!(
+            interrupted["error"]["code"], "message_interrupted",
+            "{interrupted}"
+        );
+        let screen = agent_screen(&session, "c1");
+        assert!(
+            screen.contains("fake reply: stop and take the next task"),
+            "the message must answer in its own turn: {screen}"
+        );
+    }
 }
 
 #[test]

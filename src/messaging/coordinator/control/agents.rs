@@ -484,9 +484,13 @@ impl Worker {
                 // Nothing to stop. A turn Bus still holds (settling, or
                 // waiting on background shells) closes. Messages that never
                 // joined it stay queued.
-                let closed = state
-                    .close_interrupted(id, now)
-                    .map_err(|e| e.to_string())?;
+                let closed = if !announce && state.can_replay_interrupted_turn(id) {
+                    Vec::new()
+                } else {
+                    state
+                        .close_interrupted(id, now)
+                        .map_err(|e| e.to_string())?
+                };
                 // Their waiters point to the history for who stopped them.
                 if !closed.is_empty() {
                     self.interrupt_notice(state, id, room, interrupter, now, announce)?;

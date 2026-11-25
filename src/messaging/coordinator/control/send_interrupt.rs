@@ -72,6 +72,39 @@ impl Worker {
         }).collect()
     }
 
+    pub(in crate::messaging::coordinator) fn stop_autonomous_turn_before_delivery(
+        &mut self,
+        recipient: AgentId,
+        now: u64,
+    ) -> Result<(), String> {
+        if self.native_submissions.contains_key(&recipient) {
+            return Ok(());
+        }
+        let Some(target) = self.state.claude_autonomous_interrupt_target(recipient) else {
+            return Ok(());
+        };
+        let Some(request) = self
+            .state
+            .queued_requests(recipient)
+            .iter()
+            .copied()
+            .find(|id| {
+                self.state.request(*id).is_some_and(|request| {
+                    request.interrupt_delivery && request.send_interrupt.is_none()
+                })
+            })
+        else {
+            return Ok(());
+        };
+        let mut state = self.state.clone();
+        state
+            .stage_send_interrupt(request, target)
+            .map_err(|error| error.to_string())?;
+        self.save(state)?;
+        self.dispatch_queued_send_interrupt(request, now, false)?;
+        Ok(())
+    }
+
     fn dispatch_queued_send_interrupt(
         &mut self,
         id: RequestId,
@@ -82,47 +115,25 @@ impl Worker {
         let (room, recipient) = (request.room_id, request.agent_id);
         let sender = request.prompt.author.clone();
         let staged = request.send_interrupt.clone();
+        let autonomous_restop = request.send_interrupt_outcome.is_some()
+            && staged
+                .as_ref()
+                .is_some_and(|intent| intent.target.is_none() && intent.provider_turn_id.is_some());
         let current = self.state.send_interrupt_target(recipient);
-        let same_target = match (&staged, &current) {
-            (Some(staged), Some(current)) => {
-                staged.same_turn(current)
-                    && staged.identity.pane_id == current.identity.pane_id
-                    && staged.activity == current.activity
-            }
-            (None, None) => true,
-            _ => false,
-        };
         let agent = self.state.agent(recipient).ok_or("Unknown agent")?;
         let needs_stop = !agent.interrupt_pending && self.state.needs_interrupt_stop(agent);
         let mut state = self.state.clone();
         let mut release = None;
-        let unverified = replaying
-            && staged.as_ref().is_some_and(|intent| {
-                intent.target.is_none()
-                    && (!intent.replayable()
-                        || current.as_ref().is_none_or(|now| !now.replayable()))
-            });
-        let result = if unverified {
-            json!({"agent_id": recipient, "outcome": "skipped",
-                "reason": "The autonomous turn cannot be revalidated"})
-        } else if !agent.interrupt_pending && !same_target {
-            json!({"agent_id": recipient, "outcome": "skipped",
-                "reason": "The original interrupt target changed"})
-        } else if needs_stop
-            && current
-                .as_ref()
-                .is_some_and(|intent| self.state.send_interrupt_already_claimed(recipient, intent))
-        {
-            json!({"agent_id": recipient, "outcome": "unknown",
-                "reason": "The prior stop may have reached the terminal"})
-        } else if needs_stop
-            && staged
-                .as_ref()
-                .and_then(|intent| intent.identity.terminal_id.as_deref())
-                .is_none_or(str::is_empty)
-        {
-            json!({"agent_id": recipient, "outcome": "failed",
-                "reason": "The stop target has no confirmed terminal identity"})
+        let mut stop_may_have_written = false;
+        let result = if let Some((outcome, reason)) = skipped_stop(
+            &state,
+            recipient,
+            staged.as_ref(),
+            current.as_ref(),
+            needs_stop,
+            replaying,
+        ) {
+            json!({"agent_id": recipient, "outcome": outcome, "reason": reason})
         } else {
             let claimed = needs_stop && staged.is_some();
             if claimed {
@@ -148,35 +159,21 @@ impl Worker {
                 now,
                 staged.as_ref(),
             );
+            stop_may_have_written = may_have_written;
             if claimed && !may_have_written {
                 release = staged;
             }
-            if may_have_written {
-                state.retain_interrupt_stop_claim(recipient);
-            }
             result
         };
-        // Interrupt-mode sends never wait for the previous turn to finish:
-        // settle the interrupted turn immediately for every stop outcome so the
-        // new message can deliver as soon as the pane accepts input. Keep an
-        // in-flight/uncertain provisional busy-join head intact so its native
-        // receipt can finish or requeue cleanly.
-        let provisional_submitting = state
-            .agent(recipient)
-            .and_then(|agent| agent.current_request)
-            .and_then(|request_id| state.request(request_id))
-            .is_some_and(|request| {
-                request.phase == RequestPhase::Submitting && !request.trusted_start_bound
-            });
-        if !provisional_submitting
-            && state
-                .agent(recipient)
-                .is_some_and(|agent| agent.current_request.is_some() || agent.interrupt_pending)
-        {
-            state
-                .complete_native_interrupt(recipient, now)
-                .map_err(|error| error.to_string())?;
-        }
+        reconcile_queued_interrupt(
+            &mut state,
+            recipient,
+            id,
+            now,
+            result["outcome"].as_str(),
+            stop_may_have_written,
+            autonomous_restop,
+        )?;
         let outcome = SendInterruptOutcome {
             outcome: result["outcome"]
                 .as_str()
@@ -280,4 +277,109 @@ impl Worker {
             self.save(state)
         }
     }
+}
+
+fn reconcile_queued_interrupt(
+    state: &mut BusState,
+    recipient: AgentId,
+    id: RequestId,
+    now: u64,
+    outcome: Option<&str>,
+    stop_may_have_written: bool,
+    autonomous_restop: bool,
+) -> Result<(), String> {
+    let replay_interrupted_turn = state.can_replay_interrupted_turn(recipient);
+    let stop_may_have_written =
+        stop_may_have_written || replay_interrupted_turn && outcome == Some("unknown");
+    if stop_may_have_written {
+        state.retain_interrupt_stop_claim(recipient);
+    }
+    // A provisional busy-join head must finish native receipt handling
+    // before the queue can take ownership of its prompt again.
+    let provisional_submitting = state
+        .agent(recipient)
+        .and_then(|agent| agent.current_request)
+        .and_then(|request_id| state.request(request_id))
+        .is_some_and(|request| {
+            request.phase == RequestPhase::Submitting && !request.trusted_start_bound
+        });
+    if autonomous_restop {
+        // Keep the autonomous episode and its claim until the provider
+        // reports its end or identifies a distinct new episode.
+        if stop_may_have_written {
+            state
+                .clear_native_interrupt_wait(recipient)
+                .map_err(|error| error.to_string())?;
+        }
+    } else if !provisional_submitting && replay_interrupted_turn {
+        if stop_may_have_written
+            || outcome == Some("already_idle")
+            || state
+                .agent(recipient)
+                .is_some_and(|agent| agent.interrupt_pending)
+        {
+            state
+                .requeue_interrupted_turn(recipient, id, now)
+                .map_err(|error| error.to_string())?;
+        }
+    } else if !provisional_submitting
+        && state
+            .agent(recipient)
+            .is_some_and(|agent| agent.current_request.is_some() || agent.interrupt_pending)
+    {
+        state
+            .complete_native_interrupt(recipient, now)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn skipped_stop(
+    state: &BusState,
+    recipient: AgentId,
+    staged: Option<&SendInterrupt>,
+    current: Option<&SendInterrupt>,
+    needs_stop: bool,
+    replaying: bool,
+) -> Option<(&'static str, &'static str)> {
+    if replaying
+        && staged.is_some_and(|intent| {
+            intent.target.is_none()
+                && (!intent.replayable() || current.is_none_or(|now| !now.replayable()))
+        })
+    {
+        return Some(("skipped", "The autonomous turn cannot be revalidated"));
+    }
+    let same_target = match (staged, current) {
+        (Some(staged), Some(current)) => {
+            staged.same_turn(current)
+                && staged.identity.pane_id == current.identity.pane_id
+                && staged.activity == current.activity
+        }
+        (None, None) => true,
+        _ => false,
+    };
+    if !same_target
+        && !state
+            .agent(recipient)
+            .is_some_and(|agent| agent.interrupt_pending)
+    {
+        return Some(("skipped", "The original interrupt target changed"));
+    }
+    if !needs_stop {
+        return None;
+    }
+    if current.is_some_and(|intent| state.send_interrupt_already_claimed(recipient, intent)) {
+        return Some(("unknown", "The prior stop may have reached the terminal"));
+    }
+    if staged
+        .and_then(|intent| intent.identity.terminal_id.as_deref())
+        .is_none_or(str::is_empty)
+    {
+        return Some((
+            "failed",
+            "The stop target has no confirmed terminal identity",
+        ));
+    }
+    None
 }
