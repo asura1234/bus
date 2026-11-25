@@ -810,14 +810,30 @@ window.addEventListener("load", async () => {
 }
 
 #[test]
-fn headless_page_scrolls_to_wont_work_and_remembers_hide_done() {
+fn terminal_column_headers_include_hide_buttons() {
+    for (column, name) in [("done", "Done"), ("wont_work", "Won't Work")] {
+        let (_, rest) = server::PAGE_HTML
+            .split_once(&format!(
+                r#"<div class="column-header" data-col="{column}">"#
+            ))
+            .unwrap();
+        let (header, _) = rest.split_once("</div>").unwrap();
+        assert!(header.contains(r#"<span class="column-label">"#));
+        assert!(header.contains(r#"<button type="button" class="column-toggle""#));
+        assert!(header.contains(&format!(r#"aria-label="Hide {name} cards">Hide</button>"#)));
+    }
+}
+
+#[test]
+fn headless_page_scrolls_to_wont_work_and_remembers_both_toggles() {
     assert_headless_board_probe_at_size(
         r#"<script>
 const rooms = [{ id: 1, name: "First" }, { id: 2, name: "Second" }];
 let tickets = [
   { room_id: 1, column: "done", title: "Completed one" },
   { room_id: 2, column: "done", title: "Completed two" },
-  { room_id: 2, column: "wont_work", title: "Closed without a fix" }
+  { room_id: 1, column: "wont_work", title: "Closed one" },
+  { room_id: 2, column: "wont_work", title: "Closed two" }
 ];
 let poll;
 window.setInterval = (callback, delay) => { if (delay === 3000) poll = callback; };
@@ -833,27 +849,49 @@ window.addEventListener("load", async () => {
     const wontWork = document.querySelector('.column-header[data-col="wont_work"]');
     const check = (condition, message) => { if (!condition) throw new Error(message); };
     const visible = element => element.getClientRects().length > 0;
-    const toggle = done.querySelector("button");
-    const label = done.querySelector(".column-label");
-    const checkDone = (shouldShow, count) => {
-      const cards = [...document.querySelectorAll('.kanban-column[data-col="done"] .ticket-card')];
-      const closed = document.querySelector('.kanban-column[data-col="wont_work"]:has(.ticket-card)');
+    const doneToggle = done.querySelector("button");
+    const wontWorkToggle = wontWork.querySelector("button");
+    const checkColumn = (header, name, shouldShow, count) => {
+      const column = header.dataset.col;
+      const toggle = header.querySelector("button");
+      const label = header.querySelector(".column-label");
+      const cells = [...document.querySelectorAll(`.kanban-column[data-col="${column}"]`)];
+      const cards = cells.flatMap(cell => [...cell.querySelectorAll(".ticket-card")]);
       const action = shouldShow ? "Hide" : "Show";
-      check(visible(done) && visible(toggle) && label.textContent === `done ${count}`,
-        "The Done header, toggle, and count should remain visible");
-      check(toggle.textContent === action && toggle.getAttribute("aria-label") === `${action} Done cards`,
-        `Expected the toggle to say ${action}`);
-      check(cards.length === count && cards.every(card => visible(card) === shouldShow),
-        "The Done toggle did not update the cards across all rooms");
-      check(visible(closed) && Math.abs(closed.getBoundingClientRect().left - wontWork.getBoundingClientRect().left) <= 1,
-        "Won't Work column did not align with its header");
+      check(visible(header) && visible(toggle) && label.textContent === `${name === "Done" ? "done" : name} ${count}`,
+        `${name} header, toggle, and count should remain visible`);
+      check(toggle.textContent === action && toggle.getAttribute("aria-label") === `${action} ${name} cards`,
+        `Expected ${action} ${name} cards`);
+      check(cells.length === rooms.length && cells.every(cell => visible(cell) === shouldShow) &&
+        cards.length === count && cards.every(card => visible(card) === shouldShow),
+        `${name} visibility did not match across all rooms`);
+      if (shouldShow) {
+        check(cells.every(cell => Math.abs(cell.getBoundingClientRect().left - header.getBoundingClientRect().left) <= 1),
+          `${name} column did not align with its header`);
+      }
     };
-    const storageKey = "agile-board.hide-done";
+    const checkColumns = (showDone, showWontWork, count = 2) => {
+      checkColumn(done, "Done", showDone, count);
+      checkColumn(wontWork, "Won't Work", showWontWork, count);
+    };
+    const clickWontWork = () => {
+      window.scrollTo(document.documentElement.scrollWidth, 0);
+      const rect = wontWorkToggle.getBoundingClientRect();
+      const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      check(target === wontWorkToggle, "Won't Work toggle could not be clicked");
+      target.click();
+    };
+    const doneKey = "agile-board.hide-done";
+    const wontWorkKey = "agile-board.hide-wont-work";
     if (performance.getEntriesByType("navigation")[0].type === "reload") {
-      checkDone(false, 2);
-      toggle.click();
-      checkDone(true, 2);
-      check(localStorage.getItem(storageKey) === "false", "Show Done preference was not saved");
+      checkColumns(false, false);
+      doneToggle.click();
+      checkColumns(true, false);
+      check(localStorage.getItem(doneKey) === "false" && localStorage.getItem(wontWorkKey) === "true",
+        "Showing Done changed the Won't Work preference");
+      clickWontWork();
+      checkColumns(true, true);
+      check(localStorage.getItem(wontWorkKey) === "false", "Show Won't Work preference was not saved");
       result.textContent = "PASS";
       return;
     }
@@ -861,31 +899,36 @@ window.addEventListener("load", async () => {
     check(!document.querySelector('.topbar input[type="checkbox"]') &&
       !document.querySelector('.topbar').textContent.includes("Hide Done"),
       "The old Hide Done checkbox pill is still in the toolbar");
-    check(wontWork?.textContent === "Won't Work 1" && done.nextElementSibling === wontWork,
-      "Expected Won't Work after Done with a ticket count");
-    checkDone(true, 2);
+    check(done.nextElementSibling === wontWork, "Expected Won't Work after Done");
+    checkColumns(true, true);
     const viewport = document.documentElement.clientWidth;
     check(done.getBoundingClientRect().right <= viewport + 1, "Done does not fit in the initial viewport");
     check(wontWork.getBoundingClientRect().left >= viewport - 1, "Won't Work is visible before scrolling");
-    window.scrollTo(document.documentElement.scrollWidth, 0);
-    check(window.scrollX > 0 && wontWork.getBoundingClientRect().right <= viewport + 1,
-      "Could not scroll to the Won't Work header");
-    window.scrollTo(0, 0);
 
     const firstRoom = document.querySelector('.room-section');
     const expandedHeight = firstRoom.offsetHeight;
-    toggle.focus();
-    toggle.click();
-    checkDone(false, 2);
-    check(firstRoom.offsetHeight < expandedHeight, "The hidden Done cards still take up room");
+    clickWontWork();
+    checkColumns(true, false);
+    await poll();
+    checkColumns(true, false);
+    clickWontWork();
+    window.scrollTo(0, 0);
+    doneToggle.click();
+    checkColumns(false, true);
     check(wontWork.getBoundingClientRect().left >= viewport - 1, "Won't Work moved into the initial viewport");
-    check(localStorage.getItem(storageKey) === "true", "Hide Done preference was not saved");
+    clickWontWork();
+    checkColumns(false, false);
+    check(firstRoom.offsetHeight < expandedHeight, "The hidden cards still take up room");
+    check(localStorage.getItem(doneKey) === "true" && localStorage.getItem(wontWorkKey) === "true",
+      "Hide preferences were not saved independently");
+    wontWorkToggle.focus();
+    tickets = [...tickets,
+      { room_id: 1, column: "done", title: "Another completion" },
+      { room_id: 2, column: "wont_work", title: "Another closure" }
+    ];
     await poll();
-    checkDone(false, 2);
-    tickets = [...tickets, { room_id: 1, column: "done", title: "Another completion" }];
-    await poll();
-    checkDone(false, 3);
-    check(document.activeElement === toggle, "The Done toggle lost focus on a changed poll");
+    checkColumns(false, false, 3);
+    check(document.activeElement === wontWorkToggle, "The Won't Work toggle lost focus on a changed poll");
     location.reload();
   } catch (error) {
     result.textContent = error.message;

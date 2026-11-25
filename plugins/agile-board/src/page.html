@@ -260,18 +260,18 @@
     .column-header[data-col="implementation"] { border-bottom-color: var(--col-implementation); color: #93c5fd; }
     .column-header[data-col="testing"] { border-bottom-color: var(--col-testing); color: #fcd34d; }
     .column-header[data-col="review"] { border-bottom-color: var(--col-review); color: #67e8f9; }
-    .column-header[data-col="done"] {
+    .column-header[data-col="done"] { border-bottom-color: var(--col-done); color: #6ee7b7; }
+    .column-header[data-col="wont_work"] { border-bottom-color: var(--text-muted); color: var(--text-secondary); }
+    .column-header[data-col="done"],
+    .column-header[data-col="wont_work"] {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
       padding-block: 2px;
-      border-bottom-color: var(--col-done);
-      color: #6ee7b7;
     }
-    .column-header[data-col="wont_work"] { border-bottom-color: var(--text-muted); color: var(--text-secondary); }
 
-    .done-toggle {
+    .column-toggle {
       padding: 2px 6px;
       border: 1px solid var(--border-strong);
       border-radius: 4px;
@@ -281,7 +281,7 @@
       cursor: pointer;
     }
 
-    .done-toggle:hover { background: var(--bg-elevated); }
+    .column-toggle:hover { background: var(--bg-elevated); }
 
     /* Main board area: stacked section rows with a continuous sticky left sidebar rail. */
     .board-container {
@@ -351,7 +351,8 @@
       container-type: inline-size;
     }
 
-    body.hide-done .kanban-column[data-col="done"] { display: none; }
+    body.hide-done .kanban-column[data-col="done"],
+    body.hide-wont-work .kanban-column[data-col="wont_work"] { display: none; }
     /* Keep Won't Work aligned with its header when the Done cells are hidden. */
     body.hide-done .kanban-column[data-col="wont_work"] { grid-column: -2; }
 
@@ -504,9 +505,12 @@
       <div class="column-header" data-col="review"><span class="column-label">review</span></div>
       <div class="column-header" data-col="done">
         <span class="column-label">done</span>
-        <button type="button" class="done-toggle" id="done-toggle" aria-label="Hide Done cards">Hide</button>
+        <button type="button" class="column-toggle" id="done-toggle" aria-label="Hide Done cards">Hide</button>
       </div>
-      <div class="column-header" data-col="wont_work"><span class="column-label">Won't Work</span></div>
+      <div class="column-header" data-col="wont_work">
+        <span class="column-label">Won't Work</span>
+        <button type="button" class="column-toggle" id="wont-work-toggle" aria-label="Hide Won't Work cards">Hide</button>
+      </div>
     </div>
   </div>
 
@@ -692,26 +696,32 @@
       fetchBoard();
     });
 
-    const doneToggle = document.getElementById("done-toggle");
-    const hideDoneKey = "agile-board.hide-done";
+    function setupColumnToggle(column, label) {
+      const toggle = document.getElementById(`${column}-toggle`);
+      const hiddenClass = `hide-${column}`;
+      const storageKey = `agile-board.${hiddenClass}`;
 
-    function setDoneHidden(hidden) {
-      document.body.classList.toggle("hide-done", hidden);
-      const action = hidden ? "Show" : "Hide";
-      doneToggle.textContent = action;
-      doneToggle.setAttribute("aria-label", `${action} Done cards`);
+      function setHidden(hidden) {
+        document.body.classList.toggle(hiddenClass, hidden);
+        const action = hidden ? "Show" : "Hide";
+        toggle.textContent = action;
+        toggle.setAttribute("aria-label", `${action} ${label} cards`);
+      }
+
+      try {
+        setHidden(localStorage.getItem(storageKey) === "true");
+      } catch (_) {}
+      toggle.addEventListener("click", () => {
+        const hidden = !document.body.classList.contains(hiddenClass);
+        setHidden(hidden);
+        try {
+          localStorage.setItem(storageKey, String(hidden));
+        } catch (_) {}
+      });
     }
 
-    try {
-      setDoneHidden(localStorage.getItem(hideDoneKey) === "true");
-    } catch (_) {}
-    doneToggle.addEventListener("click", () => {
-      const hidden = !document.body.classList.contains("hide-done");
-      setDoneHidden(hidden);
-      try {
-        localStorage.setItem(hideDoneKey, String(hidden));
-      } catch (_) {}
-    });
+    setupColumnToggle("done", "Done");
+    setupColumnToggle("wont-work", "Won't Work");
 
     const clearBtn = document.getElementById("clear-history-btn");
     const step1Overlay = document.getElementById("clear-confirm-step1");
