@@ -197,17 +197,23 @@ impl BusUi {
             .collect();
         match code {
             KeyCode::Esc | KeyCode::Tab => self.recipient_menu = false,
-            KeyCode::Up => self.recipient_index = self.recipient_index.saturating_sub(1),
-            KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(ids.len()),
-            KeyCode::Enter | KeyCode::Char(' ') => match self.recipient_index.checked_sub(1) {
-                None => self.toggle_recipient(None),
+            KeyCode::Up => {
+                self.recipient_index = Some(self.recipient_index.unwrap_or(0).saturating_sub(1));
+            }
+            KeyCode::Down => {
+                self.recipient_index =
+                    Some(self.recipient_index.map_or(0, |i| (i + 1).min(ids.len())));
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => match self.recipient_index {
+                Some(0) => self.toggle_recipient(None),
                 Some(i) => {
                     // A snapshot can delete the highlighted agent; its stale
                     // row selects nothing rather than falling back to All.
-                    if let Some(&id) = ids.get(i) {
+                    if let Some(&id) = ids.get(i - 1) {
                         self.toggle_recipient(Some(id));
                     }
                 }
+                None => {}
             },
             _ => {}
         }

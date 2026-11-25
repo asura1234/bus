@@ -169,6 +169,39 @@ fn enter_without_checked_agents_opens_the_picker_and_preserves_draft() {
 }
 
 #[test]
+fn explicit_recipient_selection_is_required_after_repeated_submit_keys() {
+    for modifiers in [KeyModifiers::NONE, KeyModifiers::ALT] {
+        let (mut ui, room, agent) = fixture();
+        ui.locals.get_mut(&room).unwrap().text.insert("keep this draft");
+
+        key(&mut ui, KeyCode::Enter, modifiers);
+        assert!(ui.recipient_menu);
+        key(&mut ui, KeyCode::Enter, modifiers);
+        assert!(ui.locals[&room].recipients.is_empty());
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+
+        assert!(ui.locals[&room].recipients.is_empty());
+        assert_eq!(ui.locals[&room].text.text, "keep this draft");
+        assert!(ui.submissions.is_empty());
+        assert!(ui.pending.is_empty());
+        assert!(ui.error.is_none());
+
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+        key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+        key(&mut ui, KeyCode::Enter, modifiers);
+
+        let [submission] = ui.submissions.as_slice() else {
+            panic!("explicitly selected recipient should receive exactly one submission");
+        };
+        assert_eq!(submission.draft.recipient_ids, [agent].into());
+        assert_eq!(submission.draft.text, "keep this draft");
+        assert!(ui.locals[&room].text.text.is_empty());
+    }
+}
+
+#[test]
 fn composer_autosave_and_save_errors_do_not_title_the_composer() {
     let (mut ui, room, _) = fixture();
     key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);

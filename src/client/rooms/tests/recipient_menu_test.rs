@@ -113,7 +113,8 @@ fn recipient_menu_wheel_scrolls_choices_instead_of_history() {
     let row = choices(&ui)[1];
     mouse(&mut ui, ScrollDown, row.x, row.y);
     assert_eq!(
-        ui.recipient_index, 3,
+        ui.recipient_index,
+        Some(3),
         "wheel over picker must navigate its own list"
     );
     assert_eq!(
