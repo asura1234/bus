@@ -372,9 +372,9 @@ unit test is supporting evidence.
 **Pass criteria:** legitimate controls still block, status shortcuts and child
 hooks do not stop parent work, and busy agy delivers or safely retains the send.
 
-### APP-31 — NEW: Deletion cancels stale notices and deliveries
+### APP-31 — NEW: Deletion retires stale notices and preserves outbound work
 
-**Preconditions/setup:** R(`qa-delete-delivery`), fake worker and survivor,
+**Preconditions/setup:** R(`qa-delete-delivery`), fake workers and a survivor,
 plus a fake MASTER orchestrator bound to the room. Use a busy orchestrator
 or held native input so a Blocked notice can be observed pending before
 delivery. Use distinct markers for all requests.
@@ -387,23 +387,31 @@ delivery. Use distinct markers for all requests.
    deletion, retain it as historical and check that the count does not grow.
    Observe through the fixture's fallback decision, including any configured
    fallback delay.
-2. Independently hold a normal message authored by a worker for a busy
-   survivor using an eligible queue path. Record the queued request ID,
-   then delete the author before native submission and release the receiver →
-   the old message does not appear in the receiver's native input. The old
-   request settles as abandoned with `agent_deleted`. An earlier visible historical
-   prompt can remain. Add a new worker with the same name and prove its
-   different ID does not inherit old queues or notices.
-3. Reopen the scratch session with the settled fixture and send a positive
-   control from a live author → new work drains normally, and old input
-   and Blocked notice counts do not increase.
+2. From a fresh worker, use `bus send --mode queue` to send a normal message
+   to a busy survivor. Record the message and request IDs and confirm
+   `stage: queued` with reason `agent_working`. Delete the sender while the
+   survivor is still busy → the same request remains queued. Add a worker
+   with the same name and confirm it has a different ID. Let the survivor's
+   current turn finish → it receives the marker once in a distinct turn and
+   the original request settles with `complete: true`, `stage: replied` and the
+   expected reply. Confirm the replacement receives no input from this request
+   or from the deleted worker's pending notices.
+3. Independently queue a message addressed to a busy worker. Confirm it is
+   queued before deleting that recipient → the request settles as abandoned
+   with reason `agent_deleted`, and the marker never reaches native input.
+4. Reopen the scratch session and confirm the outbound reply and inbound
+   cancellation are preserved under their original request IDs. Send a positive
+   control from a live author → it drains normally. The earlier delivery and
+   Blocked notice counts do not increase.
 
-**Evidence:** stable IDs, deletion confirmation, before/after queue state and
-room rows, full observation window with provider input/effects and restored
-history. Capture that each request was pending before deletion.
+**Evidence:** stable IDs, deletion confirmations, queue and room rows before
+and after deletion, native input and turn timeline through settlement, and
+restored history. Capture each request or notice pending before deletion.
 
-**Pass criteria:** deleted-agent work is never newly delivered or awakened,
-and live-agent delivery continues.
+**Pass criteria:** stale Blocked notices retire, queued inbound requests to
+deleted recipients settle as `agent_deleted`, and accepted outbound messages
+to live recipients deliver once and settle on the original request. Name
+reuse and restart preserve those outcomes, and live sends continue to drain.
 
 ### APP-32 — NEW: Coordinator stalls do not starve followers or queued sends
 
@@ -899,7 +907,7 @@ build missing a required product lane still fails the target assertion.
 | APP-28 | #472 `067ea8672` returns to the room on submit (`agent_creation.rs` `submit_agent_creation` calls `open_room`) and shows a `Launching` row (`render/sidebar.rs`). Inline missing-field text stays on the form (`input/forms.rs`). The room renders `Could not add {name}: {reason}` (`render/room.rs`). Hook consent opens later, only while that room is idle (`receive_agent_setup`). | Expect the immediate close, the provisional row, inline Name/Model/PWD errors, and the room-local failure line. Consent must not hold the Add form open across startup. |
 | APP-29 | Master `1ab9d1c5b` and `f83ba7013` use immediate keypress confirmation. | A separate confirmation prompt is not in the inspected restart contract. If a prompt is required, the restart lane must change before adding that expectation. |
 | APP-30 | Master `80bef5469`, `ae6734d87`, `89c49bad8` and `2ca07f718` cover hook/parser/delivery cases. `fix/codex-false-blocked-hints` at `3cd45f0b1` has further dialog-layout work. | Keep the positive permission/trust controls and check the exact native fixture support on the run head. |
-| APP-31 | #470 `0d3f76636` is on master. Deletion sets `deletion_pending` and `notify_dialogs` skips that agent (`dialogs.rs`). Unsettled requests on the deleted agent become Abandoned with `agent_deleted` (`model/agents.rs` `delete_agent`). Queued work whose author is deleting is retired before dispatch (`retire_deleted_queued_requests`). History remains, and a reused name gets a new id. | Confirm no new blocked notice or native delivery after deletion, `agent_deleted` on the abandoned request, and that the replacement agent does not inherit the old queue. |
+| APP-31 | `delete_agent` abandons unsettled requests addressed to the deleted agent. `retire_deleted_queued_requests` retires stale Bus notices. Accepted outbound sends remain eligible in surviving conversations and retain their original author and recipient IDs. | Observe a pending Blocked notice retire, a queued inbound request settle as `agent_deleted`, and a queued outbound request survive deletion and settle once after the recipient's busy turn. Check replacement IDs and restored history. |
 | APP-32 | Master `a662dfc1b` provides a provisional hint for eligible `send --async` followers. | Provide a deterministic stall fixture. The add/startup lane may change which operation reliably holds the coordinator. |
 
 ## Decisions

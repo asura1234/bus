@@ -41,5 +41,5 @@ Read-only state/history and observe/press may corroborate the journey.
    Stop the scratch session.
 
 For deletion before a pending notice can deliver, use
-[APP-31](app.md#app-31--new-deletion-cancels-stale-notices-and-deliveries).
+[APP-31](app.md#app-31--new-deletion-retires-stale-notices-and-preserves-outbound-work).
 Keep BN-01 as the positive control with a live worker and a real dialog.
