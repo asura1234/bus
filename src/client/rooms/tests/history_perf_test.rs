@@ -1276,6 +1276,57 @@ fn unfiltered_history_loads_older_records_on_demand() {
     assert!(contains(&history, "Prompt 2200"));
 }
 
+fn live_tail_of_large_room() -> crate::client::rooms::BusUi {
+    let (state, room) = large_room();
+    let mut ui = crate::client::rooms::BusUi::new(snapshot(state, 1));
+    ui.room = Some(room);
+    ui.compute_view(124, 40);
+    ui
+}
+
+fn has_room_body(ui: &crate::client::rooms::BusUi, text: &str) -> bool {
+    ui.history.cached().iter().any(|line| line.text == text)
+}
+
+#[test]
+fn opening_empty_chat_search_does_not_load_older_records() {
+    let mut ui = live_tail_of_large_room();
+    assert!(!has_room_body(&ui, "Prompt 2200"));
+    ui.open_chat_search();
+    ui.compute_view(124, 40);
+    assert!(!has_room_body(&ui, "Prompt 2200"));
+}
+
+#[test]
+fn resizing_the_live_tail_reflows_only_the_newest_page() {
+    let mut ui = live_tail_of_large_room();
+    assert!(ui.history.load_older());
+    ui.compute_view(124, 40);
+    assert!(has_room_body(&ui, "Prompt 2200"));
+    ui.compute_view(100, 40);
+    assert!(has_room_body(&ui, "Prompt 2499"));
+    assert!(!has_room_body(&ui, "Prompt 2200"));
+}
+
+#[test]
+fn history_selection_keeps_its_text_when_an_older_page_is_prepended() {
+    use crate::client::rooms::selection::Point;
+
+    let mut ui = live_tail_of_large_room();
+    let line = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.text == "Prompt 2499")
+        .unwrap();
+    ui.history_selection = Some((Point { line, offset: 0 }, Point { line, offset: 11 }));
+    assert_eq!(ui.selected_text().as_deref(), Some("Prompt 2499"));
+    assert!(ui.history.load_older());
+    ui.compute_view(124, 40);
+    assert!(has_room_body(&ui, "Prompt 2200"));
+    assert_eq!(ui.selected_text().as_deref(), Some("Prompt 2499"));
+}
+
 #[test]
 fn pagination_ignores_foreign_notices() {
     let mut state = BusState::default();

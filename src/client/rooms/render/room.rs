@@ -4,6 +4,7 @@ use super::super::{
     history::{History, Line, SearchAnchor, Tone},
     links::{visible_links, Candidate},
     recipients::Layout as RecipientLayout,
+    selection::{anchor_history_selection, restore_history_selection, Region},
     thumbnails::Placement,
     BusUi, ComposerSize, LocalRoom,
 };
@@ -75,9 +76,21 @@ impl BusUi {
             self.main_scroll,
         );
         let visible_anchor = self.visible_history_anchor();
+        let selection = anchor_history_selection(&self.history, self.history_selection);
+        let searching = self
+            .chat_search
+            .as_ref()
+            .is_some_and(|search| !search.query.is_empty());
+        if self.history_follow_tail
+            && !searching
+            && filters == RoomHistoryFilters::default()
+            && width != self.view.history_text.width
+        {
+            self.history.reset_unfiltered_tail(room.id);
+        }
         // A page that fits the viewport can be at both the top and the tail.
         // Loading older records must remain possible in that state.
-        if self.chat_search.is_some() || self.main_scroll < 80 {
+        if searching || self.main_scroll < 80 {
             self.history.load_older();
         }
         let (snapshot, submissions) = self.history_projection();
@@ -94,6 +107,15 @@ impl BusUi {
         if let Some(anchor) = visible_anchor {
             if let Some(index) = self.history.index_of(anchor) {
                 self.main_scroll = index;
+            }
+        }
+        if let Some(selection) = selection {
+            self.history_selection = restore_history_selection(&self.history, selection);
+            if self.history_selection.is_none() {
+                self.pressed_link = None;
+                if self.drag == Some(Region::History) {
+                    self.drag = None;
+                }
             }
         }
         let content = self.history.cached();

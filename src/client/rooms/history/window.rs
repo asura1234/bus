@@ -93,6 +93,17 @@ impl History {
         }
     }
 
+    /// A resize at the live tail can render the newest page without wrapping
+    /// older rows the user has already scrolled away from.
+    pub(in crate::client::rooms) fn reset_unfiltered_tail(&mut self, room: RoomId) {
+        if self.window_room == Some((room, RoomHistoryFilters::default()))
+            && self.record_limit > INITIAL_UNFILTERED_RECORDS
+        {
+            self.record_limit = INITIAL_UNFILTERED_RECORDS;
+            self.key = None;
+        }
+    }
+
     /// Keep the first page bounded even for a sparse filter. Once a page is
     /// ready, another batch can fill an empty viewport or extend a scrollback.
     pub(in crate::client::rooms) fn load_older(&mut self) -> bool {

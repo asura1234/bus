@@ -2,6 +2,7 @@
 //! anchored to text positions rather than screen cells, so they survive
 //! scrolling; releasing the button copies the selected text to the host
 //! clipboard. History selections cover exactly the dragged characters.
+use super::history::{History, RowAnchor};
 use super::links::Target;
 use super::render::{cell_offset, wrap_ranges, Action};
 use super::BusUi;
@@ -20,6 +21,35 @@ pub(super) enum Region {
 pub(super) struct Point {
     pub line: usize,
     pub offset: usize,
+}
+
+/// Captures the text endpoints before a history layout can prepend rows.
+pub(super) fn anchor_history_selection(
+    history: &History,
+    selection: Option<(Point, Point)>,
+) -> Option<[(RowAnchor, Point); 2]> {
+    let (start, end) = selection?;
+    Some([
+        (history.anchor_at(start.line)?, start),
+        (history.anchor_at(end.line)?, end),
+    ])
+}
+
+pub(super) fn restore_history_selection(
+    history: &History,
+    [(start_anchor, start), (end_anchor, end)]: [(RowAnchor, Point); 2],
+) -> Option<(Point, Point)> {
+    let restore = |anchor, point: Point| {
+        let line = if history.anchor_at(point.line) == Some(anchor) {
+            point.line
+        } else {
+            history.index_of(anchor)?
+        };
+        let text = &history.cached().get(line)?.text;
+        let offset = text.floor_char_boundary(point.offset.min(text.len()));
+        Some(Point { line, offset })
+    };
+    Some((restore(start_anchor, start)?, restore(end_anchor, end)?))
 }
 
 /// Orders a history selection. It is never widened: a drag selects exactly
