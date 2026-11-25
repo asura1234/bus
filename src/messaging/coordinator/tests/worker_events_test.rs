@@ -987,10 +987,8 @@ fn deleting_a_queued_send_author_does_not_create_a_no_reply_wake() {
     let source = f.send(Author::Agent(peer), "queued peer request");
     let mut state = f.worker.state.clone();
     state.delete_agent(peer, io::now_ms()).unwrap();
-    assert_eq!(
-        state.request(source).unwrap().failure_reason.as_deref(),
-        Some("agent_deleted")
-    );
+    assert_eq!(state.request(source).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(state.queued_requests(f.agent), &[source]);
     f.worker.save(state).unwrap();
     collect(&mut f);
     assert!(f.notices().is_empty());

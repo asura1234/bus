@@ -232,12 +232,9 @@ fn selector_label_legacy_deleted_author_keeps_one_header_per_batch_part() {
     assert!(!payload.contains("answer with bus send"), "{payload}");
 
     w.state.expire_stalled_queued_requests(3).unwrap();
-    assert!(w.state.queued_requests(peer).is_empty());
+    assert_eq!(w.state.queued_requests(peer), ids);
     for id in ids {
-        assert_eq!(
-            w.state.request(id).unwrap().failure_reason.as_deref(),
-            Some("agent_deleted")
-        );
+        assert_eq!(w.state.request(id).unwrap().phase, RequestPhase::Queued);
     }
     drop(w);
     std::fs::remove_dir_all(dir).unwrap();

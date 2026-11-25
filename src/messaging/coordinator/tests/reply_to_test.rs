@@ -33,6 +33,106 @@ fn status(f: &mut Fixture, id: RequestId) -> Value {
 }
 
 #[test]
+fn deleting_a_sender_preserves_delivery_and_settlement_for_the_live_recipient() {
+    for delete_while_queued in [true, false] {
+        let mut f = Fixture::new(Provider::ClaudeCode);
+        let lead = running(&mut f, "original task", "original-turn");
+        let mut state = f.worker.state.clone();
+        let sender = state
+            .create_agent(f.room, "sender", Provider::Codex, f.dir.clone(), None)
+            .unwrap();
+        f.worker.save(state).unwrap();
+        let sent = f.worker.control_response_with_events(
+            &ControlRequest {
+                id: "queued-send".into(),
+                method: "message.send".into(),
+                params: json!({
+                    "room": f.room.0.to_string(), "as": sender.0.to_string(),
+                    "to": [f.agent.0.to_string()], "queue": true, "text": "queued result"
+                }),
+            },
+            None,
+        );
+        assert!(sent.ok, "{sent:?}");
+        let request = RequestId(sent.result["request_ids"][0].as_u64().unwrap());
+        let queued = status(&mut f, request);
+        assert_eq!(queued["requests"][0]["stage"], "queued");
+        assert_eq!(queued["requests"][0]["reason"], "agent_working");
+
+        let delete_sender = |f: &mut Fixture| {
+            let deleted = f.worker.control_response_with_events(
+                &ControlRequest {
+                    id: "delete-sender".into(),
+                    method: "agent.delete".into(),
+                    params: json!({"agent": sender.0.to_string(), "confirm": true}),
+                },
+                Some(&mpsc::channel().0),
+            );
+            assert!(deleted.ok, "{deleted:?}");
+            assert!(f.worker.state.agent(sender).is_none());
+        };
+        if delete_while_queued {
+            delete_sender(&mut f);
+            let queued = status(&mut f, request);
+            assert_eq!(queued["requests"][0]["stage"], "queued", "{queued}");
+            assert_eq!(queued["requests"][0]["reason"], "agent_working");
+        }
+
+        f.stopped("original-turn", "original task completed");
+        f.consume();
+        f.status(RuntimeStatus::Idle);
+        f.worker.settle_requests().unwrap();
+        assert_eq!(f.request(lead).phase, RequestPhase::Completed);
+        f.deliver();
+        let typed = f.typed();
+        assert_eq!(typed.len(), 2, "{typed:?}");
+        let (payload, steered) = &typed[1];
+        assert!(!steered);
+        let sender_label = if delete_while_queued {
+            format!("sender (agent {})", sender.0)
+        } else {
+            "sender".into()
+        };
+        assert_eq!(
+            test_prompt_content(payload),
+            format!("{sender_label}:\nqueued result")
+        );
+        assert!(payload.contains(&format!("from {sender_label} (room {})]", f.room.0)));
+        f.started("queued-turn", payload);
+        f.consume();
+        f.status(RuntimeStatus::Working);
+        assert!(f.request(request).trusted_start_bound);
+        let captured_final = "queued result received";
+        let expected_reply = if delete_while_queued {
+            captured_final
+        } else {
+            delete_sender(&mut f);
+            assert_eq!(
+                f.worker.state.agent(f.agent).unwrap().current_request,
+                Some(request)
+            );
+            let message = f.request(request).prompt.id;
+            let recipient = f.agent;
+            let reply = answer(&mut f, message, recipient, "explicit result");
+            assert!(reply.ok, "{reply:?}");
+            assert_eq!(reply.result["stage"], "replied");
+            assert_eq!(reply.result["requester_turn_queued"], false);
+            "explicit result"
+        };
+
+        f.stopped("queued-turn", captured_final);
+        f.consume();
+        f.status(RuntimeStatus::Idle);
+        f.worker.settle_requests().unwrap();
+        let settled = status(&mut f, request);
+        assert_eq!(settled["complete"], true);
+        assert_eq!(settled["requests"][0]["stage"], "replied");
+        assert_eq!(settled["requests"][0]["reply"]["text"], expected_reply);
+        assert_eq!(f.worker.state.requests().count(), 2);
+    }
+}
+
+#[test]
 fn reply_to_receipt_explains_no_requester_turn_and_how_to_request_action() {
     let mut f = Fixture::new(Provider::ClaudeCode);
     let request = start(&mut f, "inspect this change");

@@ -454,7 +454,7 @@ fn an_unreadable_uncertain_notice_uses_its_write_clock_and_preserves_delivery_un
 }
 
 #[test]
-fn deleting_blocked_worker_cancels_queued_notice_and_requests() {
+fn deleting_blocked_worker_retires_its_notice_and_inbound_request() {
     let (mut f, worker, _, notice) = queued_worker_notice();
     let mut state = f.worker.state.clone();
     let room = f.request(notice).room_id;
@@ -494,11 +494,8 @@ fn deleting_blocked_worker_cancels_queued_notice_and_requests() {
         f.request(incoming).failure_reason.as_deref(),
         Some("agent_deleted")
     );
-    assert_eq!(
-        f.request(outgoing).failure_reason.as_deref(),
-        Some("agent_deleted")
-    );
-    assert!(f.request(outgoing).submitted_payload.is_none());
+    assert_eq!(f.request(outgoing).phase, RequestPhase::Queued);
+    assert!(f.request(outgoing).failure_reason.is_none());
     assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
     assert_eq!(
         f.request(notice).failure_reason.as_deref(),
@@ -529,7 +526,7 @@ fn deleting_blocked_worker_cancels_queued_notice_before_native_delivery() {
 }
 
 #[test]
-fn startup_cancels_legacy_queued_notice_and_send_from_deleted_worker() {
+fn startup_retires_legacy_notice_but_preserves_the_deleted_workers_send() {
     let (mut f, worker, _, notice) = queued_worker_notice();
     let mut state = f.worker.state.clone();
     let room = f.request(notice).room_id;
@@ -567,14 +564,14 @@ fn startup_cancels_legacy_queued_notice_and_send_from_deleted_worker() {
         .save(&serde_json::from_value(legacy).unwrap())
         .unwrap();
     f.worker = Worker::open(resume, Box::new(Native(f.native.clone()))).unwrap();
-    assert!(f.worker.state.queued_requests(f.agent).is_empty());
-    for id in [notice, outgoing] {
-        assert_eq!(f.request(id).phase, RequestPhase::Abandoned);
-        assert_eq!(
-            f.request(id).failure_reason.as_deref(),
-            Some("agent_deleted")
-        );
-    }
+    assert_eq!(f.worker.state.queued_requests(f.agent), &[outgoing]);
+    assert_eq!(f.request(outgoing).phase, RequestPhase::Queued);
+    assert!(f.request(outgoing).failure_reason.is_none());
+    assert_eq!(f.request(notice).phase, RequestPhase::Abandoned);
+    assert_eq!(
+        f.request(notice).failure_reason.as_deref(),
+        Some("agent_deleted")
+    );
 }
 
 #[test]
