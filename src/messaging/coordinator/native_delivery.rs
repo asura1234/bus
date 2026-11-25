@@ -84,7 +84,7 @@ impl Worker {
     }
 
     /// A native write already admitted before deletion cannot be recalled.
-    /// Drain its receipt before removing either endpoint from the roster.
+    /// Drain its receipt before removing its recipient or retiring its request.
     pub(super) fn finish_deleting_submissions(&mut self) {
         self.finish_native_submissions_matching(true, |state, pending| {
             state

@@ -237,9 +237,8 @@ impl BusState {
         Ok(())
     }
 
-    /// A surviving recipient can still have work from a deleted sender or
-    /// a Bus notice about one. Close those requests before they are dispatched,
-    /// including queues persisted by an older coordinator.
+    /// Retire stale Bus notices and work caught up in a conversation's
+    /// deletion before dispatch, including queues recovered from disk.
     pub(crate) fn retire_deleted_queued_requests(&mut self, now_ms: u64) -> Result<(), ModelError> {
         let retired: Vec<_> = self
             .queues
@@ -274,9 +273,15 @@ impl BusState {
 
     pub(crate) fn request_source_deleting(&self, request: &super::Request) -> bool {
         match request.prompt.author {
-            Author::Agent(sender) => self
-                .agent(sender)
-                .is_none_or(|agent| agent.deletion_pending),
+            // Accepted messages outlive the sender in a surviving conversation.
+            // Keep the existing early retirement for a conversation being deleted.
+            Author::Agent(sender) => {
+                self.room(request.room_id)
+                    .is_some_and(|room| room.deletion_pending)
+                    && self
+                        .agent(sender)
+                        .is_none_or(|agent| agent.deletion_pending)
+            }
             Author::Bus => {
                 request.informational_subjects_match(|id| {
                     self.agent(id).is_none_or(|agent| agent.deletion_pending)
