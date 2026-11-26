@@ -349,6 +349,56 @@ fn drafts_and_names_are_room_local_and_ids_survive_renames() {
 }
 
 #[test]
+fn deleting_a_replacement_room_settles_cross_room_interrupt_members() {
+    for submitted in [false, true] {
+        let (mut state, original_room, _, claude) = state_with_room_and_agents();
+        let replacement_room = state.create_room("interrupt source").unwrap();
+        let original = submit_text(&mut state, original_room, claude, "original work");
+        start_request(&mut state, original, "launch-claude", 20);
+        let replacement = state
+            .submit_message_with(
+                replacement_room,
+                Draft {
+                    text: "interrupt from another room".into(),
+                    recipient_ids: [claude].into(),
+                    ..Draft::default()
+                },
+                Author::Developer,
+                30,
+                true,
+            )
+            .unwrap()[0];
+        state.mark_interrupt_delivery(replacement).unwrap();
+        state
+            .requeue_interrupted_turn(claude, replacement, 31)
+            .unwrap();
+        if submitted {
+            submit_request(&mut state, replacement, "launch-claude", 35);
+        }
+        let unrelated = submit_text(&mut state, original_room, claude, "unrelated work");
+
+        state.prepare_delete_room(replacement_room).unwrap();
+        state.delete_room(replacement_room, 40).unwrap();
+
+        assert!(state.room(original_room).is_some());
+        assert!(state.agent(claude).unwrap().current_request.is_none());
+        assert_eq!(state.queued_requests(claude), &[unrelated]);
+        assert_eq!(
+            state
+                .request(replacement)
+                .unwrap()
+                .failure_reason
+                .as_deref(),
+            Some("room_deleted")
+        );
+        let original = state.request(original).unwrap();
+        assert_eq!(original.phase, RequestPhase::Abandoned);
+        assert_eq!(original.failure_reason.as_deref(), Some("interrupted"));
+        assert_eq!(original.completed_at_ms, Some(40));
+    }
+}
+
+#[test]
 fn deleting_the_visible_room_closes_its_orchestrators_master_requests_and_shows_master() {
     let mut state = BusState::new();
     let master = state.ensure_master_room();

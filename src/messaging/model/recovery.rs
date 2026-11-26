@@ -483,7 +483,7 @@ impl BusState {
                 .ok_or(ModelError::InvalidTransition)?;
             queue.remove(position);
             let remaining = !queue.is_empty();
-            self.close_queued_interrupt_group(request, recovered_at_ms);
+            self.close_interrupt_groups(|lead| lead == request, recovered_at_ms);
             let keep_hold = preserve_queue_hold && remaining;
             let request_state = self
                 .requests

@@ -81,17 +81,20 @@ impl BusState {
             .collect()
     }
 
-    pub(in crate::messaging::model) fn close_queued_interrupt_group(
+    pub(in crate::messaging::model) fn close_interrupt_groups(
         &mut self,
-        lead: RequestId,
+        retired: impl Fn(RequestId) -> bool,
         now: u64,
     ) {
-        for id in self.interrupt_group(lead) {
-            if let Some(row) = self.requests.get_mut(&id).filter(|row| !row.settled()) {
-                row.phase = super::RequestPhase::Abandoned;
-                row.failure_reason = Some(super::INTERRUPTED.into());
-                row.completed_at_ms = Some(now);
-            }
+        for row in self.requests.values_mut().filter(|row| {
+            !row.settled()
+                && row
+                    .group
+                    .is_some_and(|lead| row.interrupt_replay_before == Some(lead) && retired(lead))
+        }) {
+            row.phase = super::RequestPhase::Abandoned;
+            row.failure_reason = Some(super::INTERRUPTED.into());
+            row.completed_at_ms = Some(now);
         }
     }
 
