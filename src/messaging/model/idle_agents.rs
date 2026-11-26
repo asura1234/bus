@@ -4,7 +4,8 @@
 //! cross `idle_agents_alert`. The duration reminder fires once per idle
 //! episode when one work-room agent sits idle longer than `idle_alert_minutes`.
 use super::{
-    AgentId, Author, BusState, ModelError, Request, RoomAgent, RoomId, RoomKind, RuntimeStatus,
+    AgentId, Author, BusState, ModelError, Request, RequestPhase, RoomAgent, RoomId, RoomKind,
+    RuntimeStatus,
 };
 use std::collections::BTreeSet;
 
@@ -155,6 +156,11 @@ impl BusState {
             .max()
     }
 
+    fn has_completed_request(&self, id: AgentId) -> bool {
+        self.requests()
+            .any(|request| request.agent_id == id && request.phase == RequestPhase::Completed)
+    }
+
     fn sitting_idle(&self, id: AgentId) -> bool {
         let facts = self.agent(id).map(|agent| {
             (
@@ -179,6 +185,7 @@ impl BusState {
         self.rooms
             .get(&room)
             .is_some_and(|room| room.kind == RoomKind::Work && !room.deletion_pending)
+            && self.has_completed_request(id)
     }
 
     fn clear_idle_clock_on_activity(&mut self, id: AgentId) -> Result<bool, ModelError> {
@@ -260,10 +267,10 @@ impl BusState {
             .requests()
             .filter(|request| request.agent_id == agent.id)
             .last();
-        last.is_none_or(|request| {
+        last.is_some_and(|request| {
             request.failure_reason.as_deref() != Some("reply_not_captured")
                 && now_ms.saturating_sub(request.prompt.submitted_at_ms) >= STAFFING_GRACE_MS
-        })
+        }) && self.has_completed_request(agent.id)
     }
 
     fn idle_alerted_before(&self, room: RoomId, idle: &[AgentId]) -> bool {

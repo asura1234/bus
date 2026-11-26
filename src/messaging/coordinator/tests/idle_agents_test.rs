@@ -38,14 +38,16 @@ struct Fixture {
 }
 
 fn setup(orchestrated: bool, workers: usize) -> Fixture {
-    setup_with(orchestrated, workers, |_| Box::new(IdleAgents(Vec::new())))
+    let mut fixture = setup_unbriefed(orchestrated, workers);
+    let mut state = fixture.worker.state.clone();
+    for agent in fixture.workers.iter().copied().chain(fixture.orchestrator) {
+        complete_work(&mut state, agent, 0);
+    }
+    fixture.worker.save(state).unwrap();
+    fixture
 }
 
-fn setup_with(
-    orchestrated: bool,
-    workers: usize,
-    transport: impl FnOnce(&[String]) -> Box<dyn Transport>,
-) -> Fixture {
+fn setup_unbriefed(orchestrated: bool, workers: usize) -> Fixture {
     let dir = crate::utils::test_temp::unique_temp_path("bus-idle-agents");
     let mut opened = Worker::open(dir.clone(), Box::new(IdleAgents(Vec::new()))).unwrap();
     let mut state = opened.state.clone();
@@ -72,12 +74,8 @@ fn setup_with(
         id
     });
     opened.save(state).unwrap();
-    let names: Vec<_> = ids
-        .iter()
-        .map(|id| format!("bus-r{}-a{}", room.0, id.0))
-        .collect();
     drop(opened);
-    let mut worker = Worker::open(dir.clone(), transport(&names)).unwrap();
+    let mut worker = Worker::open(dir.clone(), Box::new(IdleAgents(Vec::new()))).unwrap();
     worker.settings_path = Some(dir.join("settings.json"));
     Fixture {
         worker,
@@ -107,11 +105,9 @@ fn idle(worker: &mut Worker, agents: &[AgentId]) {
     );
 }
 
-fn staff(worker: &mut Worker, agent: AgentId, ago_ms: u64, failure: Option<&str>) {
-    let at = worker.now_ms().saturating_sub(ago_ms);
-    let room = worker.state.agent(agent).unwrap().room_id;
-    let mut state = worker.state.clone();
-    let request = state
+fn queue_work(state: &mut BusState, agent: AgentId, at: u64) -> RequestId {
+    let room = state.agent(agent).unwrap().room_id;
+    state
         .submit_message_from(
             room,
             crate::messaging::model::Draft {
@@ -122,8 +118,19 @@ fn staff(worker: &mut Worker, agent: AgentId, ago_ms: u64, failure: Option<&str>
             Author::Developer,
             at,
         )
-        .unwrap()[0];
+        .unwrap()[0]
+}
+
+fn complete_work(state: &mut BusState, agent: AgentId, at: u64) -> RequestId {
+    let request = queue_work(state, agent, at);
     state.finish_for_test(request, "done", at);
+    request
+}
+
+fn staff(worker: &mut Worker, agent: AgentId, ago_ms: u64, failure: Option<&str>) {
+    let at = worker.now_ms().saturating_sub(ago_ms);
+    let mut state = worker.state.clone();
+    let request = complete_work(&mut state, agent, at);
     if let Some(reason) = failure {
         let mut value = serde_json::to_value(&state).unwrap();
         value["requests"][request.0.to_string()]["phase"] = json!("abandoned");
@@ -293,7 +300,11 @@ fn no_orchestrator_means_no_fallback_notice_to_developer_or_master() {
     let mut r = setup(false, 6);
     idle(&mut r.worker, &r.workers);
     refresh(&mut r.worker);
-    assert!(r.worker.state.requests().next().is_none());
+    assert!(r
+        .worker
+        .state
+        .requests()
+        .all(|request| request.prompt.author != Author::Bus));
     assert!(r.worker.state.rooms().all(|room| room.notices.is_empty()));
     assert!(r.worker.idle_alerted_rooms.is_empty());
     cleanup(r);
@@ -307,7 +318,11 @@ fn deleting_the_bound_orchestrator_does_not_fall_back_to_the_developer() {
     state.prepare_delete_agent(r.orchestrator.unwrap()).unwrap();
     r.worker.save(state).unwrap();
     refresh(&mut r.worker);
-    assert!(r.worker.state.requests().next().is_none());
+    assert!(r
+        .worker
+        .state
+        .requests()
+        .all(|request| request.prompt.author != Author::Bus));
     assert!(r.worker.state.rooms().all(|room| room.notices.is_empty()));
     cleanup(r);
 }
@@ -342,6 +357,9 @@ fn idle_alert_episodes_are_per_room_and_survive_restart() {
                 .unwrap()
         })
         .collect();
+    for agent in &workers {
+        complete_work(&mut state, *agent, 0);
+    }
     r.worker.save(state).unwrap();
     idle(&mut r.worker, &r.workers);
     refresh(&mut r.worker);
@@ -466,7 +484,7 @@ fn the_orchestrator_never_counts_as_an_idle_agent() {
 }
 
 #[test]
-fn a_new_agent_counts_only_after_two_minutes_continuously_idle() {
+fn a_finished_agent_counts_only_after_two_minutes_continuously_idle() {
     assert_eq!(MIN_IDLE_FOR_ALERT_MS, 60_000);
     let mut r = setup(true, 2);
     limit(&mut r.worker, 1);
@@ -475,7 +493,7 @@ fn a_new_agent_counts_only_after_two_minutes_continuously_idle() {
     refresh(&mut r.worker);
     assert!(
         alerts(&r.worker, r.room).is_empty(),
-        "the two-minute creation grace suppresses the alert"
+        "the two-minute idle grace suppresses the alert"
     );
     observe(&mut r.worker, &w, RuntimeStatus::Working, 0);
     observe(&mut r.worker, &w, RuntimeStatus::Idle, 120_000);
@@ -617,13 +635,11 @@ fn a_roster_label_containing_a_comma_does_not_alert_twice() {
     cleanup(r);
 }
 
-/// Agents still launching are inside the creation window, so they are not spare.
-/// Once the previous spare agents are working, a roster that later clears the
-/// window has to alert.
 #[test]
-fn launching_agents_do_not_keep_a_new_spare_roster_from_alerting() {
+fn unbriefed_workers_do_not_alert_until_they_finish_work() {
     let mut r = setup(true, 2);
     limit(&mut r.worker, 1);
+    freeze(&mut r.worker, EPISODE);
     idle(&mut r.worker, &r.workers);
     refresh(&mut r.worker);
     assert_eq!(alerts(&r.worker, r.room).len(), 1);
@@ -646,19 +662,23 @@ fn launching_agents_do_not_keep_a_new_spare_roster_from_alerting() {
     observe(&mut r.worker, &r.workers, RuntimeStatus::Working, 0);
     refresh(&mut r.worker);
 
-    observe(
-        &mut r.worker,
-        &created,
-        RuntimeStatus::Idle,
-        2 * MIN_IDLE_FOR_ALERT_MS,
+    observe(&mut r.worker, &created, RuntimeStatus::Idle, 0);
+    let completed_at = EPISODE + 6 * 60_000;
+    freeze(&mut r.worker, completed_at);
+    refresh(&mut r.worker);
+    assert_eq!(
+        alerts(&r.worker, r.room).len(),
+        1,
+        "unbriefed workers are not spare"
     );
+
+    for agent in &created {
+        staff(&mut r.worker, *agent, 0, None);
+    }
+    freeze(&mut r.worker, completed_at + 2 * MIN_IDLE_FOR_ALERT_MS);
     refresh(&mut r.worker);
     let posted = alerts(&r.worker, r.room);
-    assert_eq!(
-        posted.len(),
-        2,
-        "a spare roster that clears the creation window alerts once"
-    );
+    assert_eq!(posted.len(), 2, "the newly finished roster alerts once");
     assert!(
         posted[1].text.contains(": new0, new1."),
         "{}",
@@ -736,6 +756,64 @@ fn show_idle(worker: &mut Worker, agents: &[AgentId]) {
 /// Forces Idle and backdates `status_since_ms`. A second `observe` of Idle would not move it.
 fn sit(worker: &mut Worker, agents: &[AgentId], ago_ms: u64) {
     sit_at(worker, agents, worker.now_ms().saturating_sub(ago_ms));
+}
+
+#[test]
+fn idle_duration_starts_at_first_completion_not_launch() {
+    let mut r = setup_unbriefed(true, 1);
+    let agent = r.workers[0];
+    freeze(&mut r.worker, EPISODE);
+    observe(&mut r.worker, &[agent], RuntimeStatus::Idle, 0);
+    let brief_at = EPISODE + 6 * 60_000;
+    freeze(&mut r.worker, brief_at);
+    refresh(&mut r.worker);
+    assert!(
+        duration_notices(&r.worker, r.room).is_empty(),
+        "unbriefed workers are not sitting idle"
+    );
+    assert_eq!(
+        r.worker.state.agent(agent).unwrap().sitting_idle_since_ms,
+        None
+    );
+
+    let mut state = r.worker.state.clone();
+    let first = queue_work(&mut state, agent, brief_at);
+    r.worker.save(state).unwrap();
+    let completed_at = brief_at + 6 * 60_000;
+    freeze(&mut r.worker, completed_at);
+    refresh(&mut r.worker);
+    assert!(duration_notices(&r.worker, r.room).is_empty());
+
+    let mut state = r.worker.state.clone();
+    state.finish_for_test(first, "done", completed_at);
+    r.worker.save(state).unwrap();
+    freeze(&mut r.worker, completed_at + 5 * 60_000);
+    refresh(&mut r.worker);
+    assert!(duration_notices(&r.worker, r.room).is_empty());
+    assert_eq!(
+        r.worker.state.agent(agent).unwrap().sitting_idle_since_ms,
+        Some(completed_at)
+    );
+    freeze(&mut r.worker, completed_at + 5 * 60_000 + 1);
+    refresh(&mut r.worker);
+    assert_eq!(duration_notices(&r.worker, r.room).len(), 1);
+    cleanup(r);
+}
+
+#[test]
+fn abandoned_first_requests_do_not_qualify_for_idle_notices() {
+    let mut r = setup_unbriefed(true, 2);
+    limit(&mut r.worker, 1);
+    freeze(&mut r.worker, EPISODE);
+    for agent in &r.workers {
+        staff(&mut r.worker, *agent, 0, Some("startup_timeout"));
+    }
+    observe(&mut r.worker, &r.workers, RuntimeStatus::Idle, 0);
+    freeze(&mut r.worker, EPISODE + 6 * 60_000);
+    refresh(&mut r.worker);
+    assert!(alerts(&r.worker, r.room).is_empty());
+    assert!(duration_notices(&r.worker, r.room).is_empty());
+    cleanup(r);
 }
 
 #[test]
