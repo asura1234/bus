@@ -4,7 +4,7 @@ use crate::agents::providers::{
 };
 use crate::agents::resume::catalog::AgentResumePlan;
 use crate::messaging::coordinator::resume::{
-    for_native_resume, load, LaunchExtras, NativeResumeContext, NativeResumeFacts,
+    for_native_resume, load, revalidate, LaunchExtras, NativeResumeContext, NativeResumeFacts,
 };
 use crate::messaging::{identity, model::*, storage::state_store::JsonStore};
 use serde_json::json;
@@ -1599,6 +1599,19 @@ fn managed_claude_resume_only_selects_a_conversation_after_a_turn_or_adoption() 
         };
         store.save(&state).unwrap();
         assert!(!selected(), "{label} tried to resume a startup-only UUID");
+        let prepared = load(&context, &facts, &plan).unwrap();
+        let check_prepared = || {
+            revalidate(
+                &context,
+                &facts,
+                &plan,
+                prepared.session.as_ref(),
+                prepared.discard_session.as_deref(),
+                prepared.claude_evidence_stamp,
+                &prepared.env,
+            )
+        };
+        assert!(check_prepared().is_ok());
         let mut submitted = state.clone();
         submitted.set_draft_text(room, "sent work").unwrap();
         submitted.set_draft_recipients(room, [agent]).unwrap();
@@ -1612,6 +1625,28 @@ fn managed_claude_resume_only_selects_a_conversation_after_a_turn_or_adoption() 
         std::fs::write(capture.join("adopted-session"), session_id).unwrap();
         assert!(selected(), "{label} lost the adopted UUID");
         std::fs::remove_file(capture.join("adopted-session")).unwrap();
+        let lease = spool::try_append_lock(&capture.join("append.lock")).unwrap();
+        spool::append(
+            &capture,
+            "launch",
+            provider,
+            serde_json::json!({"hook_event_name":"UserPromptSubmit","session_id":session_id,"prompt_id":"staged","prompt":"manual"}),
+            &[],
+            false,
+        )
+        .unwrap();
+        assert!(selected(), "{label} ignored a staged autonomous turn");
+        assert!(check_prepared().is_err(), "{label} admitted stale evidence");
+        drop(lease);
+        assert!(selected(), "{label} ignored the unconsumed turn");
+        assert!(std::fs::read_dir(&capture).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("pending-")));
+        for (path, _) in spool::records(&capture).unwrap() {
+            std::fs::remove_file(path).unwrap();
+        }
         state.observe_autonomous_turn(agent, "manual-turn".into(), true, false);
         state.observe_autonomous_turn(agent, "manual-turn".into(), false, false);
         store.save(&state).unwrap();

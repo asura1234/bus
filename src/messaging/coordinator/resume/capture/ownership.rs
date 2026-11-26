@@ -65,7 +65,7 @@ pub(super) fn unstarted_owner<'a>(
 pub(super) fn has_claude_conversation(spool: &Path, session: &str) -> bool {
     use crate::agents::providers::{claude_code, spool as callbacks};
 
-    let pending_turn = callbacks::records(spool).map_or(true, |records| records.into_iter().any(|(_, record)| {
+    let pending_turn = callbacks::evidence_records(spool).map_or(true, |mut records| records.any(|record| {
         !record.nested_provider && matches!(claude_code::hooks::parse(&record.value),
             Ok(callbacks::Parsed::Started { session: observed, .. }
                 | callbacks::Parsed::Final { session: observed, .. }

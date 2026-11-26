@@ -146,6 +146,7 @@ pub(in crate::server) struct PreparingResume {
 struct PreparedResume {
     session: Option<PersistedAgentSession>,
     discard_session: Option<String>,
+    claude_evidence_stamp: Option<std::time::SystemTime>,
     inputs: ResumeInputs,
     gateway: Result<Option<String>, String>,
 }
@@ -168,6 +169,7 @@ impl PreparedResume {
         extras.apply_fresh_plan(&mut effective);
         let plan = &effective;
         let discard_session = extras.discard_session.clone();
+        let claude_evidence_stamp = extras.claude_evidence_stamp;
         let gateway = crate::agents::providers::launch::native_provider(&plan.agent).map_or(
             Ok(None),
             crate::agents::providers::launch::preflight_gateway,
@@ -186,6 +188,7 @@ impl PreparedResume {
         Ok(Self {
             session,
             discard_session,
+            claude_evidence_stamp,
             inputs: (provider_argv.unwrap_or(argv), env),
             gateway,
         })
@@ -347,6 +350,7 @@ impl App {
                     &candidate.plan,
                     prepared.session.as_ref(),
                     prepared.discard_session.as_deref(),
+                    prepared.claude_evidence_stamp,
                     &prepared.inputs.1,
                 )?;
                 Ok(prepared)
@@ -474,6 +478,7 @@ impl App {
             discard_session,
             inputs: (argv, env),
             gateway,
+            ..
         } = match prepared {
             Ok(prepared) => prepared,
             Err(reason) => {

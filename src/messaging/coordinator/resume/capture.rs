@@ -1,6 +1,7 @@
 //! Validate saved ownership before reconstructing a provider's capture extras.
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::agents::{
     providers::{hook_json::HookContext, ProviderKind},
@@ -55,6 +56,7 @@ pub(crate) struct LaunchExtras {
     /// Use the conversation Bus hooks bound when the terminal kept a stale one.
     pub(crate) session: Option<PersistedAgentSession>,
     pub(crate) discard_session: Option<String>,
+    pub(crate) claude_evidence_stamp: Option<SystemTime>,
 }
 
 impl LaunchExtras {
@@ -94,7 +96,15 @@ pub(crate) fn load(
         discard_session,
     } = verified_owner(context, facts, plan, &state)?;
     let mut extras = prepare_capture(context, facts, agent, corrected, &hooks)?;
-    extras.discard_session = discard_session;
+    if let Some(session) = discard_session {
+        let stamp = spool_stamp(&hooks.spool)?;
+        if !ownership::has_claude_conversation(&hooks.spool, &session) {
+            extras.claude_evidence_stamp = Some(stamp);
+            extras.discard_session = Some(session);
+        } else if facts.session.is_none() {
+            return Err("Bus resume cannot discard a saved provider conversation".into());
+        }
+    }
     Ok(extras)
 }
 
@@ -104,12 +114,20 @@ pub(crate) fn revalidate(
     plan: &AgentResumePlan,
     session: Option<&PersistedAgentSession>,
     discard_session: Option<&str>,
+    claude_evidence_stamp: Option<SystemTime>,
     env: &[(String, String)],
 ) -> Result<(), String> {
     let state = load_state(context)?;
     let owner = verified_owner(context, facts, plan, &state)?;
     if owner.corrected.as_ref() != session
-        || owner.discard_session.as_deref() != discard_session
+        || discard_session.is_some_and(|session| owner.discard_session.as_deref() != Some(session))
+        || match claude_evidence_stamp {
+            Some(expected) => spool_stamp(&owner.hooks.spool)? != expected,
+            None => {
+                discard_session.is_some()
+                    || facts.session.is_none() && owner.discard_session.is_some()
+            }
+        }
         || !env
             .iter()
             .any(|(key, value)| key == "BUS_LAUNCH_ID" && *value == owner.hooks.launch_id)
@@ -117,6 +135,12 @@ pub(crate) fn revalidate(
         return Err("Bus resume owner changed during preparation".into());
     }
     Ok(())
+}
+
+fn spool_stamp(spool: &Path) -> Result<SystemTime, String> {
+    std::fs::metadata(spool)
+        .and_then(|metadata| metadata.modified())
+        .map_err(|_| "Bus resume callback evidence is unavailable".into())
 }
 
 fn load_state(context: &NativeResumeContext) -> Result<crate::messaging::model::BusState, String> {
@@ -181,7 +205,6 @@ fn verified_owner<'a>(
         (corrected.is_none() && !adopted && super::claude_startup_only(state, agent))
             .then_some(agent.runtime_identity.session_id.as_ref())
             .flatten()
-            .filter(|session| !ownership::has_claude_conversation(&hooks.spool, session))
             .cloned();
     if facts.session.is_none()
         && agent.runtime_identity.session_id.is_some()
@@ -268,6 +291,7 @@ fn prepare_capture(
         args,
         session: corrected,
         discard_session: None,
+        claude_evidence_stamp: None,
     })
 }
 
