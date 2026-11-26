@@ -319,32 +319,6 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn retire_unstarted_claude_session(
-        &mut self,
-        id: AgentId,
-    ) -> Result<(), ModelError> {
-        let agent = self
-            .agents
-            .get_mut(&id)
-            .ok_or(ModelError::UnknownAgent(id))?;
-        if let Some(session) = agent.runtime_identity.session_id.take() {
-            agent.superseded_session_id = Some(session);
-            agent.claude_shells = None;
-            agent.session_reset_pending = false;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn record_claude_session_turn(&mut self, id: AgentId) {
-        if let Some(agent) = self
-            .agents
-            .get_mut(&id)
-            .filter(|agent| agent.provider.uses_claude_harness())
-        {
-            agent.claude_session_has_turn = true;
-        }
-    }
-
     /// The previous server's pane is gone. Resume must not ask the replacement
     /// pane to pass the close guard that protects a still-live terminal.
     pub(crate) fn record_session_restart_closed_terminal(

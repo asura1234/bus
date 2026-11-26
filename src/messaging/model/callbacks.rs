@@ -9,6 +9,32 @@ mod callback_latency;
 mod kimi;
 
 impl BusState {
+    pub(crate) fn retire_unstarted_claude_session(
+        &mut self,
+        id: AgentId,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        if let Some(session) = agent.runtime_identity.session_id.take() {
+            agent.superseded_session_id = Some(session);
+            agent.claude_shells = None;
+            agent.session_reset_pending = false;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_claude_session_turn(&mut self, id: AgentId) {
+        if let Some(agent) = self
+            .agents
+            .get_mut(&id)
+            .filter(|agent| agent.provider.uses_claude_harness())
+        {
+            agent.claude_session_has_turn = true;
+        }
+    }
+
     /// Report identity ignores incidental changes to the hook envelope. Keep
     /// these guards with callback keys so they persist and retire by launch.
     pub(crate) fn has_reported_final(&self, key: &str) -> bool {
