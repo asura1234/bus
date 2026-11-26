@@ -45,6 +45,15 @@ impl TerminalState {
         reporter: &[crate::platform::ProcessInstance],
     ) -> Option<TerminalStateMutation> {
         let session_ref = session_ref?;
+        if self
+            .native_resume
+            .as_ref()
+            .or(self.confirmed_claude_replacement.as_ref())
+            .and_then(|resume| resume.replaced_session_id.as_ref())
+            .is_some_and(|previous| previous == &session_ref.value)
+        {
+            return None;
+        }
         // Checked before the sequence so a dead process's late callback cannot
         // consume a number the replacement process still needs.
         if reporter
@@ -130,6 +139,16 @@ impl TerminalState {
         };
         let start_source = session_start_source.as_deref();
         self.confirm_startup_from_report(known_agent, seq, start_source, &persisted_session);
+        if seq.is_some()
+            && start_source == Some("startup")
+            && known_agent == Some(crate::agents::AgentKind::Claude)
+            && crate::agents::resume::catalog::is_official_agent_source(
+                &persisted_session.source,
+                &persisted_session.agent,
+            )
+        {
+            self.confirmed_claude_replacement = None;
+        }
         if self.managed_agent_launch_session.as_ref() == Some(&persisted_session) {
             self.managed_agent_launch_session = None;
         }

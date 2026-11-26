@@ -301,7 +301,7 @@ fn confirmed_new_native_attempt_clears_the_previous_startup_error() {
 fn startup_only_claude_restore_rebinds_and_delivers_on_the_new_session() {
     const PREVIOUS: &str = "28a71ea0-db8d-494c-b968-ca3a5f092c8b";
     const FRESH: &str = "38a71ea0-db8d-494c-b968-ca3a5f092c8b";
-    struct RestoredClaude(schema::AgentInfo);
+    struct RestoredClaude(schema::AgentInfo, PathBuf, AgentId);
     impl Transport for RestoredClaude {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
@@ -311,6 +311,21 @@ fn startup_only_claude_restore_rebinds_and_delivers_on_the_new_session() {
                     })
                 }
                 Method::PaneReportAgentSession(report) => {
+                    let saved = crate::messaging::storage::state_store::JsonStore::new(
+                        self.1.join("state.json"),
+                    )
+                    .load()
+                    .unwrap()
+                    .unwrap();
+                    assert_eq!(
+                        saved
+                            .agent(self.2)
+                            .unwrap()
+                            .runtime_identity
+                            .session_id
+                            .as_deref(),
+                        Some(FRESH)
+                    );
                     assert_eq!(report.agent_session_id.as_deref(), Some(FRESH));
                     assert_eq!(report.pane_id, "fresh-pane");
                     Ok(ResponseResult::Ok {})
@@ -342,7 +357,11 @@ fn startup_only_claude_restore_rebinds_and_delivers_on_the_new_session() {
             "agent_session":{"source":format!("herdr:{label}"),"agent":label,"kind":"id","value":FRESH},
             "native_resume":{"name":managed_name,"agent":"claude","command":label,"replaced_session_id":PREVIOUS}
         })).unwrap();
-        let mut worker = Worker::open(dir.clone(), Box::new(RestoredClaude(info))).unwrap();
+        let mut worker = Worker::open(
+            dir.clone(),
+            Box::new(RestoredClaude(info, dir.clone(), agent)),
+        )
+        .unwrap();
         if !wake_first {
             worker.poll().unwrap();
             assert_eq!(agent_of(&worker, agent).runtime_identity.session_id, None);

@@ -43,8 +43,11 @@ impl App {
             launch_input_error: self
                 .lookup_runtime_sender(ws_idx, pane_id)
                 .and_then(|runtime| runtime.definite_launch_input_error()),
-            native_resume: terminal.native_resume.as_ref().map(|resume| {
-                crate::protocol::api::schema::NativeResumeInfo {
+            native_resume: terminal
+                .native_resume
+                .as_ref()
+                .or(terminal.confirmed_claude_replacement.as_ref())
+                .map(|resume| crate::protocol::api::schema::NativeResumeInfo {
                     name: resume.name.clone(),
                     agent: crate::agents::agent_label(resume.kind).into(),
                     session_id: resume
@@ -54,8 +57,7 @@ impl App {
                     replaced_session_id: resume.replaced_session_id.clone(),
                     command: resume.command.clone(),
                     error: resume.error.clone(),
-                }
-            }),
+                }),
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),
             agent: pane.agent,

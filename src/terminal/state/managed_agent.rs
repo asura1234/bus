@@ -18,10 +18,6 @@ impl TerminalState {
 
     fn update_managed_agent(&mut self, managed: Option<ManagedAgent>) {
         if self.pending_agent_resume_plan.is_none()
-            && self
-                .native_resume
-                .as_ref()
-                .is_none_or(|resume| resume.replaced_session_id.is_none())
             && managed.is_some_and(|managed| {
                 matches!(
                     managed.phase,
@@ -29,7 +25,14 @@ impl TerminalState {
                 )
             })
         {
-            self.native_resume = None;
+            if let Some(mut resume) = self
+                .native_resume
+                .take()
+                .filter(|resume| resume.replaced_session_id.is_some())
+            {
+                resume.error = None;
+                self.confirmed_claude_replacement = Some(resume);
+            }
         }
         self.managed_agent = managed;
         self.sync_managed_launch_pending();
@@ -145,6 +148,7 @@ impl TerminalState {
     }
 
     pub(crate) fn begin_native_resume(&mut self, command: String) {
+        self.confirmed_claude_replacement = None;
         if let (Some(name), Some(kind)) = (self.agent_name.clone(), self.managed_agent_kind()) {
             self.native_resume = Some(super::NativeAgentResume {
                 replaced_session_id: None,
@@ -314,6 +318,7 @@ impl TerminalState {
     }
 
     pub fn clear_agent_name(&mut self) {
+        self.confirmed_claude_replacement = None;
         if let Some(resume) = self.native_resume.as_mut() {
             resume
                 .error

@@ -121,6 +121,7 @@ pub struct TerminalState {
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agents::resume::catalog::AgentResumePlan>,
     pub(crate) native_resume: Option<NativeAgentResume>,
+    pub(crate) confirmed_claude_replacement: Option<NativeAgentResume>,
 }
 
 impl TerminalState {
@@ -150,6 +151,7 @@ impl TerminalState {
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
             native_resume: None,
+            confirmed_claude_replacement: None,
         }
     }
 
