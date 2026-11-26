@@ -197,7 +197,8 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
 
 pub(super) fn payload_matches_for_provider(payload: &str, typed: &str, provider: Provider) -> bool {
     use crate::agents::providers::claude_code::hooks::{
-        claude_image_placeholders, claude_text_matches, lifted_images, text_after_image_reads,
+        claude_image_placeholders, claude_lifted_images, claude_text_after_image_reads,
+        claude_text_matches, lifted_images, text_after_image_reads,
     };
     let payload = normalized_payload(payload);
     let typed = normalized_payload(typed);
@@ -206,9 +207,18 @@ pub(super) fn payload_matches_for_provider(payload: &str, typed: &str, provider:
     }
     let (length, images) = claude_image_placeholders(&payload);
     let claude = provider.uses_claude_harness();
-    let (_, remaining) = lifted_images(&typed, claude);
+    let (_, remaining) = if claude {
+        claude_lifted_images(&typed)
+    } else {
+        lifted_images(&typed, false)
+    };
     let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
-    if text_after_image_reads(images, &payload[length..], &typed, claude).is_some_and(|text| {
+    let remaining_after_reads = if claude {
+        claude_text_after_image_reads(images, &payload[length..], &typed)
+    } else {
+        text_after_image_reads(images, &payload[length..], &typed, false)
+    };
+    if remaining_after_reads.is_some_and(|text| {
         let text = text.trim_end_matches(|c: char| c.is_ascii_whitespace());
         if claude {
             claude_text_matches(text, remaining)

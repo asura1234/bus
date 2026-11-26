@@ -211,7 +211,7 @@ fn composer_frame(kind: AgentKind, screen: &str) -> bool {
 /// and the rest is exactly our remaining text.
 fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String) -> bool {
     use crate::agents::providers::claude_code::hooks::{
-        claude_lifted_images, claude_text_after_image_reads,
+        claude_lifted_images, claude_text_after_image_reads, split_quoted_attachment_lines,
     };
     let (images, rest) = image_chips(body);
     let expected = expected.replace("\r\n", "\n").replace('\r', "\n");
@@ -222,7 +222,7 @@ fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String)
     // without counting a retained caption twice inside the collapsed chip.
     if images > 0 && images < lifted {
         let text_lines = remaining.lines().count();
-        let standalone = expected
+        let standalone = split_quoted_attachment_lines(&expected)
             .lines()
             .filter(|line| !line.trim().is_empty())
             .count()
