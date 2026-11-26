@@ -192,6 +192,7 @@ impl TerminalState {
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
         self.native_resume = None;
+        self.confirmed_claude_replacement = None;
         self.detected_agent = None;
         self.fallback_state = AgentState::Unknown;
         self.persisted_agent_session = None;

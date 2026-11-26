@@ -13,7 +13,6 @@ use std::ops::ControlFlow;
 
 type CallbackRecordResult = ControlFlow<(), (BusState, Option<ProviderCallback>, Vec<PathBuf>)>;
 type CursorCallbackResult = ControlFlow<(), (BusState, ProviderCallback, PathBuf)>;
-
 enum CallbackFlow {
     Next,
     Stop,
@@ -315,81 +314,6 @@ impl Worker {
         )))
     }
 
-    fn bind_session_callback(
-        &mut self,
-        id: AgentId,
-        state: &mut BusState,
-        record: &callbacks::Record,
-        session: String,
-        source: Option<String>,
-    ) -> Result<(), String> {
-        let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
-        let mut identity = agent.runtime_identity.clone();
-        let pane = identity
-            .pane_id
-            .clone()
-            .ok_or("Callback arrived before pane creation was recorded")?;
-        self.transport
-            .request(Method::PaneReportAgentSession(
-                schema::PaneReportAgentSessionParams {
-                    pane_id: pane,
-                    // Use the existing provider adapter namespace:
-                    // a generic source is deliberately rejected by
-                    // the native session identity consumer.
-                    source: format!("herdr:{}", launch::provider_kind(agent.provider)),
-                    agent: launch::provider_kind(agent.provider).into(),
-                    seq: Some(record.sequence),
-                    agent_session_id: Some(session.clone()),
-                    agent_session_path: None,
-                    session_start_source: Some("startup".into()),
-                    reporter: reporting_processes(record),
-                },
-            ))
-            .map_err(|e| e.message)?;
-        state
-            .set_agent_startup(id, None)
-            .map_err(|e| e.to_string())?;
-        identity.session_id = Some(session.clone());
-        state
-            .set_agent_runtime_identity(id, identity)
-            .map_err(|e| e.to_string())?;
-        if agent.session_reset_pending {
-            // A reset agent that had no session yet binds its first one here.
-            state
-                .rebind_reset_session(id, session)
-                .map_err(|e| e.to_string())?;
-        }
-        if record.manifest.provider.uses_claude_harness() && source.as_deref() == Some("startup") {
-            state
-                .initialize_claude_shells(id)
-                .map_err(|e| e.to_string())?;
-        }
-        // Identical hooks share one spool file, so a hook retry counts once.
-        if source.as_deref() == Some("compact") {
-            state
-                .record_compaction_callback(
-                    id,
-                    &record.manifest.launch_id,
-                    record.sequence,
-                    record.at_ms,
-                )
-                .map_err(|e| e.to_string())?;
-        }
-        if agent.current_request.is_none() {
-            state
-                .set_agent_error(
-                    id,
-                    if agent.hook_setup_confirmed {
-                        None
-                    } else {
-                        Some(crate::messaging::model::AGENT_WAITING_FOR_TERMINAL.into())
-                    },
-                )
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    }
-
     fn callback_from_record(
         &mut self,
         id: AgentId,
@@ -603,9 +527,15 @@ impl Worker {
                 .as_ref()
                 .filter(|known| *known != session)
             {
+                let (agent, known) = (agent.clone(), known.clone());
+                match self.reconcile_fresh_claude_startup(&mut state, &agent, parsed, session)? {
+                    Some(true) => return Ok(ControlFlow::Continue(state)),
+                    None => return Ok(ControlFlow::Break(CallbackFlow::Stop)),
+                    Some(false) => {}
+                }
                 if record.manifest.provider == ProviderKind::Agy
                     && crate::agents::providers::agy::hooks::is_descendant_subagent(
-                        known,
+                        &known,
                         session,
                         &record.value,
                     )
@@ -627,8 +557,6 @@ impl Worker {
                     callback_session_id = %session,
                     "Callback does not own this terminal session"
                 );
-                // Retain the attested identity even on uncertain sends. Clearing
-                // it would let a repeated foreign SessionStart silently rebind.
                 if matches!(parsed, Parsed::Session { .. }) {
                     state
                         .invalidate_agent_session(id)
@@ -776,6 +704,7 @@ impl Worker {
             if !Self::mark_scheduled_turn(&mut state, &callback, record) {
                 return Ok(CallbackFlow::Stop);
             }
+            state.record_claude_session_turn(id);
             let disposition = self.apply_request_callback(id, &mut state, callback)?;
             if disposition.is_none() {
                 return Ok(CallbackFlow::Next);

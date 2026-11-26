@@ -5686,6 +5686,12 @@
             "name": {
               "type": "string"
             },
+            "replaced_session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "session_id": {
               "type": [
                 "string",

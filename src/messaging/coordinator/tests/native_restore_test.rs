@@ -297,6 +297,115 @@ fn confirmed_new_native_attempt_clears_the_previous_startup_error() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn startup_only_claude_restore_rebinds_and_delivers_on_the_new_session() {
+    const PREVIOUS: &str = "28a71ea0-db8d-494c-b968-ca3a5f092c8b";
+    const FRESH: &str = "38a71ea0-db8d-494c-b968-ca3a5f092c8b";
+    struct RestoredClaude(schema::AgentInfo, PathBuf, AgentId);
+    impl Transport for RestoredClaude {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentList(_) | Method::AgentListWithDetectionContext(_) => {
+                    Ok(ResponseResult::AgentList {
+                        agents: vec![self.0.clone()],
+                    })
+                }
+                Method::PaneReportAgentSession(report) => {
+                    let saved = crate::messaging::storage::state_store::JsonStore::new(
+                        self.1.join("state.json"),
+                    )
+                    .load()
+                    .unwrap()
+                    .unwrap();
+                    assert_eq!(
+                        saved
+                            .agent(self.2)
+                            .unwrap()
+                            .runtime_identity
+                            .session_id
+                            .as_deref(),
+                        Some(FRESH)
+                    );
+                    assert_eq!(report.agent_session_id.as_deref(), Some(FRESH));
+                    assert_eq!(report.pane_id, "fresh-pane");
+                    Ok(ResponseResult::Ok {})
+                }
+                _ => Ok(ResponseResult::Ok {}),
+            }
+        }
+    }
+    let _binaries = provider_binaries();
+    for (provider, wake_first) in [
+        (Provider::ClaudeCode, false),
+        (Provider::ClaudeDs, true),
+        (Provider::ClaudeArgon, true),
+        (Provider::ClaudeGpt, false),
+    ] {
+        let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let mut state = worker.state.clone();
+        let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = Some(PREVIOUS.into());
+        state.set_agent_runtime_identity(agent, identity).unwrap();
+        worker.save(state).unwrap();
+        drop(worker);
+        let label = provider.label();
+        let managed_name = crate::messaging::identity::managed_name(room, agent);
+        let info = serde_json::from_value(json!({
+            "terminal_id":"fresh-terminal", "pane_id":"fresh-pane", "name":managed_name,
+            "agent":"claude", "agent_status":"idle", "native_ready":true, "interactive_ready":true,
+            "workspace_id":"w1", "tab_id":"t1", "focused":false, "revision":1,
+            "agent_session":{"source":format!("herdr:{label}"),"agent":label,"kind":"id","value":FRESH},
+            "native_resume":{"name":managed_name,"agent":"claude","command":label,"replaced_session_id":PREVIOUS}
+        })).unwrap();
+        let mut worker = Worker::open(
+            dir.clone(),
+            Box::new(RestoredClaude(info, dir.clone(), agent)),
+        )
+        .unwrap();
+        if !wake_first {
+            worker.poll().unwrap();
+            assert_eq!(agent_of(&worker, agent).runtime_identity.session_id, None);
+        }
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":"SessionStart","session_id":FRESH,"source":"startup"}),
+        );
+        consume(&mut worker, agent, &dir);
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":"SessionStart","session_id":PREVIOUS,"source":"startup"}),
+        );
+        consume(&mut worker, agent, &dir);
+        worker.poll().unwrap();
+        let restored = agent_of(&worker, agent);
+        assert_eq!(restored.runtime_identity.session_id.as_deref(), Some(FRESH));
+        assert!(!restored.session_binding_invalidated);
+        assert_eq!(restored.status, RuntimeStatus::Idle);
+
+        let request = queue(&mut worker, room, agent, "work after restart");
+        worker.submit_ready().unwrap();
+        assert_eq!(agent_of(&worker, agent).current_request, Some(request));
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":"UserPromptSubmit","session_id":FRESH,"prompt_id":"first","prompt":"work after restart"}),
+        );
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":"Stop","session_id":FRESH,"prompt_id":"first","last_assistant_message":"completed after restart"}),
+        );
+        consume(&mut worker, agent, &dir);
+        let settled = worker.state.request(request).unwrap();
+        assert_eq!(settled.phase, RequestPhase::Completed);
+        assert_eq!(settled.reply().unwrap().text, "completed after restart");
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// The client owns the coordinator; the native server and its provider PTYs
 /// outlive a client detach. The worker's provider exited normally while no
 /// client was attached; nothing was relaunched on reattach.

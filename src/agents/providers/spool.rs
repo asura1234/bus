@@ -148,6 +148,15 @@ pub(crate) fn records(dir: &Path) -> io::Result<Vec<(PathBuf, Record)>> {
     read_records(dir, "event-")
 }
 
+pub(crate) fn evidence_records(dir: &Path) -> io::Result<impl Iterator<Item = Record>> {
+    let pending = read_records(dir, "pending-")?;
+    let published = read_records(dir, "event-")?;
+    Ok(pending
+        .into_iter()
+        .chain(published)
+        .map(|(_, record)| record))
+}
+
 /// Keep the original envelope for inspection outside the active event scan.
 /// The coordinator calls this only after its rejection state is durable.
 pub(crate) fn retain_rejected(dir: &Path, path: &Path, routing_key: RoutingKey) -> io::Result<()> {

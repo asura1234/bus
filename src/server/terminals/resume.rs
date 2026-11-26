@@ -33,6 +33,7 @@ fn managed_resume_label(kind: crate::agents::AgentKind, argv: Option<&[String]>)
             .and_then(|argv| argv.first())
             .and_then(|command| std::path::Path::new(command).file_name());
         for provider in [
+            crate::agents::providers::ProviderKind::ClaudeDs,
             crate::agents::providers::ProviderKind::ClaudeArgon,
             crate::agents::providers::ProviderKind::ClaudeGpt,
         ] {
@@ -144,6 +145,8 @@ pub(in crate::server) struct PreparingResume {
 
 struct PreparedResume {
     session: Option<PersistedAgentSession>,
+    discard_session: Option<String>,
+    claude_evidence_stamp: Option<std::time::SystemTime>,
     inputs: ResumeInputs,
     gateway: Result<Option<String>, String>,
 }
@@ -162,7 +165,11 @@ impl PreparedResume {
                 .ok_or("Corrected conversation has no provider resume plan")
             })
             .transpose()?;
-        let plan = corrected_plan.as_ref().unwrap_or(plan);
+        let mut effective = corrected_plan.unwrap_or_else(|| plan.clone());
+        extras.apply_fresh_plan(&mut effective);
+        let plan = &effective;
+        let discard_session = extras.discard_session.clone();
+        let claude_evidence_stamp = extras.claude_evidence_stamp;
         let gateway = crate::agents::providers::launch::native_provider(&plan.agent).map_or(
             Ok(None),
             crate::agents::providers::launch::preflight_gateway,
@@ -180,6 +187,8 @@ impl PreparedResume {
         }
         Ok(Self {
             session,
+            discard_session,
+            claude_evidence_stamp,
             inputs: (provider_argv.unwrap_or(argv), env),
             gateway,
         })
@@ -340,6 +349,8 @@ impl App {
                     &facts,
                     &candidate.plan,
                     prepared.session.as_ref(),
+                    prepared.discard_session.as_deref(),
+                    prepared.claude_evidence_stamp,
                     &prepared.inputs.1,
                 )?;
                 Ok(prepared)
@@ -464,8 +475,10 @@ impl App {
         terminal.begin_native_resume(shell_command_from_argv(&plan.argv));
         let PreparedResume {
             session,
+            discard_session,
             inputs: (argv, env),
             gateway,
+            ..
         } = match prepared {
             Ok(prepared) => prepared,
             Err(reason) => {
@@ -532,6 +545,12 @@ impl App {
             }
         };
 
+        if let Some(previous) = discard_session {
+            if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                terminal.begin_fresh_claude_resume(previous);
+                terminal.launch_argv = Some(argv[..1].to_vec());
+            }
+        }
         if let Err(err) = queue_resumed_agent_launch(
             self.state.terminals.get_mut(&terminal_id),
             &runtime,
@@ -763,7 +782,7 @@ fn resume_argv_for_test(
         &LaunchExtras {
             env,
             args,
-            session: None,
+            ..Default::default()
         },
     )
 }

@@ -161,19 +161,36 @@ impl Worker {
             return Err("Session ownership or hook setup needs inspection before resume".into());
         }
         let kind = identity::provider_kind(agent.provider).label();
-        let session = catalog::session_ref_from_snapshot(
-            &format!("herdr:{kind}"),
-            kind,
-            AgentSessionRefKind::Id,
-            agent
-                .runtime_identity
-                .session_id
-                .as_deref()
-                .ok_or("No saved provider session")?,
-        )
-        .ok_or("Invalid saved provider session")?;
-        let plan = catalog::plan(&session.source, kind, &session.session_ref)
-            .ok_or("No supported resume command for this session")?;
+        let session = agent
+            .runtime_identity
+            .session_id
+            .as_deref()
+            .map(|session_id| {
+                catalog::session_ref_from_snapshot(
+                    &format!("herdr:{kind}"),
+                    kind,
+                    AgentSessionRefKind::Id,
+                    session_id,
+                )
+                .ok_or("Invalid saved provider session")
+            })
+            .transpose()?;
+        let facts = super::resume::NativeResumeFacts {
+            agent_name: Some(identity::managed_name(agent.room_id, agent.id)),
+            managed_agent: Some(kind.into()),
+            session,
+        };
+        let plan = match &facts.session {
+            Some(session) => catalog::plan(&session.source, kind, &session.session_ref)
+                .ok_or("No supported resume command for this session")?,
+            None if agent.provider.uses_claude_harness()
+                && agent.superseded_session_id.is_some() =>
+            {
+                super::resume::unstarted_plan(&facts, None)
+                    .ok_or("No supported fresh Claude launch")?
+            }
+            None => return Err("No saved provider session".into()),
+        };
         let context = super::resume::NativeResumeContext {
             root: Some(self.data_dir.clone()),
             session_name: Some(super::DEFAULT_SESSION.into()),
@@ -185,15 +202,7 @@ impl Worker {
         let gateway = self.cached_gateway_check(agent.provider, gateways);
         let preflight = self.record_resume_gateway_check(agent, gateway);
         self.track_launch_result(attempt, "resume_preparation_failed", preflight)?;
-        let extras = super::resume::for_native_resume(
-            &context,
-            &super::resume::NativeResumeFacts {
-                agent_name: Some(identity::managed_name(agent.room_id, agent.id)),
-                managed_agent: Some(kind.into()),
-                session: Some(session),
-            },
-            &plan,
-        );
+        let extras = super::resume::for_native_resume(&context, &facts, &plan);
         let extras = self.track_launch_result(attempt, "resume_preparation_failed", extras)?;
         self.launch_saved_agent(agent, kind, plan, extras, attempt)
     }
@@ -217,7 +226,7 @@ impl Worker {
         &mut self,
         agent: &RoomAgent,
         kind: &str,
-        plan: catalog::AgentResumePlan,
+        mut plan: catalog::AgentResumePlan,
         extras: super::resume::LaunchExtras,
         attempt: u64,
     ) -> Result<(), String> {
@@ -250,6 +259,8 @@ impl Worker {
             self.track_launch_result(attempt, "resume_preparation_failed", prepared)?;
         let closed = self.close_resume_terminal(agent);
         self.track_launch_result(attempt, "resume_terminal_close_failed", closed)?;
+        let fresh = extras.discard_session.is_some() || agent.runtime_identity.session_id.is_none();
+        extras.apply_fresh_plan(&mut plan);
         let mut args = plan.argv[1..].to_vec();
         args.extend(extras.args);
         let created = self
@@ -291,6 +302,11 @@ impl Worker {
                 },
             )
             .map_err(|e| e.to_string())?;
+        if fresh {
+            state
+                .retire_unstarted_claude_session(agent.id)
+                .map_err(|e| e.to_string())?;
+        }
         super::launch_metrics::bind_current(&mut state, agent.id);
         state
             .observe_status(agent.id, RuntimeStatus::Launching, super::io::now_ms())
@@ -318,10 +334,15 @@ impl Worker {
             Ok(ResponseResult::AgentStarted { .. }) => {}
             other => return self.record_failed_agent_start(agent.id, args, other),
         }
-        self.finish_resume_start(agent, root_pane.pane_id)
+        self.finish_resume_start(agent, root_pane.pane_id, fresh)
     }
 
-    fn finish_resume_start(&mut self, agent: &RoomAgent, pane_id: String) -> Result<(), String> {
+    fn finish_resume_start(
+        &mut self,
+        agent: &RoomAgent,
+        pane_id: String,
+        fresh: bool,
+    ) -> Result<(), String> {
         // The new launch now owns diagnosis. Keeping the previous missing
         // marker would suppress both startup settlement and a second outage.
         let mut state = self.state.clone();
@@ -335,6 +356,9 @@ impl Worker {
             .set_agent_error(agent.id, None)
             .map_err(|e| e.to_string())?;
         self.save(state)?;
+        if fresh {
+            return Ok(());
+        }
         self.report_adopted_session(
             agent.id,
             agent.provider,

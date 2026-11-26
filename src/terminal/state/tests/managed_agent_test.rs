@@ -175,7 +175,8 @@ fn codex_current_hook_review_keeps_managed_identity_while_waiting() {
                 › 1. Review hooks\n  2. Trust all and continue\n\
                   3. Continue without trusting (hooks won't run)\n\n\
                   enter confirm · esc skip\n";
-            let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(120, 30);
+            let (runtime, mut writes) =
+                crate::terminal::TerminalRuntime::test_with_channel(120, 30);
             let mut terminal = test_terminal();
             terminal.bind_managed_launch_pending(runtime.managed_launch_pending_signal());
             let now = Instant::now();
@@ -554,4 +555,25 @@ fn startup_timeout_ends_launching_without_disabling_late_startup_detection() {
         assert!(terminal.managed_agent_interactive_ready());
         assert!(!signal.load(Ordering::Acquire));
     }
+}
+#[test]
+fn ready_claude_replacement_does_not_become_a_startup_failure_on_exit() {
+    let mut terminal = test_terminal();
+    let now = Instant::now();
+    terminal.begin_managed_agent(
+        "bus-r1-a2".into(),
+        crate::agents::AgentKind::Claude,
+        now,
+        Duration::ZERO,
+        Duration::from_secs(5),
+    );
+    terminal.begin_native_resume("claude".into());
+    terminal.begin_fresh_claude_resume("previous".into());
+    terminal.confirm_managed_agent_session_start(crate::agents::AgentKind::Claude);
+    assert!(terminal.managed_agent_interactive_ready());
+    assert!(terminal.native_resume.is_none());
+    assert!(terminal.confirmed_claude_replacement.is_some());
+    assert!(terminal.reconcile_managed_agent_at(now, true));
+    assert!(terminal.native_resume.is_none());
+    assert!(terminal.confirmed_claude_replacement.is_none());
 }

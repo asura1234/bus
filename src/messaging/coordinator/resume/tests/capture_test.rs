@@ -4,7 +4,7 @@ use crate::agents::providers::{
 };
 use crate::agents::resume::catalog::AgentResumePlan;
 use crate::messaging::coordinator::resume::{
-    for_native_resume, load, LaunchExtras, NativeResumeContext, NativeResumeFacts,
+    for_native_resume, load, revalidate, LaunchExtras, NativeResumeContext, NativeResumeFacts,
 };
 use crate::messaging::{identity, model::*, storage::state_store::JsonStore};
 use serde_json::json;
@@ -1515,6 +1515,147 @@ fn claude_ds_resume_matches_the_managed_agent_label_the_server_restores() {
     facts.managed_agent = Some("claude".into());
     let loaded = load(&fixture.context(), &facts, &fixture.plan);
     assert!(loaded.is_ok(), "{loaded:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_claude_resume_only_selects_a_conversation_after_a_turn_or_adoption() {
+    use crate::agents::providers::{claude_code, hook_json::HookContext};
+
+    for provider in [
+        Provider::ClaudeCode,
+        Provider::ClaudeDs,
+        Provider::ClaudeArgon,
+        Provider::ClaudeGpt,
+    ] {
+        let root = crate::utils::test_temp::unique_temp_path("managed-claude-resume");
+        let capture = root.join("callbacks/launch");
+        let binary = std::env::current_exe().unwrap();
+        let mut state = BusState::new();
+        let room = state.create_room("work").unwrap();
+        let agent = state
+            .create_agent(room, "worker", provider, root.clone(), None)
+            .unwrap();
+        let session_id = "28a71ea0-db8d-494c-b968-ca3a5f092c8b";
+        state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    session_id: Some(session_id.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let store = JsonStore::new(root.join("state.json"));
+        spool::initialize(
+            &capture,
+            &spool::Manifest {
+                routing_key: spool::RoutingKey(agent.0),
+                provider,
+                launch_id: "launch".into(),
+            },
+        )
+        .unwrap();
+        claude_code::hooks::install(
+            &HookContext {
+                binary: binary.clone(),
+                spool: capture.clone(),
+                launch_id: "launch".into(),
+            },
+            &root,
+        )
+        .unwrap();
+        let label = provider.label();
+        let session = crate::agents::resume::catalog::PersistedAgentSession {
+            source: format!("herdr:{label}"),
+            agent: label.into(),
+            session_ref: crate::agents::resume::catalog::AgentSessionRef::id(session_id).unwrap(),
+        };
+        let plan =
+            crate::agents::resume::catalog::plan(&session.source, label, &session.session_ref)
+                .unwrap();
+        let facts = NativeResumeFacts {
+            agent_name: Some(identity::managed_name(room, agent)),
+            managed_agent: Some("claude".into()),
+            session: Some(session),
+        };
+        let context = NativeResumeContext {
+            root: Some(root.clone()),
+            config_root: root.join("herdr-config"),
+            session_name: Some("bus".into()),
+            project: root.clone(),
+            binary,
+        };
+        let selected = || {
+            let mut prepared = plan.clone();
+            load(&context, &facts, &plan)
+                .unwrap()
+                .apply_fresh_plan(&mut prepared);
+            prepared
+                .argv
+                .windows(2)
+                .any(|args| args == ["--resume", session_id])
+        };
+        store.save(&state).unwrap();
+        assert!(!selected(), "{label} tried to resume a startup-only UUID");
+        let prepared = load(&context, &facts, &plan).unwrap();
+        let check_prepared = || {
+            revalidate(
+                &context,
+                &facts,
+                &plan,
+                prepared.session.as_ref(),
+                prepared.discard_session.as_deref(),
+                prepared.claude_evidence_stamp,
+                &prepared.env,
+            )
+        };
+        assert!(check_prepared().is_ok());
+        let mut submitted = state.clone();
+        submitted.set_draft_text(room, "sent work").unwrap();
+        submitted.set_draft_recipients(room, [agent]).unwrap();
+        let request = submitted.submit_draft(room, 1).unwrap()[0];
+        store.save(&submitted).unwrap();
+        assert!(!selected(), "{label} treated queued work as submitted");
+        submitted.begin_submission(request, "launch", 0).unwrap();
+        store.save(&submitted).unwrap();
+        assert!(selected(), "{label} lost the UUID of submitted work");
+        store.save(&state).unwrap();
+        std::fs::write(capture.join("adopted-session"), session_id).unwrap();
+        assert!(selected(), "{label} lost the adopted UUID");
+        std::fs::remove_file(capture.join("adopted-session")).unwrap();
+        let lease = spool::try_append_lock(&capture.join("append.lock")).unwrap();
+        spool::append(
+            &capture,
+            "launch",
+            provider,
+            serde_json::json!({"hook_event_name":"UserPromptSubmit","session_id":session_id,"prompt_id":"staged","prompt":"manual"}),
+            &[],
+            false,
+        )
+        .unwrap();
+        assert!(selected(), "{label} ignored a staged autonomous turn");
+        assert!(check_prepared().is_err(), "{label} admitted stale evidence");
+        drop(lease);
+        assert!(selected(), "{label} ignored the unconsumed turn");
+        assert!(std::fs::read_dir(&capture).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("pending-")));
+        for (path, _) in spool::records(&capture).unwrap() {
+            std::fs::remove_file(path).unwrap();
+        }
+        state.observe_autonomous_turn(agent, "manual-turn".into(), true, false);
+        state.observe_autonomous_turn(agent, "manual-turn".into(), false, false);
+        store.save(&state).unwrap();
+        assert!(
+            selected(),
+            "{label} lost the UUID after a finished autonomous turn"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(unix)]
