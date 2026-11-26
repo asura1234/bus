@@ -124,6 +124,12 @@ fn data_route_excludes_archived_deliberate_outcomes_without_rewriting_history() 
 
 const NOTICE_AT: u64 = 1_793_577_600_000;
 
+fn finish_worker_request(state: &mut BusState, room: RoomId, agent: AgentId) {
+    let at = NOTICE_AT - 122_000;
+    let request = submit_latency(state, room, agent, at);
+    state.finish_for_test(request, "done", at);
+}
+
 fn idle_notice_state() -> (BusState, RoomId, AgentId, AgentId) {
     use crate::messaging::model::{AgentRuntimeIdentity, RuntimeStatus};
 
@@ -149,6 +155,7 @@ fn idle_notice_state() -> (BusState, RoomId, AgentId, AgentId) {
         )
         .unwrap();
     state.bind_orchestrator(lead, room).unwrap();
+    finish_worker_request(&mut state, room, subject);
     state
         .set_agent_runtime_identity(
             lead,
@@ -417,7 +424,8 @@ fn a_stale_idle_notice_in_a_shared_write_does_not_hide_the_ordinary_failure() {
         Some("submission_unconfirmed")
     );
     let dashboard = report(&state);
-    assert_eq!(dashboard["all"]["counts"]["attempts"], 1);
+    assert_eq!(dashboard["all"]["counts"]["attempts"], 2);
+    assert_eq!(dashboard["all"]["counts"]["delivered"], 1);
     assert_eq!(
         dashboard["all"]["counts"]["bus_reasons"]["submission_unconfirmed"],
         1
@@ -440,6 +448,7 @@ fn a_roster_notice_keeps_its_queue_entry_while_one_subject_is_live() {
             None,
         )
         .unwrap();
+    finish_worker_request(&mut state, room, second);
     state
         .observe_status(second, RuntimeStatus::Idle, NOTICE_AT - 121_000)
         .unwrap();
@@ -571,7 +580,8 @@ fn retiring_stale_notice_head_preserves_the_not_idle_hold_for_ordinary_work() {
         Some("agent_not_idle")
     );
     let dashboard = report(&state);
-    assert_eq!(dashboard["all"]["counts"]["attempts"], 1);
+    assert_eq!(dashboard["all"]["counts"]["attempts"], 2);
+    assert_eq!(dashboard["all"]["counts"]["delivered"], 1);
     assert_eq!(dashboard["failures"], serde_json::json!([]));
 }
 
@@ -609,7 +619,8 @@ fn retiring_an_idle_notice_member_preserves_its_unknown_write_audit() {
     assert!(ordinary_request.uncertain_outcome);
 
     let dashboard = report(&state);
-    assert_eq!(dashboard["all"]["counts"]["attempts"], 1);
+    assert_eq!(dashboard["all"]["counts"]["attempts"], 2);
+    assert_eq!(dashboard["all"]["counts"]["delivered"], 1);
     assert_eq!(
         dashboard["all"]["counts"]["bus_reasons"]["submission_unconfirmed"],
         1
