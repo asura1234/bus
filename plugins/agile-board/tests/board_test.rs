@@ -871,6 +871,8 @@ window.addEventListener("load", async () => {
     };
     const viewport = document.documentElement.clientWidth;
     const grid = document.querySelector(".global-columns-bar");
+    const clearHistory = document.getElementById("clear-history-btn");
+    const restoreGroup = document.getElementById("collapsed-columns");
     const gridHeaders = () => [...grid.querySelectorAll(".column-header")];
     const section = grid.querySelector(".sidebar-corner-header");
     const gap = parseFloat(getComputedStyle(grid).columnGap);
@@ -907,8 +909,21 @@ window.addEventListener("load", async () => {
         check(window.scrollX === 0 && document.documentElement.scrollWidth <= viewport + 1,
           "The board should fit without horizontal scrolling after hiding a column");
       }
-      for (const header of [done, wontWork].filter(header => !headers.includes(header))) {
-        check(fits(header) && fits(header.querySelector("button")), "A restore control is outside the viewport");
+      const restoreHeaders = [done, wontWork].filter(header => !headers.includes(header));
+      check(visible(restoreGroup) === (restoreHeaders.length > 0),
+        "The restore row should only be visible when a column is hidden");
+      if (restoreHeaders.length > 0) {
+        const clearRect = clearHistory.getBoundingClientRect();
+        const groupRect = restoreGroup.getBoundingClientRect();
+        const rects = restoreHeaders.map(header => header.getBoundingClientRect());
+        check(Math.abs(Math.max(...rects.map(rect => rect.right)) - clearRect.right) <= 1,
+          "Restore tags should align with the right edge of Clear session history");
+        check(rects.every(rect => rect.top >= clearRect.bottom && rect.bottom <= groupRect.bottom) &&
+          groupRect.bottom <= grid.getBoundingClientRect().top,
+          "Restore tags should sit between Clear session history and the board columns");
+        for (const header of restoreHeaders) {
+          check(fits(header) && fits(header.querySelector("button")), "A restore control is outside the viewport");
+        }
       }
     };
     const clickToggle = toggle => {
