@@ -107,6 +107,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
+      margin-inline-start: auto;
     }
 
     .control-group {
@@ -290,9 +291,10 @@
 
     .collapsed-columns {
       display: flex;
+      flex: 0 0 100%;
       flex-wrap: wrap;
+      justify-content: flex-end;
       gap: var(--col-gap);
-      margin-inline-end: auto;
     }
 
     .collapsed-columns:empty { display: none; }
@@ -495,7 +497,6 @@
   <div class="sticky-header-band">
     <header class="topbar">
       <h1 class="brand-title">Agile Board</h1>
-      <div class="collapsed-columns" id="collapsed-columns" role="group" aria-label="Hidden columns"></div>
 
       <div class="controls">
         <div class="control-group">
@@ -511,6 +512,8 @@
           Clear session history
         </button>
       </div>
+
+      <div class="collapsed-columns" id="collapsed-columns" role="group" aria-label="Hidden columns"></div>
     </header>
 
     <div class="global-columns-bar" aria-label="Board columns">
