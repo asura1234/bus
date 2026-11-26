@@ -1155,3 +1155,14 @@ idle then deliver, and an approval card without `--yolo`.
   with a release marker. Capture the pending rows before natural completion and
   before and after a separate interrupt-mode send, alongside request status and
   native timestamps.
+
+- **2026-11-26 — Claude grouped attachments and repeated interrupts:** Bus
+  renders multiple attachment paths as one row of quoted paths. Claude can
+  lift an image into a chip and render the remaining paths as separate rows or
+  inside a collapsed text chip. Exercise a paste that flushes before Enter
+  times out with a developer draft stashed. The next delivery must prove
+  ownership, clear the late Bus paste, and verify the stash is restored.
+  Send two interrupts after authenticated Started callbacks and check each
+  replacement's input and all original request IDs' final replies. Repeat with
+  a Bus-owned prompt returned to the composer and verify it is replayed once
+  after guarded clearing.
