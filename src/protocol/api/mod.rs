@@ -19,6 +19,7 @@ pub(crate) const AGENT_COMPOSER_BUSY: &str = "agent_composer_busy";
 /// A fresh Claude pane shows that Enter would queue into its running turn.
 pub(crate) const AGENT_CLAUDE_TURN_BUSY: &str = "agent_claude_turn_busy";
 /// A post-Enter read still showed our draft and guarded withdrawal cleared it.
+pub(crate) const AGENT_RETURNED_DRAFT_CLEARED: &str = "agent_returned_draft_cleared";
 pub(crate) const QUEUED_IN_TARGET_INPUT: &str = "queued_in_target_input";
 /// One budget for an agent pane's shell startup to settle and for confirming
 /// provider startup. Ordinary busy-shell retries retain their shorter window.

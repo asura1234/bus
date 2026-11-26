@@ -356,7 +356,7 @@ impl App {
         steer: bool,
         expected_turn_id: Option<String>,
         native_only: bool,
-        discard_aborted_payload: Option<String>,
+        discard_aborted_payload: Option<crate::protocol::api::schema::AbortedPayloadAction>,
     ) -> Result<
         (
             String,
@@ -467,7 +467,7 @@ impl App {
 struct NativePromptOptions {
     expected_turn_id: Option<String>,
     native_only: bool,
-    discard_aborted_payload: Option<String>,
+    discard_aborted_payload: Option<crate::protocol::api::schema::AbortedPayloadAction>,
 }
 
 fn queue_prompt_submission(
@@ -573,7 +573,7 @@ fn prepare_prompt_input(
     deadline: Option<std::time::Instant>,
     draft_directory: Option<std::path::PathBuf>,
     steer: bool,
-    discard_aborted_payload: Option<String>,
+    discard_aborted_payload: Option<crate::protocol::api::schema::AbortedPayloadAction>,
 ) -> std::io::Result<PreparedPrompt> {
     use crate::agents::AgentKind;
     let (mut encoded, enter) =
@@ -628,6 +628,11 @@ fn prepare_prompt_input(
                 steer,
                 runtime.bracketed_paste_enabled(),
                 discard_aborted_payload,
+                |text| {
+                    Bytes::from(crate::server::api::input_encoding::encode_api_text(
+                        runtime, text,
+                    ))
+                },
                 std::sync::Arc::clone(&discarded_aborted_payload),
             ))
         } else {
@@ -740,6 +745,19 @@ fn complete_agent_prompt_with_timestamps(
                 discarded_aborted_payload,
             },
         ),
+        Ok(Err(err))
+            if discarded_aborted_payload
+                && not_shown(&err)
+                && !matches!(
+                    PromptNotShown::classified(&err),
+                    Some(PromptNotShown::QueuedInputWithdrawn)
+                ) =>
+        {
+            fail(
+                crate::protocol::api::AGENT_RETURNED_DRAFT_CLEARED,
+                err.to_string(),
+            )
+        }
         Ok(Err(err))
             if matches!(
                 PromptNotShown::classified(&err),

@@ -478,7 +478,7 @@ async fn claude_collapsed_interrupt(typed_draft: bool) {
     let Method::AgentPromptIfIdle(params) = &mut follow_method else {
         unreachable!();
     };
-    params.discard_aborted_payload = Some(aborted);
+    params.discard_aborted_payload = Some(aborted.into());
     let response = start(&mut app, follow_method);
 
     let first_key = next_write(&mut writes).await;

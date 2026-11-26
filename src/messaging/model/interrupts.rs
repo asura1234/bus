@@ -32,6 +32,10 @@ pub(crate) struct SendInterrupt {
 pub(crate) struct AbortedPayload {
     pub(crate) request_id: RequestId,
     pub(crate) payload: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) replay_when_returned: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) cleared: bool,
 }
 
 /// Durable autonomous activity and any stop that may already have been written.
@@ -603,6 +607,8 @@ impl BusState {
             Some(AbortedPayload {
                 request_id: id,
                 payload,
+                replay_when_returned: false,
+                cleared: false,
             })
         });
         if let (Some(aborted), Some(agent_state)) = (aborted_payload, self.agents.get_mut(&agent)) {
@@ -618,6 +624,19 @@ impl BusState {
             );
         }
         Ok(closed)
+    }
+
+    /// The native renderer proved it removed the old draft, but did not
+    /// submit the replacement. Keep the old content available for a safe retry.
+    pub(crate) fn retain_cleared_aborted_payload(&mut self, agent: AgentId, request: RequestId) {
+        if let Some(payload) = self
+            .agents
+            .get_mut(&agent)
+            .and_then(|owner| owner.autonomous_stop.aborted_payload.as_mut())
+            .filter(|payload| payload.request_id == request)
+        {
+            payload.cleared = true;
+        }
     }
 
     pub(crate) fn record_aborted_payload_discarded(

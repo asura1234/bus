@@ -117,7 +117,7 @@ impl Worker {
             self.save(state)?;
         }
         self.expire_queued_now()?;
-        self.restore_orchestrator_queue_order()?;
+        self.restore_delivery_queue_order()?;
         self.delivery_waits
             .retain(|id, _| self.state.agent(*id).is_some());
         self.withdrawn_at.retain(|id, at| {
@@ -159,7 +159,10 @@ impl Worker {
             if !can_deliver() {
                 break;
             }
-            self.stop_autonomous_turn_before_delivery(agent.id, now_ms)?;
+            self.stop_queued_interrupt_before_delivery(agent.id, now_ms)?;
+            let Some(agent) = self.state.agent(agent.id).cloned() else {
+                continue;
+            };
             let waited = self.note_queued_delivery_wait(&agent);
             match self.delivery_route(&agent) {
                 Some(DeliveryRoute::Steer(request, lead)) => self.steer(&agent, request, lead)?,
@@ -220,11 +223,11 @@ impl Worker {
         let steer = self.steer_into_unbound_turn(agent, own_turn);
         let interrupt_ready = agent.current_request.is_none()
             && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
-            && self.state.queued_requests(agent.id).iter().any(|id| {
-                self.state
-                    .request(*id)
-                    .is_some_and(|request| request.interrupt_delivery)
-            });
+            && self
+                .state
+                .queued_requests(agent.id)
+                .first()
+                .is_some_and(|id| self.state.is_interrupt_delivery(*id));
         let background_wake = interrupt_ready
             && agent.autonomous_stop.task_notification_running()
             && (agent.status == RuntimeStatus::Working || own_turn);
@@ -350,18 +353,14 @@ impl Worker {
         Ok(())
     }
 
-    fn restore_orchestrator_queue_order(&mut self) -> Result<(), String> {
-        // Expiry can defer refused reply wakes. Restore only inbox ordering;
+    fn restore_delivery_queue_order(&mut self) -> Result<(), String> {
+        // Expiry can defer refused reply wakes. Restore only queue ordering;
         // keep the existing background-owner release at its earlier boundary.
         let mut state = self.state.clone();
-        let inboxes: Vec<_> = state
-            .agents()
-            .filter(|agent| agent.orchestrates.is_some())
-            .map(|agent| agent.id)
-            .collect();
+        let recipients: Vec<_> = state.agents().map(|agent| agent.id).collect();
         let mut changed = false;
-        for agent in inboxes {
-            changed |= state.prioritize_orchestrator_dialogs(agent);
+        for recipient in recipients {
+            changed |= state.prioritize_delivery_queue(recipient);
         }
         if changed {
             self.save(state)?;
@@ -606,10 +605,11 @@ impl Worker {
         let replaying = state
             .request(request)
             .is_some_and(|row| row.interrupt_replay_before.is_some());
-        let text = match (waited || replaying)
-            .then(|| state.coalesce_queue(request))
-            .flatten()
-        {
+        let text = match state.interrupt_group_payload(request).or_else(|| {
+            (waited || replaying)
+                .then(|| state.coalesce_queue(request))
+                .flatten()
+        }) {
             Some(text) => text,
             None => state
                 .render_request_payload(request)
@@ -675,8 +675,9 @@ impl Worker {
                 .request(request)
                 .is_some_and(super::Request::is_error_report),
         );
-        let (state, text) =
+        let (mut state, text) =
             self.prepare_native_prompt(request, waited, steer, launch, terminal, pane)?;
+        let (text, aborted_action) = state.prepare_returned_payload(request, text);
         self.save(state)?;
         self.mark_live_dispatch(request, DispatchMark::Save);
         diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
@@ -695,11 +696,6 @@ impl Worker {
             "Bus payload metadata"
         );
         self.mark_live_dispatch(request, DispatchMark::Diagnostics);
-        let discard_aborted_payload = agent
-            .autonomous_stop
-            .aborted_payload
-            .as_ref()
-            .map(|aborted| aborted.payload.clone());
         let method = submission_method(
             agent,
             text,
@@ -708,7 +704,7 @@ impl Worker {
             steer,
             allow_working,
             self.serving_generation,
-            discard_aborted_payload,
+            aborted_action,
         );
         self.mark_live_dispatch(request, DispatchMark::Method);
         self.start_native_submission(agent, request, method, false, started)

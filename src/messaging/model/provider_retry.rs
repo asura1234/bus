@@ -254,6 +254,7 @@ impl BusState {
         request.group = None;
         request.steered = false;
         request.submitted_payload = None;
+        request.returned_payload_alternative = None;
         request.foreign_turn_settled_at_ms = None;
         request.foreign_turn_started_at_ms = None;
         request.progress_at_ms = Some(now_ms);

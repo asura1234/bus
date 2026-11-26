@@ -15,6 +15,7 @@ pub(super) struct PreservingComposer {
     kind: AgentKind,
     owned: OwnedComposer,
     aborted: Option<Mutex<AbortedMatcher>>,
+    returned_replay: Option<(Bytes, Box<Self>)>,
     discarded_aborted_payload: Arc<AtomicBool>,
     expected: String,
     directory: PathBuf,
@@ -152,6 +153,7 @@ impl PreservingComposer {
             kind,
             owned: OwnedComposer::new(kind, expected.clone()),
             aborted: None,
+            returned_replay: None,
             discarded_aborted_payload: Arc::new(AtomicBool::new(false)),
             expected,
             directory,
@@ -169,6 +171,11 @@ impl PreservingComposer {
     ) -> Self {
         self.aborted = payload.map(|text| Mutex::new(AbortedMatcher::new(text)));
         self.discarded_aborted_payload = discarded;
+        self
+    }
+
+    pub(super) fn with_returned_replay(mut self, bytes: Bytes, inspector: Self) -> Self {
+        self.returned_replay = Some((bytes, Box::new(inspector)));
         self
     }
 
@@ -487,6 +494,9 @@ impl SubmissionInspector for PreservingComposer {
         pristine: bool,
         unedited_stop: bool,
     ) -> InputObservation {
+        if self.returned_replay.is_some() && !unedited_stop {
+            return InputObservation::Other;
+        }
         self.aborted
             .as_ref()
             .and_then(|aborted| aborted.lock().ok())
@@ -502,6 +512,18 @@ impl SubmissionInspector for PreservingComposer {
             .as_ref()
             .and_then(|aborted| aborted.lock().ok())
             .map_or(0, |aborted| aborted.progress)
+    }
+
+    fn take_returned_replay(&mut self) -> Option<(Bytes, Box<dyn SubmissionInspector>)> {
+        self.returned_replay
+            .take()
+            .map(|(bytes, inspector)| (bytes, inspector as Box<dyn SubmissionInspector>))
+    }
+
+    fn returned_replay_bytes(&self) -> Option<&[u8]> {
+        self.returned_replay
+            .as_ref()
+            .map(|(bytes, _)| bytes.as_ref())
     }
 
     fn mark_aborted_payload_discarded(&self) {

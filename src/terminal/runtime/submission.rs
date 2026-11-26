@@ -240,6 +240,13 @@ pub(crate) trait SubmissionInspector: Send {
     fn aborted_cleanup_progress(&self) -> u64 {
         0
     }
+    fn take_returned_replay(&mut self) -> Option<(Bytes, Box<dyn SubmissionInspector>)> {
+        None
+    }
+    fn returned_replay_bytes(&self) -> Option<&[u8]> {
+        None
+    }
+
     fn mark_aborted_payload_discarded(&self) {}
 }
 
@@ -363,8 +370,9 @@ impl SubmissionHandle {
     ) -> io::Result<InputCompletion> {
         let clock = self.io.submission_clock();
         let now = clock.now();
-        let withdraw_grace = withdrawal_budget(&text);
-        let maximum = maximum_budget(delay, &text) + inspect.preservation_budget();
+        let budget_text = inspect.returned_replay_bytes().unwrap_or(&text);
+        let withdraw_grace = withdrawal_budget(budget_text);
+        let maximum = maximum_budget(delay, budget_text) + inspect.preservation_budget();
         let hard_deadline = deadline.unwrap_or(now + maximum).min(now + maximum);
         let scope = self.io.input_scope();
         // Acceptance is the caller's sample from before this queue, and the

@@ -1,5 +1,5 @@
 //! Native delivery text and its exact callback-matching payload.
-use super::{AgentId, Author, BusState, Provider, RequestId, RoomId};
+use super::{AgentId, Author, BusState, Provider, Request, RequestId, RoomId};
 
 impl BusState {
     pub(super) fn message_sender(&self, author: &Author) -> Option<(String, RoomId)> {
@@ -47,6 +47,63 @@ impl BusState {
             return id.0.to_string();
         }
         format!("'{}'", agent.name.replace('\'', "'\\''"))
+    }
+
+    pub(crate) fn prepare_returned_payload(
+        &mut self,
+        request: RequestId,
+        text: String,
+    ) -> (
+        String,
+        Option<crate::protocol::api::schema::AbortedPayloadAction>,
+    ) {
+        use crate::protocol::api::{
+            schema::AbortedPayloadAction, submission::with_returned_payload,
+        };
+        let Some(row) = self.requests.get(&request) else {
+            return (text, None);
+        };
+        let Some(aborted) = self
+            .agent(row.agent_id)
+            .and_then(|agent| agent.autonomous_stop.aborted_payload.as_ref())
+        else {
+            return (text, None);
+        };
+        let replay = aborted.replay_when_returned
+            && self
+                .requests
+                .get(&aborted.request_id)
+                .is_some_and(|old| old.group == Some(request));
+        let cleared = aborted.cleared;
+        let payload = aborted.payload.clone();
+        if !replay {
+            return (
+                text,
+                (!cleared).then_some(AbortedPayloadAction::Discard(payload)),
+            );
+        }
+
+        let alternative = with_returned_payload(&payload, &text);
+        let row = self
+            .requests
+            .get_mut(&request)
+            .expect("current delivery request");
+        if cleared {
+            row.submitted_payload = Some(alternative.clone());
+            (alternative, None)
+        } else {
+            row.returned_payload_alternative = Some(alternative);
+            (text, Some(AbortedPayloadAction::Replay { replay: payload }))
+        }
+    }
+
+    pub(crate) fn choose_submitted_payload(&mut self, request: RequestId, replayed: bool) {
+        if let Some(row) = self.requests.get_mut(&request) {
+            let alternative = row.returned_payload_alternative.take();
+            if let Some(alternative) = alternative.filter(|_| replayed) {
+                row.submitted_payload = Some(alternative);
+            }
+        }
     }
 
     /// Freeze attribution with the rendered text so typing, retries and callback
@@ -143,6 +200,25 @@ impl BusState {
         }
         self.requests.get_mut(&id)?.submitted_payload = Some(text.clone());
         Some(text)
+    }
+}
+
+impl Request {
+    pub(crate) fn matches_callback_payload(&self, payload: &str, provider: Provider) -> bool {
+        match &self.submitted_payload {
+            Some(typed) => {
+                payload_matches_for_provider(payload, typed, provider)
+                    || self
+                        .returned_payload_alternative
+                        .as_deref()
+                        .is_some_and(|alternative| {
+                            payload_matches_for_provider(payload, alternative, provider)
+                        })
+            }
+            None => {
+                payload_matches_for_provider(payload, &self.prompt.rendered_payload(), provider)
+            }
+        }
     }
 }
 

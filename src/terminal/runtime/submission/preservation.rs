@@ -35,8 +35,8 @@ pub(crate) struct EditorSubmission {
 
 impl ObservedSubmission {
     pub(super) fn run_preserving_draft(
-        &self,
-        text: Bytes,
+        &mut self,
+        mut text: Bytes,
         delay: Duration,
         lease: &crate::terminal::runtime::draft_input::DraftInputLease,
     ) -> io::Result<()> {
@@ -94,6 +94,10 @@ impl ObservedSubmission {
             }
             lease.clear_claude_submission();
             self.inspect.mark_aborted_payload_discarded();
+            if let Some((replay_text, replay_inspector)) = self.inspect.take_returned_replay() {
+                text = replay_text;
+                self.inspect = replay_inspector;
+            }
             self.reset_confirmation(delay);
             initial = InputObservation::Empty;
             screen = self.terminal.active_ansi();

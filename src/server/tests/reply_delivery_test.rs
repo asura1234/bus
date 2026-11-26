@@ -1692,14 +1692,14 @@ async fn developer_follow_up_interrupts_the_orchestrator_turn_without_blocking_t
     f.tick();
     f.pump();
 
-    // Claude stops the old turn and replays its unfinished request with the
-    // follow-up in a new turn without waiting for an Idle observation.
+    // The old request shares the follow-up's answer without duplicating the
+    // original Claude transcript entry or waiting for an Idle observation.
     assert_eq!(f.stop_keys(orch), 1);
-    assert_eq!(f.state().request(follow_up).unwrap().group, Some(lead));
+    assert_eq!(f.state().request(lead).unwrap().group, Some(follow_up));
     let submitted = f.typed(orch);
     assert_eq!(submitted.len(), 2, "{submitted:?}");
     let payload = &submitted[1];
-    assert!(payload.contains("\nfirst\n"), "{payload}");
+    assert!(!payload.contains("\nfirst"), "{payload}");
     assert!(payload.ends_with("\nfollow-up"), "{payload}");
 
     f.start(orch, "replayed", payload);

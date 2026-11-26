@@ -78,6 +78,7 @@ pub(super) fn preserving_observer(
         false,
         true,
         None,
+        |_| unreachable!("the test observer has no returned prompt"),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
 }
@@ -89,18 +90,31 @@ pub(super) fn preserving_observer_for_submission(
     keys: Vec<bytes::Bytes>,
     steer: bool,
     bracketed_paste: bool,
-    discard_aborted_payload: Option<String>,
+    aborted_action: Option<crate::protocol::api::schema::AbortedPayloadAction>,
+    encode: impl FnOnce(&str) -> bytes::Bytes,
     discarded_aborted_payload: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> impl crate::terminal::runtime::SubmissionInspector {
+) -> impl crate::terminal::runtime::SubmissionInspector + 'static {
     let keys = if kind == AgentKind::Claude && !preservation::default_claude_stash_binding() {
         Vec::new()
     } else {
         keys
     };
-    preservation::PreservingComposer::new(kind, expected, directory, keys)
-        .with_steering(steer)
-        .with_bracketed_paste(bracketed_paste)
-        .with_aborted_payload(discard_aborted_payload, discarded_aborted_payload)
+    let observer = |text: String| {
+        preservation::PreservingComposer::new(kind, text, directory.clone(), keys.clone())
+            .with_steering(steer)
+            .with_bracketed_paste(bracketed_paste)
+    };
+    let mut inspector = observer(expected.clone()).with_aborted_payload(
+        aborted_action
+            .as_ref()
+            .map(|action| action.payload().to_owned()),
+        discarded_aborted_payload,
+    );
+    if let Some(returned) = aborted_action.as_ref().and_then(|action| action.replay()) {
+        let replay = crate::protocol::api::submission::with_returned_payload(returned, &expected);
+        inspector = inspector.with_returned_replay(encode(&replay), observer(replay));
+    }
+    inspector
 }
 
 pub(super) fn observer(

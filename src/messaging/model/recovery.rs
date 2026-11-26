@@ -482,7 +482,9 @@ impl BusState {
                 .position(|id| *id == request)
                 .ok_or(ModelError::InvalidTransition)?;
             queue.remove(position);
-            let keep_hold = preserve_queue_hold && !queue.is_empty();
+            let remaining = !queue.is_empty();
+            self.close_queued_interrupt_group(request, recovered_at_ms);
+            let keep_hold = preserve_queue_hold && remaining;
             let request_state = self
                 .requests
                 .get_mut(&request)

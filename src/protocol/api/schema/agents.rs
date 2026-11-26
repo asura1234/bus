@@ -216,7 +216,43 @@ pub struct AgentPromptIfIdleParams {
     /// composer still holds this payload after an interrupt, discard it instead
     /// of stashing and restoring it as a developer draft.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub discard_aborted_payload: Option<String>,
+    pub discard_aborted_payload: Option<AbortedPayloadAction>,
+}
+
+/// An exact, previously submitted prompt to clear, with optional replay after
+/// the composer proves Claude returned it. The string form is the legacy discard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum AbortedPayloadAction {
+    Discard(String),
+    Replay { replay: String },
+}
+
+impl AbortedPayloadAction {
+    pub fn payload(&self) -> &str {
+        match self {
+            Self::Discard(payload) | Self::Replay { replay: payload } => payload,
+        }
+    }
+
+    pub fn replay(&self) -> Option<&str> {
+        match self {
+            Self::Discard(_) => None,
+            Self::Replay { replay } => Some(replay),
+        }
+    }
+}
+
+impl From<String> for AbortedPayloadAction {
+    fn from(payload: String) -> Self {
+        Self::Discard(payload)
+    }
+}
+
+impl From<&str> for AbortedPayloadAction {
+    fn from(payload: &str) -> Self {
+        Self::Discard(payload.into())
+    }
 }
 
 /// First interactive Codex turn: its SessionStart hook is deferred until input.

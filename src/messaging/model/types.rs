@@ -4,7 +4,6 @@ use super::payload::payload_matches;
 pub(crate) use super::stall::{BLOCKED_STALL_MS, DELIVERED_STALL_MS, QUEUED_STALL_MS};
 use super::{
     interrupts::{AutonomousStopState, SendInterrupt, SendInterruptOutcome},
-    payload::payload_matches_for_provider,
     DeliveryLatency, DialogNoticeDelivery, QueuedRejection,
 };
 use serde::{Deserialize, Serialize};
@@ -652,6 +651,10 @@ pub(crate) struct Request {
     /// this prompt alone. Submit hooks are matched against it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) submitted_payload: Option<String>,
+    /// A complete alternative only while the native renderer can select a
+    /// proven returned prompt. A native receipt or exact Started fixes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) returned_payload_alternative: Option<String>,
     /// When a turn the agent ran on its own finished while this request, typed
     /// but never seen starting, waited. The agent has moved on since.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -684,15 +687,6 @@ impl Request {
                 .prompt
                 .text
                 .starts_with(crate::utils::error_pipe::NOTICE_PREFIX)
-    }
-
-    pub(crate) fn matches_callback_payload(&self, payload: &str, provider: Provider) -> bool {
-        match &self.submitted_payload {
-            Some(typed) => payload_matches_for_provider(payload, typed, provider),
-            None => {
-                payload_matches_for_provider(payload, &self.prompt.rendered_payload(), provider)
-            }
-        }
     }
 
     pub(crate) fn reply(&self) -> Option<&PendingFinal> {
