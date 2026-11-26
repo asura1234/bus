@@ -310,11 +310,8 @@ fn an_interrupt_supersedes_a_pending_steer() {
         }),
     );
     assert!(interrupt.ok, "{interrupt:?}");
-    assert_eq!(fixture.request(lead).phase, RequestPhase::Queued);
-    assert_eq!(
-        fixture.request(lead).interrupt_replay_before,
-        Some(sent_request(&interrupt))
-    );
+    let replacement = sent_request(&interrupt);
+    assert_eq!(fixture.request(lead).group, Some(replacement));
     assert_eq!(fixture.request(steer).phase, RequestPhase::Queued);
     assert_eq!(fixture.request(steer).group, None);
     assert!(fixture.request(steer).failure_reason.is_none());
@@ -326,12 +323,21 @@ fn an_interrupt_supersedes_a_pending_steer() {
     assert_ne!(row["stage"], "ended");
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();
+    let replacement_payload = fixture.typed().last().unwrap().0.clone();
+    assert!(replacement_payload.ends_with("MODE_INTERRUPT"));
+    assert!(!replacement_payload.contains("MODE_STEER2"));
+    fixture.started("2", &replacement_payload);
+    fixture.consume();
+    fixture.stopped("2", "interrupted turn settled");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Idle);
+    fixture.deliver();
     assert!(
         fixture
             .typed_content()
             .last()
-            .is_some_and(|(text, steered)| text.contains("MODE_STEER2") && !steered),
-        "the pending steer runs after the interrupted turn, not inside it: {:?}",
+            .is_some_and(|(text, steered)| text.ends_with("MODE_STEER2") && !steered),
+        "the pending steer runs in its own turn after the interrupt: {:?}",
         fixture.typed_content()
     );
 }
