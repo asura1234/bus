@@ -1,10 +1,10 @@
 //! Requests operations for the messaging state.
 use super::{
     AgentId, Author, BusState, Draft, ModelError, Prompt, PromptId, Request, RequestId,
-    RequestPhase, RoomId, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, BUS_SENDER,
-    QUEUED_STALL_MS,
+    RequestPhase, RoomId, RuntimeStatus, SubmissionOutcome, BLOCKED_STALL_MS, QUEUED_STALL_MS,
 };
 
+mod coalescing;
 mod latency;
 mod launch_hold;
 mod policy;
@@ -157,9 +157,15 @@ impl BusState {
                 request_state.expected_launch_id = None;
                 request_state.submission_boundary = None;
                 request_state.submitted_payload = None;
+                request_state.returned_payload_alternative = None;
                 request_state.latency.clear_attempt();
-                // Coalesced members go back behind their lead, in order.
-                let members = self.group_members(request);
+                // Newly coalesced members go back behind their lead.
+                // Interrupted work remains attached across a definite refusal.
+                let members: Vec<_> = self
+                    .group_members(request)
+                    .into_iter()
+                    .filter(|id| self.requests[id].interrupt_replay_before != Some(request))
+                    .collect();
                 for member in members.iter().filter(|_| !restart_continuation) {
                     if let Some(member) = self.requests.get_mut(member) {
                         member.phase = RequestPhase::Queued;
@@ -672,26 +678,7 @@ impl BusState {
         let parts: Vec<RequestId> = std::iter::once(lead)
             .chain(members.iter().copied())
             .collect();
-        let count = parts.len();
-        let text = parts
-            .iter()
-            .enumerate()
-            .filter_map(|(index, id)| {
-                let payload = self.render_request_payload(*id)?;
-                let prompt = &self.requests.get(id)?.prompt;
-                let attribution = match prompt.author {
-                    Author::Agent(_) | Author::Bot(_) => String::new(),
-                    _ => format!(" from {}", self.sender_name(&prompt.author)),
-                };
-                Some(format!(
-                    "[{}/{count}{attribution} at {}]\n{}",
-                    index + 1,
-                    clock(prompt.submitted_at_ms),
-                    payload
-                ))
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let text = self.render_coalesced_payload(&parts);
         if let Some(queue) = self.queues.get_mut(&agent_id) {
             queue.retain(|id| !members.contains(id));
         }
@@ -706,27 +693,6 @@ impl BusState {
         }
         Some(text)
     }
-
-    fn sender_name(&self, author: &Author) -> String {
-        match author {
-            Author::Developer => "the developer".into(),
-            Author::Bus => BUS_SENDER.into(),
-            Author::Bot(name) => name.clone(),
-            Author::Agent(id) => self
-                .agents
-                .get(id)
-                .map_or_else(|| "an agent".into(), |agent| agent.name.clone()),
-        }
-    }
-}
-
-/// Local wall-clock `HH:MM` of a millisecond timestamp, for coalesced prompts.
-fn clock(at_ms: u64) -> String {
-    i64::try_from(at_ms / 1000)
-        .ok()
-        .and_then(crate::platform::local_datetime_at)
-        .map(|local| format!("{:02}:{:02}", local.hour(), local.minute()))
-        .unwrap_or_else(|| "--:--".into())
 }
 
 /// The recovery reason for a native refusal to type a request. The native

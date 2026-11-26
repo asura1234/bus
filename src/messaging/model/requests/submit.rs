@@ -291,6 +291,7 @@ impl BusState {
                     group: None,
                     steered: false,
                     submitted_payload: None,
+                    returned_payload_alternative: None,
                     foreign_turn_settled_at_ms: None,
                     foreign_turn_started_at_ms: None,
                     progress_at_ms: None,

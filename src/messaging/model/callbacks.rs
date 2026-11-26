@@ -329,6 +329,14 @@ impl BusState {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 };
                 let binds_provisional_owner = request.phase == RequestPhase::Submitting;
+                let alternative = request.returned_payload_alternative.take();
+                if let Some(alternative) = alternative.filter(|alternative| {
+                    callback.prompt_payload.as_deref().is_some_and(|payload| {
+                        super::payload::payload_matches_for_provider(payload, alternative, provider)
+                    })
+                }) {
+                    request.submitted_payload = Some(alternative);
+                }
                 request.provider_session_id = callback.provider_session_id;
                 request.provider_turn_id = callback.provider_turn_id;
                 request.provider_prompt_id = callback.provider_prompt_id;

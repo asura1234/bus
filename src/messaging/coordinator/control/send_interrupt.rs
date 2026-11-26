@@ -72,7 +72,7 @@ impl Worker {
         }).collect()
     }
 
-    pub(in crate::messaging::coordinator) fn stop_autonomous_turn_before_delivery(
+    pub(in crate::messaging::coordinator) fn stop_queued_interrupt_before_delivery(
         &mut self,
         recipient: AgentId,
         now: u64,
@@ -80,22 +80,35 @@ impl Worker {
         if self.native_submissions.contains_key(&recipient) {
             return Ok(());
         }
-        let Some(target) = self.state.claude_autonomous_interrupt_target(recipient) else {
+        let Some(owner) = self.state.agent(recipient).filter(|agent| {
+            !agent.deletion_pending && !agent.dialog && !agent.session_binding_invalidated
+        }) else {
             return Ok(());
         };
-        let Some(request) = self
-            .state
-            .queued_requests(recipient)
-            .iter()
-            .copied()
-            .find(|id| {
-                self.state.request(*id).is_some_and(|request| {
-                    request.interrupt_delivery && request.send_interrupt.is_none()
-                })
-            })
+        let Some(request) = self.state.queued_requests(recipient).iter().find_map(|id| {
+            self.state
+                .request(*id)
+                .filter(|request| request.interrupt_delivery && request.send_interrupt.is_none())
+        }) else {
+            return Ok(());
+        };
+        // Admission can observe Idle while an earlier paste is waiting. Stage
+        // a new, fenced stop when a turn subsequently becomes observable.
+        let idle_at_admission = request
+            .send_interrupt_outcome
+            .as_ref()
+            .is_none_or(|outcome| outcome.outcome == "already_idle");
+        let target = if idle_at_admission && self.state.needs_interrupt_stop(owner) {
+            self.state.send_interrupt_target(recipient)
+        } else {
+            self.state.claude_autonomous_interrupt_target(recipient)
+        };
+        let Some(target) =
+            target.filter(|target| !self.state.send_interrupt_already_claimed(recipient, target))
         else {
             return Ok(());
         };
+        let request = request.id;
         let mut state = self.state.clone();
         state
             .stage_send_interrupt(request, target)

@@ -195,7 +195,7 @@ fn interrupt_send_settles_the_pending_claude_receipt_before_stopping_the_lead() 
         });
         let response = send_msg(&mut fixture, params);
         assert!(response.ok, "{response:?}");
-        assert_eq!(fixture.request(lead).phase, RequestPhase::Queued);
+        assert_eq!(fixture.request(lead).group, Some(sent_request(&response)));
         assert!(fixture.request(lead).failure_reason.is_none());
         assert_eq!(fixture.request(next).group, None);
         if code == AGENT_CLAUDE_TURN_BUSY {
@@ -270,9 +270,9 @@ fn busy_claude_codex_and_agy_interrupt_deliver_without_waiting_for_turn_end() {
                 "{provider:?}/{case:?}: delivered message must be Active"
             );
             assert_eq!(
-                fixture.request(message).group,
-                provider.uses_claude_harness().then_some(lead),
-                "{provider:?}/{case:?}: Claude replays the original with its replacement"
+                fixture.request(lead).group,
+                provider.uses_claude_harness().then_some(message),
+                "{provider:?}/{case:?}: Claude shares the replacement reply with the old request"
             );
             assert_eq!(
                 fixture.request(lead).settled(),
@@ -350,38 +350,25 @@ fn interrupted_agent_queue_always_drains_without_retirement_hold() {
         assert!(response.ok, "{provider:?}: {response:?}");
         let interrupt_second = sent_request(&response);
 
-        // A pending Claude replay leaves earlier queued work in place.
-        fixture.deliver();
-        assert_eq!(
-            fixture.request(lead).settled(),
-            !provider.uses_claude_harness(),
-            "{provider:?}"
-        );
-        assert_eq!(
-            fixture.request(queued_first).phase,
-            RequestPhase::Active,
-            "{provider:?}"
-        );
-        let first_payload = fixture.typed().last().unwrap().0.clone();
-        fixture.started("10", &first_payload);
-        fixture.consume();
-        fixture.stopped("10", "done first");
-        fixture.consume();
-        fixture.status(RuntimeStatus::Idle);
-
-        // Second queued item drains next.
-        fixture.deliver();
-        assert_eq!(
-            fixture.request(interrupt_second).phase,
-            RequestPhase::Active,
-            "{provider:?}"
-        );
-        let second_payload = fixture.typed().last().unwrap().0.clone();
-        fixture.started("20", &second_payload);
-        fixture.consume();
-        fixture.stopped("20", "done second");
-        fixture.consume();
-        fixture.status(RuntimeStatus::Idle);
+        // The interrupt runs first and the earlier ordinary request still runs.
+        for (turn, request, reply) in [
+            ("10", interrupt_second, "interrupt done"),
+            ("20", queued_first, "queued work done"),
+        ] {
+            fixture.deliver();
+            assert_eq!(
+                fixture.request(request).phase,
+                RequestPhase::Active,
+                "{provider:?}"
+            );
+            let payload = fixture.typed().last().unwrap().0.clone();
+            fixture.started(turn, &payload);
+            fixture.consume();
+            fixture.stopped(turn, reply);
+            fixture.consume();
+            fixture.status(RuntimeStatus::Idle);
+            assert_eq!(fixture.reply(request).as_deref(), Some(reply));
+        }
         assert!(
             fixture
                 .worker
@@ -390,13 +377,10 @@ fn interrupted_agent_queue_always_drains_without_retirement_hold() {
                 .is_empty(),
             "{provider:?}: queue must drain completely"
         );
-        assert_eq!(fixture.reply(queued_first).as_deref(), Some("done first"));
-        assert_eq!(
-            fixture.reply(interrupt_second).as_deref(),
-            Some("done second")
-        );
         if provider.uses_claude_harness() {
-            assert_eq!(fixture.reply(lead).as_deref(), Some("done second"));
+            assert_eq!(fixture.reply(lead).as_deref(), Some("interrupt done"));
+        } else {
+            assert!(fixture.request(lead).settled());
         }
     }
 }
@@ -498,7 +482,10 @@ fn interrupt_delivery_clears_the_returned_copy_and_replays_the_lead() {
         })
         .expect("expected interrupt delivery prompt");
     assert_eq!(
-        sent_prompt.discard_aborted_payload.as_deref(),
+        sent_prompt
+            .discard_aborted_payload
+            .as_ref()
+            .map(|action| action.payload()),
         Some(lead_payload.as_str())
     );
     assert_eq!(fixture.request(incoming).phase, RequestPhase::Active);
@@ -507,12 +494,20 @@ fn interrupt_delivery_clears_the_returned_copy_and_replays_the_lead() {
     let status = msg_status(&mut fixture, lead_msg);
     assert!(status.ok, "{status:?}");
     let row = &status.result["requests"][0];
-    assert_eq!(row["stage"], "awaiting_start");
+    assert_eq!(row["stage"], "joined");
     assert!(row["reason"].is_null());
-    assert!(sent_prompt.text.contains("M2_IDLE_PAYLOAD report alpha"));
+    assert!(!sent_prompt.text.contains("M2_IDLE_PAYLOAD report alpha"));
+    assert_eq!(
+        sent_prompt
+            .discard_aborted_payload
+            .as_ref()
+            .and_then(|action| action.replay()),
+        Some(lead_payload.as_str())
+    );
 
-    // After confirmation, aborted_payload is cleared so a subsequent delivery carries None.
-    let incoming_payload = sent_prompt.text;
+    // The mock returned positive discard proof, so the callback includes the
+    // original body before the replacement, and fixes the submitted variant.
+    let incoming_payload = format!("{lead_payload}\n\n{}", sent_prompt.text);
     fixture.started("turn-2", &incoming_payload);
     fixture.consume();
     fixture.stopped("turn-2", "M3_ACK");
@@ -537,7 +532,61 @@ fn interrupt_delivery_clears_the_returned_copy_and_replays_the_lead() {
 }
 
 #[test]
-fn working_steer_refused_then_interrupt_discards_aborted_lead_on_first_queued_delivery() {
+fn a_cleared_returned_prompt_survives_a_definite_replacement_refusal() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let lead = running(&mut f, "keep this returned directive", "old-turn");
+    f.worker.transport = Box::new(ScriptedStopTransport::new(
+        f.native.clone(),
+        [Ok(ResponseResult::Ok {})],
+        [Err(TransportError {
+            code: Some(crate::protocol::api::AGENT_RETURNED_DRAFT_CLEARED.into()),
+            message: "returned draft cleared, replacement not submitted".into(),
+            definitely_rejected: true,
+            timestamps: Default::default(),
+        })],
+    ));
+    let room = f.room.0.to_string();
+    let sent = send_msg(
+        &mut f,
+        json!({"room": room, "to": ["builder"], "text": "new work"}),
+    );
+    let replacement = sent_request(&sent);
+    f.deliver();
+    assert_eq!(f.request(replacement).phase, RequestPhase::Queued);
+    let saved = f.worker.store.load().unwrap().unwrap();
+    assert!(
+        saved
+            .agent(f.agent)
+            .unwrap()
+            .autonomous_stop
+            .aborted_payload
+            .as_ref()
+            .unwrap()
+            .cleared
+    );
+
+    f.status(RuntimeStatus::Idle);
+    f.worker.submission_rechecks.clear();
+    f.deliver();
+    let payload = f.typed().last().unwrap().0.clone();
+    assert_eq!(
+        payload.matches("keep this returned directive").count(),
+        1,
+        "{payload:?}"
+    );
+    assert!(payload.ends_with("new work"), "{payload:?}");
+    f.started("new-turn", &payload);
+    f.consume();
+    f.stopped("new-turn", "done");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    for request in [lead, replacement] {
+        assert_eq!(f.reply(request).as_deref(), Some("done"));
+    }
+}
+
+#[test]
+fn interrupt_bypasses_refused_steer_and_recovers_the_returned_lead() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "long glossary turn", "turn-1");
     let lead_payload = fixture.typed().last().unwrap().0.clone();
@@ -569,13 +618,13 @@ fn working_steer_refused_then_interrupt_discards_aborted_lead_on_first_queued_de
                 definitely_rejected: true,
                 timestamps: Default::default(),
             }),
-            // 2. First delivery after interrupt (queued steer) discards aborted lead payload
+            // 2. The interrupt clears the returned draft and sends its replay.
             Ok(ResponseResult::AgentPrompted {
                 agent: agent_info.clone(),
                 timestamps: Default::default(),
                 discarded_aborted_payload: true,
             }),
-            // 3. Interrupt message delivers afterwards with no aborted payload left
+            // 3. The earlier refused steer runs independently next.
             Ok(ResponseResult::AgentPrompted {
                 agent: agent_info,
                 timestamps: Default::default(),
@@ -589,68 +638,108 @@ fn working_steer_refused_then_interrupt_discards_aborted_lead_on_first_queued_de
     fixture.deliver();
     assert_eq!(fixture.request(m2_steer).phase, RequestPhase::Queued);
 
-    // M3 interrupts the lead and reserves its replay after the earlier M2.
     let room = fixture.room.0.to_string();
     let resp = send_msg(
         &mut fixture,
-        json!({
-            "room": room,
-            "to": ["builder"],
-            "text": "M3_WORKING_INT_B",
-        }),
+        json!({"room": room, "to": ["builder"], "text": "M3_WORKING_INT_B"}),
     );
     assert!(resp.ok, "{resp:?}");
-    let m3_interrupt = sent_request(&resp);
+    let interrupt = sent_request(&resp);
 
-    // Stop completes -> agent becomes Idle; first delivery after stop is queued M2,
-    // which receives and discards lead_payload.
     fixture.status(RuntimeStatus::Idle);
     fixture.deliver();
-    assert_eq!(fixture.request(m2_steer).phase, RequestPhase::Active);
+    assert_eq!(fixture.request(interrupt).phase, RequestPhase::Active);
+    assert_eq!(fixture.request(m2_steer).phase, RequestPhase::Queued);
     let status = msg_status(&mut fixture, lead_msg);
-    assert_eq!(status.result["requests"][0]["stage"], "queued");
-    assert!(fixture.request(lead).failure_reason.is_none());
+    assert_eq!(status.result["requests"][0]["stage"], "joined");
 
-    // Finish M2 and deliver M3 -> M3 receives discard_aborted_payload: None.
-    let m2_prompt = native
-        .lock()
-        .unwrap()
-        .iter()
-        .rev()
-        .find_map(|method| match method {
-            Method::AgentPromptIfIdleAtGeneration(params) if !params.steer => Some(params.clone()),
-            _ => None,
-        })
-        .expect("expected M2 delivery");
+    let last_prompt = || {
+        native
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|method| match method {
+                Method::AgentPromptIfIdleAtGeneration(params) if !params.steer => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let incoming = last_prompt();
     assert_eq!(
-        m2_prompt.discard_aborted_payload.as_deref(),
+        incoming
+            .discard_aborted_payload
+            .as_ref()
+            .and_then(|action| action.replay()),
         Some(lead_payload.as_str())
     );
-    fixture.started("turn-2", &m2_prompt.text);
+    let payload = format!("{lead_payload}\n\n{}", incoming.text);
+    fixture.started("turn-2", &payload);
     fixture.consume();
-    fixture.stopped("turn-2", "beta");
+    fixture.stopped("turn-2", "interrupt done");
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
+    assert_eq!(fixture.reply(lead).as_deref(), Some("interrupt done"));
+    assert_eq!(fixture.reply(interrupt).as_deref(), Some("interrupt done"));
 
     fixture.deliver();
-    assert_eq!(fixture.request(m3_interrupt).phase, RequestPhase::Active);
-    let m3_prompt = native
-        .lock()
-        .unwrap()
-        .iter()
-        .rev()
-        .find_map(|method| match method {
-            Method::AgentPromptIfIdleAtGeneration(params) if !params.steer => Some(params.clone()),
-            _ => None,
-        })
-        .expect("expected M3 delivery");
-    assert_eq!(m3_prompt.discard_aborted_payload, None);
-    assert!(m3_prompt.text.contains("long glossary turn"));
-    assert!(m3_prompt.text.ends_with("M3_WORKING_INT_B"));
+    assert_eq!(fixture.request(m2_steer).phase, RequestPhase::Active);
+    let next = last_prompt();
+    assert_eq!(next.discard_aborted_payload, None);
+    assert!(next.text.ends_with("M2_WORKING_STEER_B report beta"));
 }
 
 #[test]
-fn claude_interrupt_replays_both_requests_and_settles_them() {
+fn claude_back_to_back_interrupts_keep_started_requests_without_retyping_them() {
+    let mut f = Fixture::new(Provider::ClaudeCode);
+    let mut requests = vec![running(&mut f, "first committed instruction", "turn-1")];
+    let room = f.room.0.to_string();
+    let mut typed_instructions = vec![String::from("first committed instruction")];
+    for (turn, instruction) in [
+        ("turn-2", "second committed instruction"),
+        ("turn-3", "third committed instruction"),
+    ] {
+        let sent = send_msg(
+            &mut f,
+            json!({"room": room, "to": ["builder"], "text": instruction}),
+        );
+        assert!(sent.ok, "{sent:?}");
+        requests.push(sent_request(&sent));
+        f.deliver();
+        let payload = f.typed().last().unwrap().0.clone();
+        assert!(payload.ends_with(instruction), "{payload:?}");
+        for previous in &typed_instructions {
+            assert!(
+                !payload.contains(previous),
+                "retyped {previous:?}: {payload:?}"
+            );
+        }
+        typed_instructions.push(instruction.to_owned());
+        f.started(turn, &payload);
+        f.consume();
+        f.status(RuntimeStatus::Working);
+        let (replacement, interrupted) = requests.split_last().unwrap();
+        assert!(f.request(*replacement).trusted_start_bound);
+        for previous in interrupted {
+            assert_eq!(f.request(*previous).group, Some(*replacement));
+        }
+    }
+
+    f.stopped("turn-3", "done after the final instruction");
+    f.consume();
+    f.status(RuntimeStatus::Idle);
+    for request in requests {
+        assert_eq!(
+            f.reply(request).as_deref(),
+            Some("done after the final instruction")
+        );
+    }
+}
+
+#[test]
+fn claude_interrupt_keeps_the_prior_attachment_and_accepts_its_explicit_reply() {
     let mut f = Fixture::new(Provider::ClaudeCode);
     let attachment = f.dir.join("reference image.png");
     std::fs::write(&attachment, b"attachment fixture").unwrap();
@@ -676,8 +765,9 @@ fn claude_interrupt_replays_both_requests_and_settles_them() {
     f.deliver();
 
     let payload = f.typed().last().unwrap().0.clone();
-    assert!(payload.find("interrupted work").unwrap() < payload.find("new instruction").unwrap());
-    assert_eq!(payload.matches(attachment.to_str().unwrap()).count(), 1);
+    assert!(!payload.contains("interrupted work"));
+    assert!(!payload.contains(attachment.to_str().unwrap()));
+    assert!(payload.ends_with("new instruction"));
     f.started("new-turn", &payload);
     f.consume();
     let agent = f.agent.0.to_string();
@@ -750,13 +840,8 @@ fn claude_interrupt_stops_a_new_autonomous_turn_before_retrying_delivery() {
         f.deliver();
 
         let payload = f.typed().last().unwrap().0.clone();
-        let old = payload
-            .find("interrupted work")
-            .unwrap_or_else(|| panic!("{payload:?}"));
-        let new = payload
-            .find("new instruction")
-            .unwrap_or_else(|| panic!("{payload:?}"));
-        assert!(old < new, "{payload:?}");
+        assert!(!payload.contains("interrupted work"), "{payload:?}");
+        assert!(payload.ends_with("new instruction"), "{payload:?}");
         f.started("new-turn", &payload);
         f.consume();
         f.stopped("new-turn", "both prompts handled");

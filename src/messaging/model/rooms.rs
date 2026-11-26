@@ -293,6 +293,7 @@ impl BusState {
             request.failure_reason = Some("room_deleted".into());
             closed.insert(request.id);
         }
+        self.close_interrupt_groups(|lead| closed.contains(&lead), now_ms);
         for queue in self.queues.values_mut() {
             queue.retain(|request| !closed.contains(request));
         }

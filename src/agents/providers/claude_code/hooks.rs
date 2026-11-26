@@ -173,7 +173,56 @@ pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {
 /// followed by the remaining lines with blank ones dropped. Returns how many
 /// lines of `typed` it lifts and the text left behind.
 pub(crate) fn claude_lifted_images(typed: &str) -> (usize, String) {
-    lifted_images(typed, true)
+    lifted_images(&split_quoted_attachment_lines(typed), true)
+}
+
+/// Bus renders its attachments as a row of individually quoted paths. Claude
+/// moves the images to chips and displays the remaining paths on separate rows.
+pub(crate) fn split_quoted_attachment_lines(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("\" \"") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut changed = false;
+    let lines = text
+        .split('\n')
+        .flat_map(|line| {
+            if let Some(paths) = quoted_attachment_paths(line) {
+                changed = true;
+                paths
+            } else {
+                vec![line]
+            }
+        })
+        .collect::<Vec<_>>();
+    if changed {
+        std::borrow::Cow::Owned(lines.join("\n"))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
+fn quoted_attachment_paths(mut line: &str) -> Option<Vec<&str>> {
+    let mut paths = Vec::new();
+    loop {
+        let body = line.strip_prefix('"')?;
+        let mut escaped = false;
+        let end = body.char_indices().find_map(|(index, ch)| {
+            if std::mem::take(&mut escaped) {
+                return None;
+            }
+            escaped = ch == '\\';
+            (ch == '"').then_some(index)
+        })?;
+        if !Path::new(&body[..end]).is_absolute() {
+            return None;
+        }
+        let (path, rest) = line.split_at(end + 2);
+        paths.push(path);
+        if rest.is_empty() {
+            return (paths.len() > 1).then_some(paths);
+        }
+        line = rest.strip_prefix(' ')?;
+    }
 }
 
 /// Other providers retain the historical quoted-path equivalence only.
@@ -201,7 +250,17 @@ pub(crate) fn claude_text_after_image_reads(
     body: &str,
     typed: &str,
 ) -> Option<String> {
-    text_after_image_reads(images, body, typed, true)
+    let expanded = split_quoted_attachment_lines(typed);
+    if matches!(expanded, std::borrow::Cow::Owned(_)) {
+        text_after_image_reads(
+            images,
+            &split_quoted_attachment_lines(body),
+            &expanded,
+            true,
+        )
+    } else {
+        text_after_image_reads(images, body, typed, true)
+    }
 }
 
 pub(crate) fn text_after_image_reads(

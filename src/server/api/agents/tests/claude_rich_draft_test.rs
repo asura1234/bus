@@ -271,6 +271,20 @@ async fn claude_rich_paste_timeout_does_not_restore_over_an_unresolved_flush() {
 
 #[tokio::test]
 async fn claude_existing_stash_waits_for_rich_paste_materialization() {
+    let old_payload = "Late report\nDialog screenshot: /private/tmp/native-rich/fixture.png";
+    recover_stashed_claude_draft(old_payload, old_payload).await;
+}
+
+#[tokio::test]
+async fn claude_unconfirmed_attachment_draft_is_withdrawn_before_next_send() {
+    let old_payload = concat!(
+        "Late report\n",
+        "\"/tmp/frames.tsv\" \"/tmp/detail.png\" \"/tmp/report.json\""
+    );
+    recover_stashed_claude_draft(old_payload, "[Image #5][Pasted text #6 +2 lines]").await;
+}
+
+async fn recover_stashed_claude_draft(old_payload: &'static str, rendered_old_payload: &str) {
     struct ReadinessTrace {
         inner: PreservingComposer,
         sampled: std::sync::mpsc::Sender<bool>,
@@ -330,7 +344,6 @@ async fn claude_existing_stash_waits_for_rich_paste_materialization() {
             ],
         )
     };
-    let old_payload = "Late report\nDialog screenshot: /private/tmp/native-rich/fixture.png";
     paint(&runtime, ORIGINAL, false, "original rich developer draft");
     let first = runtime
         .queue_observed_input_with_inspector(
@@ -346,7 +359,8 @@ async fn claude_existing_stash_waits_for_rich_paste_materialization() {
     paint(&runtime, "", true, "original draft stashed");
     assert_eq!(key(&mut writes).await.as_ref(), old_payload.as_bytes());
     assert!(clock.wait_for_draft_wait_or_enter());
-    clock.advance(Duration::from_secs(3));
+    // Advance past both the image and plain-paste readiness budgets.
+    clock.advance(Duration::from_secs(9));
     assert!(first.recv_timeout(Duration::from_secs(5)).unwrap().is_err());
     assert!(
         writes.try_recv().is_err(),
@@ -355,7 +369,7 @@ async fn claude_existing_stash_waits_for_rich_paste_materialization() {
     // A later submission first recovers and withdraws the late, owned paste.
     paint(
         &runtime,
-        old_payload,
+        rendered_old_payload,
         true,
         "late native paste materialized",
     );

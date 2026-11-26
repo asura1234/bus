@@ -1,5 +1,5 @@
 //! Native delivery text and its exact callback-matching payload.
-use super::{AgentId, Author, BusState, Provider, RequestId, RoomId};
+use super::{AgentId, Author, BusState, Provider, Request, RequestId, RoomId};
 
 impl BusState {
     pub(super) fn message_sender(&self, author: &Author) -> Option<(String, RoomId)> {
@@ -47,6 +47,63 @@ impl BusState {
             return id.0.to_string();
         }
         format!("'{}'", agent.name.replace('\'', "'\\''"))
+    }
+
+    pub(crate) fn prepare_returned_payload(
+        &mut self,
+        request: RequestId,
+        text: String,
+    ) -> (
+        String,
+        Option<crate::protocol::api::schema::AbortedPayloadAction>,
+    ) {
+        use crate::protocol::api::{
+            schema::AbortedPayloadAction, submission::with_returned_payload,
+        };
+        let Some(row) = self.requests.get(&request) else {
+            return (text, None);
+        };
+        let Some(aborted) = self
+            .agent(row.agent_id)
+            .and_then(|agent| agent.autonomous_stop.aborted_payload.as_ref())
+        else {
+            return (text, None);
+        };
+        let replay = aborted.replay_when_returned
+            && self
+                .requests
+                .get(&aborted.request_id)
+                .is_some_and(|old| old.group == Some(request));
+        let cleared = aborted.cleared;
+        let payload = aborted.payload.clone();
+        if !replay {
+            return (
+                text,
+                (!cleared).then_some(AbortedPayloadAction::Discard(payload)),
+            );
+        }
+
+        let alternative = with_returned_payload(&payload, &text);
+        let row = self
+            .requests
+            .get_mut(&request)
+            .expect("current delivery request");
+        if cleared {
+            row.submitted_payload = Some(alternative.clone());
+            (alternative, None)
+        } else {
+            row.returned_payload_alternative = Some(alternative);
+            (text, Some(AbortedPayloadAction::Replay { replay: payload }))
+        }
+    }
+
+    pub(crate) fn choose_submitted_payload(&mut self, request: RequestId, replayed: bool) {
+        if let Some(row) = self.requests.get_mut(&request) {
+            let alternative = row.returned_payload_alternative.take();
+            if let Some(alternative) = alternative.filter(|_| replayed) {
+                row.submitted_payload = Some(alternative);
+            }
+        }
     }
 
     /// Freeze attribution with the rendered text so typing, retries and callback
@@ -146,6 +203,25 @@ impl BusState {
     }
 }
 
+impl Request {
+    pub(crate) fn matches_callback_payload(&self, payload: &str, provider: Provider) -> bool {
+        match &self.submitted_payload {
+            Some(typed) => {
+                payload_matches_for_provider(payload, typed, provider)
+                    || self
+                        .returned_payload_alternative
+                        .as_deref()
+                        .is_some_and(|alternative| {
+                            payload_matches_for_provider(payload, alternative, provider)
+                        })
+            }
+            None => {
+                payload_matches_for_provider(payload, &self.prompt.rendered_payload(), provider)
+            }
+        }
+    }
+}
+
 fn named_payload(text: &str, header: &str, marker: &str, replace_identity: bool) -> String {
     let body = if replace_identity {
         text.split_once('\n').map_or("", |(_, body)| body)
@@ -197,7 +273,8 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
 
 pub(super) fn payload_matches_for_provider(payload: &str, typed: &str, provider: Provider) -> bool {
     use crate::agents::providers::claude_code::hooks::{
-        claude_image_placeholders, claude_text_matches, lifted_images, text_after_image_reads,
+        claude_image_placeholders, claude_lifted_images, claude_text_after_image_reads,
+        claude_text_matches, lifted_images, text_after_image_reads,
     };
     let payload = normalized_payload(payload);
     let typed = normalized_payload(typed);
@@ -206,9 +283,18 @@ pub(super) fn payload_matches_for_provider(payload: &str, typed: &str, provider:
     }
     let (length, images) = claude_image_placeholders(&payload);
     let claude = provider.uses_claude_harness();
-    let (_, remaining) = lifted_images(&typed, claude);
+    let (_, remaining) = if claude {
+        claude_lifted_images(&typed)
+    } else {
+        lifted_images(&typed, false)
+    };
     let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
-    if text_after_image_reads(images, &payload[length..], &typed, claude).is_some_and(|text| {
+    let remaining_after_reads = if claude {
+        claude_text_after_image_reads(images, &payload[length..], &typed)
+    } else {
+        text_after_image_reads(images, &payload[length..], &typed, false)
+    };
+    if remaining_after_reads.is_some_and(|text| {
         let text = text.trim_end_matches(|c: char| c.is_ascii_whitespace());
         if claude {
             claude_text_matches(text, remaining)

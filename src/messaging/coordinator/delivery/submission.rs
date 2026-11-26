@@ -33,7 +33,7 @@ pub(super) fn submission_method(
     steer: bool,
     allow_working: bool,
     generation: u64,
-    discard_aborted_payload: Option<String>,
+    discard_aborted_payload: Option<schema::AbortedPayloadAction>,
 ) -> Method {
     if let Some(session) = &agent.runtime_identity.session_id {
         Method::AgentPromptIfIdleAtGeneration(schema::AgentPromptIfIdleParams {

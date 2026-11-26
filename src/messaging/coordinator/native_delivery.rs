@@ -214,7 +214,10 @@ impl Worker {
             );
             return Ok(());
         }
-        let claude_turn_busy = native_code == Some(crate::protocol::api::AGENT_CLAUDE_TURN_BUSY);
+        let returned_draft_cleared =
+            native_code == Some(crate::protocol::api::AGENT_RETURNED_DRAFT_CLEARED);
+        let claude_turn_busy = returned_draft_cleared
+            || native_code == Some(crate::protocol::api::AGENT_CLAUDE_TURN_BUSY);
         let outcome = match response {
             Err(_) if claude_turn_busy => super::SubmissionOutcome::ComposerBusy,
             Err(error)
@@ -233,12 +236,20 @@ impl Worker {
             "Native submit completed");
         let mut state = self.state.clone();
         record_native_timestamps(&mut state, request, timestamps)?;
+        if matches!(outcome, super::SubmissionOutcome::Confirmed { .. }) {
+            state.choose_submitted_payload(request, discarded_aborted_payload);
+        }
         if steered {
             state.record_steering(request, outcome.clone())
         } else {
             state.record_submission(request, outcome.clone())
         }
         .map_err(|error| error.to_string())?;
+        if returned_draft_cleared {
+            if let Some(aborted_id) = aborted_request {
+                state.retain_cleared_aborted_payload(agent.id, aborted_id);
+            }
+        }
         if discarded_aborted_payload {
             if let Some(aborted_id) = aborted_request {
                 state.record_aborted_payload_discarded(agent.id, aborted_id);

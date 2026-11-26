@@ -222,6 +222,15 @@ async fn claude_unverified_stash_binding_defers_without_writing() {
 
 #[tokio::test]
 async fn claude_interrupt_replays_returned_image_only_with_bus_ownership() {
+    interrupt_returned_image(false).await;
+}
+
+#[tokio::test]
+async fn claude_replays_previously_started_input_only_after_proven_return() {
+    interrupt_returned_image(true).await;
+}
+
+async fn interrupt_returned_image(conditional_replay: bool) {
     let _scratch = DraftTestEnvironment::new("claude-image-delivery");
     let kind = AgentKind::Claude;
     let aborted = "old prompt\n\"/tmp/t-25.png\"";
@@ -280,8 +289,18 @@ async fn claude_interrupt_replays_returned_image_only_with_bus_ownership() {
         let Method::AgentPromptIfIdle(params) = &mut follow else {
             unreachable!()
         };
-        params.text = combined.clone();
-        params.discard_aborted_payload = Some(aborted.into());
+        params.text = if conditional_replay {
+            "new instruction".into()
+        } else {
+            combined.clone()
+        };
+        params.discard_aborted_payload = Some(if conditional_replay {
+            crate::protocol::api::schema::AbortedPayloadAction::Replay {
+                replay: aborted.into(),
+            }
+        } else {
+            aborted.into()
+        });
         let response = start(&mut app, follow);
         if developer_edited {
             assert_eq!(
@@ -309,11 +328,20 @@ async fn claude_interrupt_replays_returned_image_only_with_bus_ownership() {
             );
             redraw(&app, kind, "");
         }
+        let replay = !conditional_replay || !developer_edited;
+        let (text, frame) = if replay {
+            (
+                combined.as_str(),
+                "[Image #9]old prompt\r\n  new instruction",
+            )
+        } else {
+            ("new instruction", "new instruction")
+        };
         assert_eq!(
-            step(&mut writes, &response, "combined paste").await,
-            Bytes::from(format!("\x1b[200~{combined}\x1b[201~"))
+            step(&mut writes, &response, "replacement paste").await,
+            Bytes::from(format!("\x1b[200~{text}\x1b[201~"))
         );
-        redraw(&app, kind, "[Image #9]old prompt\r\n  new instruction");
+        redraw(&app, kind, frame);
         assert_eq!(
             step(&mut writes, &response, "combined enter")
                 .await

@@ -814,7 +814,7 @@ fn a_room_and_a_message_round_trip_through_explicit_recipient_selection() {
 }
 
 #[test]
-fn a_fake_claude_agent_replays_an_interrupted_prompt_with_its_follow_up() {
+fn a_fake_claude_agent_answers_an_interrupted_request_without_retyping_it() {
     room_prompts_reach_a_fake(Session::start("cl-int"), "claude", None);
 }
 
@@ -1072,9 +1072,9 @@ fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: Option<&st
         );
     }
 
-    // Interrupt ends the running turn. Claude replays its prompt as part
-    // of the next turn; Codex and Cursor keep the replacement independent.
-    let long_task = "fake:work 6 long task";
+    // Interrupt ends the running turn. Claude shares the next turn's
+    // answer with the old request; Codex and Cursor settle it independently.
+    let long_task = "fake:work 15 long task";
     queue(long_task);
     session.ok(&[
         "wait",
@@ -1095,6 +1095,25 @@ fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: Option<&st
         },
     );
     let lead = composer_message_id(&session, long_task);
+    if provider == "claude" {
+        // The spinner proves native activity. Wait for the coordinator to
+        // bind the Started callback before checking committed-prompt behavior.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let (code, status) = parse(scratch_bus(&session, &["message", "status", &lead]));
+            assert_eq!(code, 0, "{status}");
+            let request = &status["result"]["requests"][0];
+            assert_ne!(request["turn_ended"], true, "{status}");
+            if request["start_bound"] == true {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Started did not bind: {status}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
     let (code, receipt) = parse(scratch_bus(
         &session,
         &[
@@ -1122,9 +1141,9 @@ fn room_prompts_reach_a_fake(session: Session, provider: &str, hooks: Option<&st
         assert_turn_ended(&interrupted);
         let original = &interrupted["message"]["result"]["requests"][0];
         let replacement = &settled["message"]["result"]["requests"][0];
-        assert_eq!(replacement["group"], original["request_id"]);
+        assert_eq!(original["group"], replacement["request_id"]);
         let reply = original["reply"]["text"].as_str().unwrap();
-        assert!(reply.contains(long_task), "{reply}");
+        assert!(!reply.contains(long_task), "{reply}");
         assert!(reply.contains("stop and take the next task"), "{reply}");
         assert_eq!(replacement["reply"]["text"], reply);
     } else {

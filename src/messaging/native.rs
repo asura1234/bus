@@ -228,7 +228,8 @@ fn classify_error(error: ApiClientError) -> TransportError {
         "agent_not_idle" | "dialog_redrawing" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request" | "agent_shell_starting" | "agent_shell_waiting" | "agent_shell_integration_unavailable")
         || response.error.code == crate::protocol::api::AGENT_PROMPT_NOT_SHOWN
         || response.error.code == crate::protocol::api::AGENT_COMPOSER_BUSY
-        || response.error.code == crate::protocol::api::AGENT_CLAUDE_TURN_BUSY);
+        || response.error.code == crate::protocol::api::AGENT_CLAUDE_TURN_BUSY
+        || response.error.code == crate::protocol::api::AGENT_RETURNED_DRAFT_CLEARED);
     TransportError {
         timestamps: match &error {
             ApiClientError::ErrorResponse(response) => {

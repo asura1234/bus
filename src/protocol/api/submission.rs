@@ -52,9 +52,29 @@ pub(crate) fn maximum_budget(delay: Duration, text: &[u8]) -> Duration {
     confirmation_budget(delay) + withdrawal_budget(text)
 }
 
+pub(crate) fn with_returned_payload(returned: &str, text: &str) -> String {
+    format!("{returned}\n\n{text}")
+}
+
 /// The guarded calls identify their provider. An unguarded prompt may target
 /// any provider, so reserve the largest applicable paste delay for its text.
 pub(crate) fn method_budget(method: &Method) -> Option<Duration> {
+    if let Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) =
+        method
+    {
+        if let Some(returned) = params
+            .discard_aborted_payload
+            .as_ref()
+            .and_then(|action| action.replay())
+        {
+            let text = with_returned_payload(returned, &params.text);
+            return Some(
+                maximum_budget(submit_delay(false, text.len()), text.as_bytes())
+                    + DRAFT_TRANSFER_BUDGET,
+            );
+        }
+    }
+
     let (delay, text) = match method {
         Method::AgentPromptIfIdle(params) | Method::AgentPromptIfIdleAtGeneration(params) => (
             submit_delay(params.expected_agent == "codex", params.text.len()),

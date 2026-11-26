@@ -66,12 +66,109 @@ fn assert_typed(fixture: &Fixture, expected: &str, steer: bool) {
 fn assert_interrupted_lead(fixture: &Fixture, lead: RequestId, replacement: RequestId) {
     let row = fixture.request(lead);
     if fixture.provider.uses_claude_harness() {
-        assert_eq!(row.phase, RequestPhase::Queued);
-        assert_eq!(row.interrupt_replay_before, Some(replacement));
+        assert_eq!(row.phase, RequestPhase::Active);
+        assert_eq!(row.group, Some(replacement));
         assert!(row.failure_reason.is_none());
     } else {
         assert_eq!(row.failure_reason.as_deref(), Some("interrupted"));
     }
+}
+
+#[test]
+fn interrupt_queued_while_idle_bypasses_an_ordinary_queue_head() {
+    let mut fixture = Fixture::new(Provider::ClaudeDs);
+    let ordinary = fixture.send("ordinary queued work", true);
+    let params = send_params(&fixture, "urgent work");
+    let response = send(&mut fixture, params);
+    assert!(response.ok, "{response:?}");
+    let urgent = sent_request(&response);
+    assert_eq!(
+        fixture
+            .request(urgent)
+            .send_interrupt_outcome
+            .as_ref()
+            .unwrap()
+            .outcome,
+        "already_idle"
+    );
+
+    fixture.deliver();
+
+    assert_typed(&fixture, "urgent work", false);
+    assert_eq!(fixture.request(ordinary).phase, RequestPhase::Queued);
+    assert!(stop_keys(&fixture).is_empty());
+}
+
+#[test]
+fn interrupt_queued_while_idle_stops_a_later_autonomous_turn_once() {
+    let mut fixture = Fixture::new(Provider::ClaudeDs);
+    let params = send_params(&fixture, "urgent work");
+    let response = send(&mut fixture, params);
+    assert!(response.ok, "{response:?}");
+    let urgent = sent_request(&response);
+    assert_eq!(
+        fixture
+            .request(urgent)
+            .send_interrupt_outcome
+            .as_ref()
+            .unwrap()
+            .outcome,
+        "already_idle"
+    );
+
+    fixture.started("late-autonomous-turn", "a local developer prompt");
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    fixture.deliver();
+    fixture.deliver();
+    assert_eq!(stop_keys(&fixture), [vec!["esc".to_owned()]]);
+
+    fixture.status(RuntimeStatus::Idle);
+    fixture.deliver();
+    assert_typed(&fixture, "urgent work", false);
+}
+
+#[test]
+fn interrupt_queued_while_idle_stops_an_earlier_bus_turn_if_it_starts() {
+    let mut fixture = Fixture::new(Provider::ClaudeDs);
+    let earlier = fixture.send("earlier Bus work", true);
+    let params = send_params(&fixture, "urgent work");
+    let response = send(&mut fixture, params);
+    assert!(response.ok, "{response:?}");
+    let urgent = sent_request(&response);
+    assert_eq!(
+        fixture
+            .request(urgent)
+            .send_interrupt_outcome
+            .as_ref()
+            .unwrap()
+            .outcome,
+        "already_idle"
+    );
+
+    // Reproduce an earlier submission winning the pick while the interrupt
+    // was accepted against Idle. Keep its real queued interrupt receipt.
+    let mut state = fixture.worker.state.clone();
+    let launch = state
+        .agent(fixture.agent)
+        .unwrap()
+        .runtime_identity
+        .launch_id
+        .clone()
+        .unwrap();
+    let payload = state.render_request_payload(earlier).unwrap();
+    state.begin_submission(earlier, &launch, 0).unwrap();
+    fixture.worker.save(state).unwrap();
+    fixture.started("late-bus-turn", &payload);
+    fixture.consume();
+    fixture.status(RuntimeStatus::Working);
+    assert!(fixture.request(earlier).trusted_start_bound);
+
+    fixture.deliver();
+
+    assert_eq!(stop_keys(&fixture), [vec!["esc".to_owned()]]);
+    assert_typed(&fixture, "urgent work", false);
+    assert!(fixture.request(earlier).failure_reason.is_none());
 }
 
 /// An orchestrator bound to the fixture room, as MASTER agents are.
@@ -165,8 +262,8 @@ fn a_developer_send_interrupts_the_running_turn_and_runs_as_the_next_turn() {
         fixture.deliver();
         assert_typed(&fixture, "change course now", false);
         assert_eq!(
-            fixture.request(message).group,
-            provider.uses_claude_harness().then_some(lead),
+            fixture.request(lead).group,
+            provider.uses_claude_harness().then_some(message),
             "{provider:?}"
         );
     }
@@ -220,30 +317,31 @@ fn a_second_developer_send_while_the_stop_is_in_flight_does_not_press_again() {
 }
 
 #[test]
-fn messages_queued_before_the_interrupt_survive_and_keep_their_order() {
+fn messages_queued_before_an_interrupt_survive_in_fifo_order_after_it() {
     let mut fixture = Fixture::new(Provider::ClaudeCode);
     let lead = running(&mut fixture, "run the old plan", "1");
-    let follower = fixture.send("earlier queued work", true);
+    let first = fixture.send("earlier queued work", true);
+    let second = fixture.send("later queued work", true);
     let params = send_params(&fixture, "change course now");
     let response = send(&mut fixture, params);
     let message = sent_request(&response);
     fixture.status(RuntimeStatus::Idle);
-    assert_eq!(
-        fixture.worker.state.queued_requests(fixture.agent),
-        &[follower, lead, message]
-    );
-    assert!(fixture.request(follower).failure_reason.is_none());
-    assert!(fixture.request(message).failure_reason.is_none());
-    // FIFO: work that was already waiting is not discarded or reordered.
-    fixture.deliver();
-    assert_typed(&fixture, "earlier queued work", false);
-    fixture.started("2", "earlier queued work");
-    fixture.consume();
-    fixture.stopped("2", "queued work done");
-    fixture.consume();
-    fixture.status(RuntimeStatus::Idle);
-    fixture.deliver();
-    assert_typed(&fixture, "change course now", false);
+
+    for (turn, text, request) in [
+        ("2", "change course now", message),
+        ("3", "earlier queued work", first),
+        ("4", "later queued work", second),
+    ] {
+        fixture.deliver();
+        assert_typed(&fixture, text, false);
+        fixture.started(turn, text);
+        fixture.consume();
+        fixture.stopped(turn, text);
+        fixture.consume();
+        fixture.status(RuntimeStatus::Idle);
+        assert_eq!(fixture.reply(request).as_deref(), Some(text));
+    }
+    assert_eq!(fixture.reply(lead).as_deref(), Some("change course now"));
 }
 
 #[test]
@@ -684,15 +782,13 @@ fn claude_reconciles_a_lost_stop_receipt_without_pressing_escape_again() {
     let replacement = f.worker.state.queued_requests(f.agent)[0];
     f.worker.replay_queued_send_interrupts(f.now).unwrap();
     assert_eq!(stop_keys(&f), [vec!["esc".to_owned()]]);
-    assert_eq!(
-        f.worker.state.queued_requests(f.agent),
-        &[lead, replacement]
-    );
+    assert_eq!(f.worker.state.queued_requests(f.agent), &[replacement]);
+    assert_eq!(f.request(lead).group, Some(replacement));
 
     f.status(RuntimeStatus::Idle);
     f.deliver();
     let (payload, _) = last_typed(&f);
-    assert!(payload.contains("old work"), "{payload:?}");
+    assert!(!payload.contains("old work"), "{payload:?}");
     assert!(payload.ends_with("next work"), "{payload:?}");
 }
 
@@ -1292,6 +1388,13 @@ fn busy_join_with_autonomous_claim(
     assert_eq!(stop_keys(&f).len(), 1);
     reopen_after_interrupt(&mut f);
     poll_autonomous(&mut f, "working", 10, false, None);
+    // Retire the earlier queued send so this test can exercise a busy join
+    // with its durable stop claim still present.
+    let mut state = f.worker.state.clone();
+    let stop = *state.queued_requests(autonomous).last().unwrap();
+    assert_ne!(stop, head);
+    state.recover_idle_request(stop, f.now).unwrap();
+    f.worker.save(state).unwrap();
     if !authenticated {
         callbacks::initialize(
             &f.dir.join("callbacks/autonomous-launch"),
