@@ -3,6 +3,15 @@ use std::time::Instant;
 use super::{EffectivePresentation, TerminalState, TerminalStateMutation};
 
 impl TerminalState {
+    pub(crate) fn begin_fresh_claude_resume(&mut self, previous: String) {
+        if let Some(resume) = self.native_resume.as_mut() {
+            resume.session = None;
+            resume.replaced_session_id = Some(previous);
+            self.persisted_agent_session = None;
+            self.session_reporter.clear();
+        }
+    }
+
     pub fn set_persisted_agent_session(
         &mut self,
         session: crate::agents::resume::catalog::PersistedAgentSession,

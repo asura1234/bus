@@ -240,6 +240,7 @@ impl BusState {
         task_notification: bool,
     ) {
         if let Some(owner) = self.agents.get_mut(&id) {
+            owner.claude_session_has_turn |= owner.provider.uses_claude_harness();
             let activity = &mut owner.autonomous_stop;
             if started {
                 // The first late Started does not prove a new episode. Two

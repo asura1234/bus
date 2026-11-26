@@ -85,6 +85,7 @@ impl BusState {
                 unavailable_orchestration_target: None,
                 compactions: Compactions::default(),
                 last_compaction_callback: None,
+                claude_session_has_turn: false,
                 compaction_banner_open: false,
                 session_reset_pending: false,
                 superseded_session_id: None,
@@ -304,6 +305,7 @@ impl BusState {
             || agent.runtime_identity.session_id != identity.session_id
         {
             agent.claude_shells = None;
+            agent.claude_session_has_turn = false;
         }
         if agent.runtime_identity.launch_id != identity.launch_id
             || agent.runtime_identity.terminal_id != identity.terminal_id
@@ -315,6 +317,32 @@ impl BusState {
         }
         agent.runtime_identity = identity;
         Ok(())
+    }
+
+    pub(crate) fn retire_unstarted_claude_session(
+        &mut self,
+        id: AgentId,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        if let Some(session) = agent.runtime_identity.session_id.take() {
+            agent.superseded_session_id = Some(session);
+            agent.claude_shells = None;
+            agent.session_reset_pending = false;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_claude_session_turn(&mut self, id: AgentId) {
+        if let Some(agent) = self
+            .agents
+            .get_mut(&id)
+            .filter(|agent| agent.provider.uses_claude_harness())
+        {
+            agent.claude_session_has_turn = true;
+        }
     }
 
     /// The previous server's pane is gone. Resume must not ask the replacement

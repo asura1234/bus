@@ -78,6 +78,7 @@ struct RecentAgentProcessExit {
 /// Native restore evidence outlives an unconfirmed provider process. It is
 /// retired when that process becomes interactive, rather than on client attach.
 pub(crate) struct NativeAgentResume {
+    pub(crate) replaced_session_id: Option<String>,
     pub(crate) name: String,
     pub(crate) kind: AgentKind,
     pub(crate) session: Option<crate::agents::resume::catalog::PersistedAgentSession>,

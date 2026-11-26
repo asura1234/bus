@@ -67,15 +67,14 @@ impl ResumeNative {
             assert_eq!(executable.file_name().unwrap(), "claude-gpt");
         }
         if matches!(agent.provider, Provider::ClaudeArgon | Provider::ClaudeGpt) && !self.recovery {
-            assert_eq!(
-                start
+            if agent.runtime_identity.session_id.is_some() {
+                assert_eq!(start.args[..2], ["--resume", CLAUDE_WRAPPER_SESSION]);
+            } else {
+                assert!(!start
                     .args
                     .iter()
-                    .take(2)
-                    .map(String::as_str)
-                    .collect::<Vec<_>>(),
-                ["--resume", CLAUDE_WRAPPER_SESSION]
-            );
+                    .any(|arg| arg == "--resume" || arg == CLAUDE_WRAPPER_SESSION));
+            }
         }
         assert_eq!(s.launch_attempts().count(), 2);
         assert_eq!(a.outcome, LaunchOutcome::Pending);
@@ -137,6 +136,7 @@ fn claude_argon_explicit_recovery_keeps_the_wrapper_and_saved_session() {
         state
             .set_agent_runtime_identity(agent, saved_identity)
             .unwrap();
+        state.record_claude_session_turn(agent);
         worker.save(state).unwrap();
         prepare_resume(
             &mut worker,
@@ -175,11 +175,11 @@ impl Transport for ClaudeGptResumeNative {
 }
 
 #[test]
-fn claude_gpt_explicit_recovery_keeps_the_wrapper_and_saved_session() {
+fn claude_gpt_explicit_recovery_only_reports_a_started_session() {
     let _providers = provider_binaries();
     let (_listener, url) = listening_gateway();
     let _gateway = launch::gateway_test_support::GatewayOverride::set(url, None);
-    for recovery in [false, true] {
+    for (recovery, conversation_started) in [(false, true), (true, true), (false, false)] {
         let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeGpt, vec![]);
         let mut state = worker.state.clone();
         let mut saved_identity = state.agent(agent).unwrap().runtime_identity.clone();
@@ -187,6 +187,9 @@ fn claude_gpt_explicit_recovery_keeps_the_wrapper_and_saved_session() {
         state
             .set_agent_runtime_identity(agent, saved_identity)
             .unwrap();
+        if conversation_started {
+            state.record_claude_session_turn(agent);
+        }
         worker.save(state).unwrap();
         prepare_resume(
             &mut worker,
@@ -209,6 +212,20 @@ fn claude_gpt_explicit_recovery_keeps_the_wrapper_and_saved_session() {
         let result = worker.resume_room(room).unwrap();
         assert_eq!(result["agents"][0]["outcome"], "resuming", "{result}");
         let reports = reports.lock().unwrap();
+        if !conversation_started {
+            assert!(reports.is_empty());
+            assert!(agent_of(&worker, agent)
+                .runtime_identity
+                .session_id
+                .is_none());
+            assert_eq!(
+                agent_of(&worker, agent).superseded_session_id.as_deref(),
+                Some(CLAUDE_WRAPPER_SESSION)
+            );
+            drop(worker);
+            std::fs::remove_dir_all(dir).unwrap();
+            continue;
+        }
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].pane_id, pane);
         assert_eq!(reports[0].source, "herdr:claude-gpt");

@@ -315,7 +315,7 @@ fn note_rebind(
     Ok(vec![rebind_agent(state, agent, info, serving_generation)?])
 }
 
-fn rebind_agent(
+pub(super) fn rebind_agent(
     state: &mut BusState,
     agent: &RoomAgent,
     info: &schema::AgentInfo,

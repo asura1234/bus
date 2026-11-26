@@ -109,9 +109,28 @@ fn ctrl_r_starts_the_existing_whole_session_restart_handoff() {
         "--timeout",
         "20s",
     ]);
+    let replacement = bus_state(&session)["agents"][0]["runtime_identity"]["session_id"].clone();
+    assert!(replacement.is_string(), "{replacement}");
+    assert_ne!(replacement, provider_session);
+    let (code, sent) = parse(scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "restart-worker",
+            "--text",
+            "first turn after restart",
+        ],
+    ));
+    assert_eq!(code, 0, "{sent}");
+    let message = sent["result"]["message_id"].to_string();
+    let settled = session.ok(&["wait", "--message", &message, "--timeout", "30s"]);
+    assert_turn_ended(&settled);
     assert_eq!(
-        bus_state(&session)["agents"][0]["runtime_identity"]["session_id"],
-        provider_session
+        settled["message"]["result"]["requests"][0]["session_id"],
+        replacement
     );
 }
 

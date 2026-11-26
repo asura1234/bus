@@ -54,6 +54,15 @@ pub(crate) struct LaunchExtras {
     pub(crate) args: Vec<String>,
     /// Use the conversation Bus hooks bound when the terminal kept a stale one.
     pub(crate) session: Option<PersistedAgentSession>,
+    pub(crate) discard_session: Option<String>,
+}
+
+impl LaunchExtras {
+    pub(crate) fn apply_fresh_plan(&self, plan: &mut AgentResumePlan) {
+        if self.discard_session.is_some() {
+            plan.argv.truncate(1);
+        }
+    }
 }
 
 pub(crate) fn for_native_resume(
@@ -78,8 +87,15 @@ pub(crate) fn load(
         return Ok(LaunchExtras::default());
     }
     let state = load_state(context)?;
-    let (agent, corrected, hooks) = verified_owner(context, facts, plan, &state)?;
-    prepare_capture(context, facts, agent, corrected, &hooks)
+    let CapturedOwner {
+        agent,
+        corrected,
+        hooks,
+        discard_session,
+    } = verified_owner(context, facts, plan, &state)?;
+    let mut extras = prepare_capture(context, facts, agent, corrected, &hooks)?;
+    extras.discard_session = discard_session;
+    Ok(extras)
 }
 
 pub(crate) fn revalidate(
@@ -87,14 +103,16 @@ pub(crate) fn revalidate(
     facts: &NativeResumeFacts,
     plan: &AgentResumePlan,
     session: Option<&PersistedAgentSession>,
+    discard_session: Option<&str>,
     env: &[(String, String)],
 ) -> Result<(), String> {
     let state = load_state(context)?;
-    let (_, corrected, hooks) = verified_owner(context, facts, plan, &state)?;
-    if corrected.as_ref() != session
+    let owner = verified_owner(context, facts, plan, &state)?;
+    if owner.corrected.as_ref() != session
+        || owner.discard_session.as_deref() != discard_session
         || !env
             .iter()
-            .any(|(key, value)| key == "BUS_LAUNCH_ID" && *value == hooks.launch_id)
+            .any(|(key, value)| key == "BUS_LAUNCH_ID" && *value == owner.hooks.launch_id)
     {
         return Err("Bus resume owner changed during preparation".into());
     }
@@ -121,19 +139,19 @@ fn load_state(context: &NativeResumeContext) -> Result<crate::messaging::model::
         .ok_or_else(|| "Bus resume state is missing".into())
 }
 
+struct CapturedOwner<'a> {
+    agent: &'a crate::messaging::model::RoomAgent,
+    corrected: Option<PersistedAgentSession>,
+    hooks: HookContext,
+    discard_session: Option<String>,
+}
+
 fn verified_owner<'a>(
     context: &NativeResumeContext,
     facts: &NativeResumeFacts,
     plan: &AgentResumePlan,
     state: &'a crate::messaging::model::BusState,
-) -> Result<
-    (
-        &'a crate::messaging::model::RoomAgent,
-        Option<PersistedAgentSession>,
-        HookContext,
-    ),
-    String,
-> {
+) -> Result<CapturedOwner<'a>, String> {
     let (agent, corrected) = if facts.session.is_none() {
         if super::unstarted_plan(facts, Some(&plan.argv)).as_ref() != Some(plan) {
             return Err("Bus resume has no saved provider session".into());
@@ -155,12 +173,28 @@ fn verified_owner<'a>(
         .as_deref()
         .ok_or("Bus resume data root unavailable")?;
     let hooks = ownership::verified_capture(root, agent, &context.binary)?;
-    if facts.session.is_none()
-        && crate::agents::providers::launch::reserved_session(&hooks.spool).is_some()
-    {
+    let adopted = crate::agents::providers::launch::reserved_session(&hooks.spool).is_some();
+    if facts.session.is_none() && adopted {
         return Err("Bus resume cannot replace an adopted session with an empty launch".into());
     }
-    Ok((agent, corrected, hooks))
+    let discard_session =
+        (corrected.is_none() && !adopted && super::claude_startup_only(state, agent))
+            .then_some(agent.runtime_identity.session_id.as_ref())
+            .flatten()
+            .filter(|session| !ownership::has_claude_conversation(&hooks.spool, session))
+            .cloned();
+    if facts.session.is_none()
+        && agent.runtime_identity.session_id.is_some()
+        && discard_session.is_none()
+    {
+        return Err("Bus resume cannot discard a saved provider conversation".into());
+    }
+    Ok(CapturedOwner {
+        agent,
+        corrected,
+        hooks,
+        discard_session,
+    })
 }
 
 fn prepare_capture(
@@ -233,6 +267,7 @@ fn prepare_capture(
         env: capture_environment(agent.provider, hooks)?,
         args,
         session: corrected,
+        discard_session: None,
     })
 }
 

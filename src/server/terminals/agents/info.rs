@@ -51,6 +51,7 @@ impl App {
                         .session
                         .as_ref()
                         .map(|session| session.session_ref.value.clone()),
+                    replaced_session_id: resume.replaced_session_id.clone(),
                     command: resume.command.clone(),
                     error: resume.error.clone(),
                 }

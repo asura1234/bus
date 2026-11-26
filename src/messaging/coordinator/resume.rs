@@ -158,13 +158,64 @@ fn is_unstarted(state: &BusState, agent: &RoomAgent) -> bool {
             | super::Provider::Kimi
             | super::Provider::Agy
     ) && agent.runtime_identity.session_id.is_none()
-        && agent.current_request.is_none()
+        && no_request_reached_provider(state, agent)
+}
+
+fn no_request_reached_provider(state: &BusState, agent: &RoomAgent) -> bool {
+    agent.current_request.is_none()
         && !state.requests().any(|request| {
             // A closed startup-failed send never reached provider input either.
             request.agent_id == agent.id
                 && request.phase != super::RequestPhase::Queued
                 && !request.failed_during_startup()
         })
+}
+
+fn claude_startup_only(state: &BusState, agent: &RoomAgent) -> bool {
+    agent.provider.uses_claude_harness()
+        && !agent.claude_session_has_turn
+        && no_request_reached_provider(state, agent)
+        && agent
+            .runtime_identity
+            .session_id
+            .as_deref()
+            .is_some_and(crate::agents::providers::launch::is_session_uuid)
+}
+
+impl super::Worker {
+    pub(super) fn reconcile_fresh_claude_startup(
+        &mut self,
+        state: &mut BusState,
+        agent: &RoomAgent,
+        parsed: &crate::agents::providers::spool::Parsed,
+        session: &str,
+    ) -> Result<Option<bool>, String> {
+        use crate::agents::providers::spool::Parsed;
+        if !matches!(parsed, Parsed::Session { source, .. } if source.as_deref() == Some("startup"))
+            || !claude_startup_only(state, agent)
+        {
+            return Ok(Some(false));
+        }
+        let infos = match self
+            .transport
+            .request(super::Method::AgentList(schema::EmptyParams {}))
+        {
+            Ok(super::ResponseResult::AgentList { agents }) => agents,
+            _ => return Ok(None),
+        };
+        let Some(info) = restored_agent(state, agent, &infos).filter(|info| {
+            native_attempt(agent, info).is_some_and(|attempt| attempt.replaced_session_id.is_some())
+                && info
+                    .agent_session
+                    .as_ref()
+                    .is_none_or(|native| native.value == session)
+        }) else {
+            return Ok(Some(false));
+        };
+        super::poll::rebind_agent(state, agent, info, self.serving_generation)?;
+        super::startup::watch_native_resume(state, agent, info)?;
+        Ok(Some(true))
+    }
 }
 
 /// Correlate native-owned restore evidence, never screen text or a reused pane.
@@ -174,15 +225,30 @@ pub(super) fn native_attempt<'a>(
 ) -> Option<&'a schema::NativeResumeInfo> {
     let attempt = info.native_resume.as_ref()?;
     let kind = identity::provider_kind(agent.provider).label();
+    let official_session = |session: &schema::AgentSessionInfo| {
+        session.agent == kind
+            && session.source == identity::managed_source(agent.provider)
+            && session.kind == schema::AgentSessionRefKind::Id
+    };
+    let matches_session = if let Some(previous) = attempt.replaced_session_id.as_ref() {
+        agent.provider.uses_claude_harness()
+            && attempt.session_id.is_none()
+            && (agent.runtime_identity.session_id.as_ref() == Some(previous)
+                || agent.runtime_identity.session_id.is_none()
+                    && agent.superseded_session_id.as_ref() == Some(previous))
+            && info
+                .agent_session
+                .as_ref()
+                .is_none_or(|session| official_session(session) && session.value != *previous)
+    } else {
+        attempt.session_id == agent.runtime_identity.session_id
+            && info.agent_session.as_ref().is_none_or(|session| {
+                official_session(session) && Some(&session.value) == attempt.session_id.as_ref()
+            })
+    };
     (attempt.name == identity::managed_name(agent.room_id, agent.id)
         && agent.provider.observes_label(&attempt.agent)
-        && attempt.session_id == agent.runtime_identity.session_id
-        && info.agent_session.as_ref().is_none_or(|session| {
-            session.agent == kind
-                && session.source == identity::managed_source(agent.provider)
-                && session.kind == schema::AgentSessionRefKind::Id
-                && Some(&session.value) == attempt.session_id.as_ref()
-        })
+        && matches_session
         && info
             .agent
             .as_deref()

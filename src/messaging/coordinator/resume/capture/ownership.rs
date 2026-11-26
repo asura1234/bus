@@ -46,7 +46,8 @@ pub(super) fn unstarted_owner<'a>(
             == Some(identity::managed_name(agent.room_id, agent.id).as_str())
             && facts.managed_agent.as_deref()
                 == Some(identity::provider_kind(agent.provider).label())
-            && super::super::is_unstarted(state, agent)
+            && (super::super::is_unstarted(state, agent)
+                || super::super::claude_startup_only(state, agent))
     });
     let agent = owners.next().ok_or_else(|| {
         missing_owner_reason(
@@ -59,6 +60,19 @@ pub(super) fn unstarted_owner<'a>(
         return Err("Bus resume unstarted ownership is ambiguous".into());
     }
     Ok(agent)
+}
+
+pub(super) fn has_claude_conversation(spool: &Path, session: &str) -> bool {
+    use crate::agents::providers::{claude_code, spool as callbacks};
+
+    let pending_turn = callbacks::records(spool).map_or(true, |records| records.into_iter().any(|(_, record)| {
+        !record.nested_provider && matches!(claude_code::hooks::parse(&record.value),
+            Ok(callbacks::Parsed::Started { session: observed, .. }
+                | callbacks::Parsed::Final { session: observed, .. }
+                | callbacks::Parsed::Failure { session: observed, .. }
+                | callbacks::Parsed::BackgroundPending { session: observed, .. }) if observed == session)
+    }));
+    pending_turn || claude_code::resume::has_transcript(session)
 }
 
 pub(super) fn verified_capture(

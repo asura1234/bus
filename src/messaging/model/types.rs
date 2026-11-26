@@ -380,6 +380,8 @@ pub(crate) struct RoomAgent {
     pub(crate) hook_setup_confirmed: bool,
     #[serde(default)]
     pub(crate) session_binding_invalidated: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) claude_session_has_turn: bool,
     #[serde(default)]
     pub(crate) deletion_pending: bool,
     /// Set only on MASTER agents: the work room this agent orchestrates, bound

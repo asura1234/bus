@@ -91,14 +91,22 @@ pub(super) fn watch_native_resume(
     let Some(attempt) = super::resume::native_attempt(agent, info) else {
         return Ok(());
     };
+    let fresh = attempt.replaced_session_id.is_some()
+        && agent.runtime_identity.session_id == attempt.replaced_session_id;
     if agent.deletion_pending
         || agent.session_binding_invalidated
         || agent.runtime_identity.launch_id.is_none()
-        || agent.startup.as_ref().is_some_and(|startup| {
-            startup.native_terminal_id.as_deref() == Some(info.terminal_id.as_str())
-        })
+        || !fresh
+            && agent.startup.as_ref().is_some_and(|startup| {
+                startup.native_terminal_id.as_deref() == Some(info.terminal_id.as_str())
+            })
     {
         return Ok(());
+    }
+    if fresh {
+        state
+            .retire_unstarted_claude_session(agent.id)
+            .map_err(|e| e.to_string())?;
     }
     // Runtime identity may already point at a deferred restore's terminal before
     // native launch evidence arrives. Deduplicate by the startup's own terminal.

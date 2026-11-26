@@ -69,7 +69,10 @@ impl Worker {
         parsed: &callbacks::Parsed,
     ) -> Result<bool, String> {
         let session = match parsed {
-            callbacks::Parsed::Session { session, source } if source.as_deref() == Some("new") => {
+            callbacks::Parsed::Session { session, source }
+                if source.as_deref() == Some("new")
+                    || record.manifest.provider.uses_claude_harness() =>
+            {
                 session
             }
             callbacks::Parsed::Session { .. } => return Ok(false),
@@ -88,11 +91,12 @@ impl Worker {
             crate::agents::providers::ProviderKind::Grok
                 | crate::agents::providers::ProviderKind::Kimi
                 | crate::agents::providers::ProviderKind::Agy
-        ) || self
-            .state
-            .agent(id)
-            .and_then(|a| a.superseded_session_id.as_deref())
-            != Some(session.as_str())
+        ) && !record.manifest.provider.uses_claude_harness()
+            || self
+                .state
+                .agent(id)
+                .and_then(|a| a.superseded_session_id.as_deref())
+                != Some(session.as_str())
         {
             return Ok(false);
         }

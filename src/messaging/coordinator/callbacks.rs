@@ -13,7 +13,6 @@ use std::ops::ControlFlow;
 
 type CallbackRecordResult = ControlFlow<(), (BusState, Option<ProviderCallback>, Vec<PathBuf>)>;
 type CursorCallbackResult = ControlFlow<(), (BusState, ProviderCallback, PathBuf)>;
-
 enum CallbackFlow {
     Next,
     Stop,
@@ -323,7 +322,7 @@ impl Worker {
         session: String,
         source: Option<String>,
     ) -> Result<(), String> {
-        let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
+        let agent = state.agent(id).ok_or("Unknown callback agent")?.clone();
         let mut identity = agent.runtime_identity.clone();
         let pane = identity
             .pane_id
@@ -603,9 +602,15 @@ impl Worker {
                 .as_ref()
                 .filter(|known| *known != session)
             {
+                let (agent, known) = (agent.clone(), known.clone());
+                match self.reconcile_fresh_claude_startup(&mut state, &agent, parsed, session)? {
+                    Some(true) => return Ok(ControlFlow::Continue(state)),
+                    None => return Ok(ControlFlow::Break(CallbackFlow::Stop)),
+                    Some(false) => {}
+                }
                 if record.manifest.provider == ProviderKind::Agy
                     && crate::agents::providers::agy::hooks::is_descendant_subagent(
-                        known,
+                        &known,
                         session,
                         &record.value,
                     )
@@ -627,8 +632,6 @@ impl Worker {
                     callback_session_id = %session,
                     "Callback does not own this terminal session"
                 );
-                // Retain the attested identity even on uncertain sends. Clearing
-                // it would let a repeated foreign SessionStart silently rebind.
                 if matches!(parsed, Parsed::Session { .. }) {
                     state
                         .invalidate_agent_session(id)
@@ -776,6 +779,7 @@ impl Worker {
             if !Self::mark_scheduled_turn(&mut state, &callback, record) {
                 return Ok(CallbackFlow::Stop);
             }
+            state.record_claude_session_turn(id);
             let disposition = self.apply_request_callback(id, &mut state, callback)?;
             if disposition.is_none() {
                 return Ok(CallbackFlow::Next);
