@@ -52,6 +52,7 @@ impl BusState {
             row.group = Some(replacement);
             row.trusted_start_bound = committed;
             row.interrupt_replay_before = Some(replacement);
+            row.interrupt_carried_by = None;
             row.interrupt_delivery = false;
             row.bound_turn_activity = None;
             row.delivery_epoch = None;
@@ -86,24 +87,14 @@ impl BusState {
         retired: impl Fn(RequestId) -> bool,
         now: u64,
     ) {
-        let members: Vec<_> = self
-            .requests
-            .values()
-            .filter(|row| {
-                !row.settled()
-                    && row.group.is_some_and(|lead| {
-                        retired(lead)
-                            && (row.interrupt_replay_before == Some(lead)
-                                || self.requests.get(&lead).is_some_and(|replacement| {
-                                    replacement.interrupt_delivery
-                                        && replacement.room_id != row.room_id
-                                }))
-                    })
-            })
-            .map(|row| row.id)
-            .collect();
-        for member in members {
-            let row = self.requests.get_mut(&member).expect("live member");
+        for row in self.requests.values_mut().filter(|row| {
+            !row.settled()
+                && row.group.is_some_and(|lead| {
+                    (row.interrupt_replay_before == Some(lead)
+                        || row.interrupt_carried_by == Some(lead))
+                        && retired(lead)
+                })
+        }) {
             row.phase = super::RequestPhase::Abandoned;
             row.failure_reason = Some(super::INTERRUPTED.into());
             row.completed_at_ms = Some(now);
@@ -160,10 +151,10 @@ impl BusState {
             .map(|row| row.id)
             .collect();
         for member in members {
-            self.requests
-                .get_mut(&member)
-                .expect("live member")
-                .interrupt_replay_before = None;
+            let row = self.requests.get_mut(&member).expect("live member");
+            if row.interrupt_replay_before.take() == Some(lead) && row.group == Some(lead) {
+                row.interrupt_carried_by = Some(lead);
+            }
         }
     }
 
