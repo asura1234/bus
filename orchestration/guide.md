@@ -491,6 +491,13 @@ context.
 
 ## Unblock agents
 
+Tell each worker in its brief where to message you when done or blocked. Wait
+for that message or an explicit Bus notice. The
+[binding rule on worker panes](orchestrator-rules.md#no-worker-pane-polling)
+forbids monitoring a working agent's terminal for progress. Inspect a pane
+to handle a blocked screen or diagnose a reported failure, dead agent, or
+uncertain submission.
+
 - **Blocked screens:** agents stop at permission, trust and question dialogs,
   shell prompts, pagers and other screens they cannot pass alone. Bus sends you one notice about the
   blocked worker, "Blocked, needs help to continue.", the same for every blocker and
@@ -506,9 +513,9 @@ context.
   Nothing follows when the blocker closes.
   Ask the developer about destructive or outward-facing actions only when
   existing workflow or developer authorization does not cover them.
-- **Stuck requests:** check `bus message status` (each request's `stage` and
-  `reason`), the agent's `wait_reason` in `bus state`, and `bus agent read`
-  before `bus request recover`.
+- **Reported stuck requests:** check `bus message status` (each request's
+  `stage` and `reason`) and the agent's `wait_reason` in `bus state`. Use
+  `bus agent read` if those leave a diagnostic question before `bus request recover`.
 - **Delivery is not completion.** Wait for `complete: true` from `bus wait` or
   `bus message status`.
 
