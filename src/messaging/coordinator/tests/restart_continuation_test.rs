@@ -229,6 +229,71 @@ fn restart_epoch_reopening_continuation_does_not_duplicate_the_notice() {
 }
 
 #[test]
+fn restart_epoch_claude_interrupt_group_gets_one_continuation_notice() {
+    let mut fixture = Fixture::new(Provider::ClaudeCode);
+    observe_epoch(&mut fixture, 1);
+    let mut lead = running(&mut fixture, "original instruction", "turn-1");
+    let mut members = Vec::new();
+    let room = fixture.room.0.to_string();
+    for turn in 2..=5 {
+        members.push(lead);
+        let sent = fixture.worker.control_response_with_events(
+            &crate::messaging::control::Request {
+                id: format!("restart-interrupt-{turn}"),
+                method: "message.send".into(),
+                params: json!({"room": room, "to": ["builder"], "text": format!("replacement instruction {turn}")}),
+            },
+            None,
+        );
+        assert!(sent.ok, "{sent:?}");
+        lead = RequestId(sent.result["request_ids"][0].as_u64().unwrap());
+        fixture.deliver();
+        let payload = fixture.typed().last().unwrap().0.clone();
+        fixture.started(&format!("turn-{turn}"), &payload);
+        fixture.consume();
+        fixture.status(RuntimeStatus::Working);
+        assert!(fixture.request(lead).trusted_start_bound);
+    }
+    let replay_finished = members
+        .iter()
+        .all(|member| fixture.request(*member).interrupt_replay_before.is_none());
+    let message = fixture.request(lead).prompt.id.0;
+    let joined = members
+        .iter()
+        .map(|member| fixture.request(*member).prompt.id.0.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let before = fixture.typed().len();
+
+    epoch_reopen(&mut fixture, true, 2);
+    fixture.worker.tick().unwrap();
+
+    let typed = fixture.typed();
+    assert_eq!(typed.len(), before + 1);
+    let (notice, steer) = typed.last().unwrap();
+    assert!(!steer);
+    assert_eq!(notice.matches("Bus restarted").count(), 1, "{notice}");
+    assert!(
+        notice.starts_with(&format!("[Bus message {message} ")),
+        "{notice}"
+    );
+    assert!(
+        notice.contains(&format!("Messages {joined} are still part of this task.")),
+        "{notice}"
+    );
+    assert!(!notice.contains("instruction"), "{notice}");
+    assert!(
+        replay_finished,
+        "the replacement already delivered before restart"
+    );
+    for member in members {
+        assert_eq!(fixture.request(member).group, Some(lead));
+        assert!(!fixture.request(member).settled());
+        assert!(fixture.request(member).interrupt_replay_before.is_none());
+    }
+}
+
+#[test]
 fn restart_epoch_second_restart_keeps_the_original_request_correlation() {
     let mut f = Fixture::new(Provider::Codex);
     observe_epoch(&mut f, 1);

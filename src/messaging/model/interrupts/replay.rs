@@ -86,12 +86,24 @@ impl BusState {
         retired: impl Fn(RequestId) -> bool,
         now: u64,
     ) {
-        for row in self.requests.values_mut().filter(|row| {
-            !row.settled()
-                && row
-                    .group
-                    .is_some_and(|lead| row.interrupt_replay_before == Some(lead) && retired(lead))
-        }) {
+        let members: Vec<_> = self
+            .requests
+            .values()
+            .filter(|row| {
+                !row.settled()
+                    && row.group.is_some_and(|lead| {
+                        retired(lead)
+                            && (row.interrupt_replay_before == Some(lead)
+                                || self.requests.get(&lead).is_some_and(|replacement| {
+                                    replacement.interrupt_delivery
+                                        && replacement.room_id != row.room_id
+                                }))
+                    })
+            })
+            .map(|row| row.id)
+            .collect();
+        for member in members {
+            let row = self.requests.get_mut(&member).expect("live member");
             row.phase = super::RequestPhase::Abandoned;
             row.failure_reason = Some(super::INTERRUPTED.into());
             row.completed_at_ms = Some(now);
@@ -99,6 +111,9 @@ impl BusState {
     }
 
     pub(crate) fn interrupt_group_payload(&mut self, lead: RequestId) -> Option<String> {
+        if self.requests.get(&lead)?.restart_continuation {
+            return None;
+        }
         let mut parts = self.interrupt_group(lead);
         if parts.is_empty() {
             return None;
@@ -136,18 +151,19 @@ impl BusState {
     }
 
     pub(in crate::messaging::model) fn finish_interrupt_replay(&mut self, lead: RequestId) {
-        if self
+        let members: Vec<_> = self
             .requests
-            .get_mut(&lead)
-            .and_then(|row| row.interrupt_replay_before.take())
-            .is_some()
-        {
-            for id in self.group_members(lead) {
-                self.requests
-                    .get_mut(&id)
-                    .expect("replayed member")
-                    .interrupt_replay_before = None;
-            }
+            .values()
+            .filter(|row| {
+                row.interrupt_replay_before.is_some() && (row.id == lead || row.group == Some(lead))
+            })
+            .map(|row| row.id)
+            .collect();
+        for member in members {
+            self.requests
+                .get_mut(&member)
+                .expect("live member")
+                .interrupt_replay_before = None;
         }
     }
 
