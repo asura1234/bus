@@ -1,5 +1,6 @@
 //! Preserve complete native objects for Claude; exact editor text elsewhere.
 use super::{input, ownership::OwnedComposer, AgentKind, InputObservation};
+use crate::agents::providers::claude_code::hooks::claude_complete_paste_body;
 use crate::terminal::runtime::{DraftPreservation, EditorSubmission, SubmissionInspector};
 use bytes::Bytes;
 use std::{
@@ -71,13 +72,26 @@ impl AbortedMatcher {
             if opaque && !unedited_stop {
                 return InputObservation::Other;
             }
-            if super::observe_since_launch(kind, screen, &self.payload, cursor, pristine)
-                == InputObservation::Pending
+            let framed = kind == AgentKind::Claude
+                && unedited_stop
+                && claude_complete_paste_body(&body).is_some_and(|text| {
+                    text.chars()
+                        .filter(|character| !character.is_whitespace())
+                        .eq(self.normalized.chars())
+                });
+            if framed
+                || super::observe_since_launch(kind, screen, &self.payload, cursor, pristine)
+                    == InputObservation::Pending
             {
                 self.started = true;
                 self.last_len = body.len();
                 self.progress = self.progress.wrapping_add(1);
-                if opaque {
+                if framed {
+                    self.normalized = body
+                        .chars()
+                        .filter(|character| !character.is_whitespace())
+                        .collect();
+                } else if opaque {
                     self.opaque = Some(body);
                 }
                 return InputObservation::Pending;

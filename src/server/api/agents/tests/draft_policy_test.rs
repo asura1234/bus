@@ -68,6 +68,34 @@ fn claude_aborted_image_cleanup_pins_the_remaining_chips() {
 }
 
 #[test]
+fn claude_aborted_paste_frame_requires_the_whole_unedited_return() {
+    let payload = "Bus prompt\nline two";
+    let framed =
+        format!("<pasted_content id=\"123abc\">\n{payload}\n</pasted_content id=\"123abc\">");
+    let kind = AgentKind::Claude;
+    for (body, unedited) in [
+        (framed.clone(), false),
+        (format!("{framed}\ndeveloper draft"), true),
+        (
+            framed.replace("/pasted_content id=\"123abc", "/pasted_content id=\"123def"),
+            true,
+        ),
+        (framed.replace("line two", "edited line two"), true),
+    ] {
+        assert_eq!(
+            AbortedMatcher::new(payload.into()).observe(
+                kind,
+                &screen(kind, &body),
+                None,
+                false,
+                unedited
+            ),
+            InputObservation::Other
+        );
+    }
+}
+
+#[test]
 fn each_supported_provider_selects_its_verified_draft_preservation_path() {
     for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Cursor] {
         let observer = inspector(kind);

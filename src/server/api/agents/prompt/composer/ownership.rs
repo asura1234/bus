@@ -29,6 +29,11 @@ fn normalize(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
+fn claude_send_now_hint(row: &str) -> bool {
+    row.split('·')
+        .any(|part| part.trim() == "ctrl+enter to send now")
+}
+
 impl OwnedComposer {
     pub(super) fn diagnose_with_policy(
         &self,
@@ -128,10 +133,34 @@ impl SubmissionInspector for OwnedComposer {
     }
 
     fn native_queue_visible(&self, screen: &str) -> bool {
+        if self.kind != AgentKind::Claude {
+            return false;
+        }
         let plain = super::super::plain_screen(screen);
         let lines: Vec<_> = plain.lines().map(str::to_owned).collect();
-        crate::terminal::driver::editable_composer_region(&lines).is_some_and(|region| {
-            lines[region.start]
+        let Some(region) = crate::terminal::driver::editable_composer_region(&lines) else {
+            return plain.lines().any(claude_send_now_hint);
+        };
+        let send_now = lines[..region.start.saturating_sub(1)]
+            .iter()
+            .rev()
+            .map(String::as_str)
+            .filter(|row| !row.trim().is_empty())
+            .find(|row| {
+                claude_send_now_hint(row)
+                    || !crate::agents::manifest::detect_with_osc(
+                        AgentKind::Claude,
+                        crate::agents::manifest::DetectionInput {
+                            screen: row,
+                            osc_title: "",
+                            osc_progress: "",
+                        },
+                    )
+                    .visible_working
+            })
+            .is_some_and(claude_send_now_hint);
+        send_now
+            || (lines[region.start]
                 .trim()
                 .strip_prefix('❯')
                 .is_some_and(|row| row.trim() == "Press up to edit queued messages")
@@ -139,8 +168,7 @@ impl SubmissionInspector for OwnedComposer {
                     super::styled_chars(row)
                         .iter()
                         .any(|cell| cell.faint && cell.character == 'P')
-                })
-        })
+                }))
     }
 
     fn record_submit_frame(&self, screen: &str) {
@@ -154,10 +182,7 @@ impl SubmissionInspector for OwnedComposer {
         // A native queued prompt can echo above the composer like a transcript
         // entry. The send-now hint marks that screen as unconsumed.
         self.kind == AgentKind::Claude
-            && !super::super::plain_screen(screen).lines().any(|row| {
-                row.split('·')
-                    .any(|part| part.trim() == "ctrl+enter to send now")
-            })
+            && !self.native_queue_visible(screen)
             && self.prompt_echoes(screen) > self.submit_echoes.load(Ordering::Relaxed)
     }
 
