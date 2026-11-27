@@ -202,6 +202,7 @@ impl BusState {
                 .current_request = None;
             return ContinuationPreparation::Prepared;
         };
+        self.finish_interrupt_replay(id);
         for id in &pending {
             let request = self.requests.get_mut(id).expect("retained request");
             request.phase = if *id == lead {
@@ -225,6 +226,7 @@ impl BusState {
             request.submission_boundary = None;
             request.submission_status_revision = 0;
             request.trusted_start_bound = false;
+            request.interrupt_replay_before = None;
             request.uncertain_outcome = false;
             request.failure_reason = None;
             request.submission_error = None;

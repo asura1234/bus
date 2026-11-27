@@ -616,6 +616,8 @@ pub(crate) struct Request {
     /// An unfinished Claude request goes immediately before this queued follow-up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) interrupt_replay_before: Option<RequestId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) interrupt_carried_by: Option<RequestId>,
     /// Native launch/draft/recovery detail belongs to this send, beyond agent changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) submission_error: Option<String>,

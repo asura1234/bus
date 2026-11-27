@@ -351,7 +351,28 @@ fn drafts_and_names_are_room_local_and_ids_survive_renames() {
 #[test]
 fn deleting_a_replacement_room_settles_cross_room_interrupt_members() {
     for submitted in [false, true] {
-        let (mut state, original_room, _, claude) = state_with_room_and_agents();
+        let mut state = BusState::new();
+        let claude = master_agent(&mut state, "orchestrator");
+        let original_room = state.create_room("original").unwrap();
+        state.bind_orchestrator(claude, original_room).unwrap();
+        let worker = state
+            .create_agent(
+                original_room,
+                "worker",
+                Provider::Codex,
+                "/repo".into(),
+                None,
+            )
+            .unwrap();
+        state
+            .set_agent_runtime_identity(
+                claude,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch-claude".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         let replacement_room = state.create_room("interrupt source").unwrap();
         let original = submit_text(&mut state, original_room, claude, "original work");
         start_request(&mut state, original, "launch-claude", 20);
@@ -372,9 +393,37 @@ fn deleting_a_replacement_room_settles_cross_room_interrupt_members() {
         state
             .requeue_interrupted_turn(claude, replacement, 31)
             .unwrap();
-        if submitted {
+        let later_dialog = if submitted {
             submit_request(&mut state, replacement, "launch-claude", 35);
-        }
+            state
+                .observe_status(claude, RuntimeStatus::Working, 36)
+                .unwrap();
+            let Some(DialogNoticeTo::Orchestrator(notice)) =
+                state.post_blocked_notice(worker, 37).unwrap()
+            else {
+                panic!("blocked notice should reach the orchestrator");
+            };
+            state
+                .set_dialog_notice(worker, Some("blocked".into()))
+                .unwrap();
+            state
+                .set_dialog_notice_to(worker, Some(DialogNoticeTo::Orchestrator(notice)))
+                .unwrap();
+            state.begin_steering(notice, replacement).unwrap();
+            state
+                .record_steering(
+                    notice,
+                    SubmissionOutcome::Confirmed {
+                        provider_session_id: None,
+                        provider_turn_id: None,
+                    },
+                )
+                .unwrap();
+            assert_eq!(state.request(notice).unwrap().group, Some(replacement));
+            Some(notice)
+        } else {
+            None
+        };
         let unrelated = submit_text(&mut state, original_room, claude, "unrelated work");
 
         state.prepare_delete_room(replacement_room).unwrap();
@@ -395,6 +444,9 @@ fn deleting_a_replacement_room_settles_cross_room_interrupt_members() {
         assert_eq!(original.phase, RequestPhase::Abandoned);
         assert_eq!(original.failure_reason.as_deref(), Some("interrupted"));
         assert_eq!(original.completed_at_ms, Some(40));
+        if let Some(notice) = later_dialog {
+            assert!(!state.request(notice).unwrap().settled());
+        }
     }
 }
 
