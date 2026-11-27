@@ -99,6 +99,34 @@ fn worker_brief_rule_preserves_original_links_and_file_paths() {
 }
 
 #[test]
+fn shipped_orchestrator_instructions_forbid_pane_polling_for_progress() {
+    let data = temp_root("no-worker-pane-polling");
+    let docs = write_docs(&data).unwrap();
+    let rules = std::fs::read_to_string(docs.join("orchestrator-rules.md")).unwrap();
+    let prompt = fill(DEFAULT_PROMPT, &values(Some(("test", 7)), &data));
+    let anchor = "no-worker-pane-polling";
+
+    for (name, text) in [("rules", &rules), ("prompt", &prompt)] {
+        let text = flat(text);
+        for phrase in [
+            "Never poll or stare at a working agent's terminal pane for progress",
+            "message you when done or blocked",
+            "wait for their Bus message or an explicit Bus notice",
+            "`bus agent read` and `bus agent observe` only to handle a blocked screen",
+            "diagnose a reported failure, dead agent, or uncertain submission",
+        ] {
+            assert!(text.contains(phrase), "{name} is missing {phrase}");
+        }
+    }
+    assert!(rules.contains(&format!(r#"id="{anchor}""#)));
+    assert!(prompt.contains(&format!(
+        "{}#{anchor}",
+        docs.join("orchestrator-rules.md").display()
+    )));
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
 fn workflow_discovery_and_assumption_rules_are_binding() {
     let rules = include_str!("../../../orchestration/rules.md");
     assert!(rules[rules.find("- **").unwrap()..]

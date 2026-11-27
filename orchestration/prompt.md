@@ -32,9 +32,9 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
    `--async` and follow ordinary worker messages or bounded foreground
    `bus wait` calls. Do not rely on background completion to resume your turn.
    You do not write code, run builds, review diffs, or edit repository files
-   yourself. You only read: `bus state`, `bus history`, `bus message status`,
-   `bus agent read`, and files the agents point you to. The one exception:
-   you answer agents' dialogs (see Rules).
+   yourself. You read `bus state`, `bus history`, `bus message status`,
+   and files the agents point you to. You also diagnose agent failures and
+   answer agents' dialogs as described in Rules.
 4. **Follow and adapt.** When a background send exits, read the actual reply
    with `bus message status`, reconcile the room history, decide the next step,
    and rewrite the workflow when reality changes: a step fails, a gate cannot be
@@ -160,6 +160,12 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   app relaunch/retry lease. [Guide]({{DOCS}}/orchestrator-guide.md#resource-leases-and-build-slots).
 - For an Unavailable agent, follow the
   [binding replacement rule]({{DOCS}}/orchestrator-rules.md#unavailable-agents).
+- Never poll or stare at a working agent's terminal pane for progress. Tell
+  workers in their briefs to message you when done or blocked, and wait for
+  their Bus message or an explicit Bus notice. Use `bus agent read` and
+  `bus agent observe` only to handle a blocked screen or diagnose a reported
+  failure, dead agent, or uncertain submission.
+  [Full rule]({{DOCS}}/orchestrator-rules.md#no-worker-pane-polling).
 - Agents stop at screens they cannot pass alone, including permission, trust
   and question dialogs, shell prompts and pagers. A blocked worker sends you one message, "Blocked,
   needs help to continue.", with no details; a `--async` send keeps waiting

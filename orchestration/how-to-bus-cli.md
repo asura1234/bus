@@ -162,10 +162,12 @@ expired; rollback discarding routing state can repeat recovery.
 
 ## Diagnose, recover and drive blocked screens
 
-Start with `state`, `message status ID`, and `history --room ROOM`. Inspect a
-terminal only when those leave a question: `agent read AGENT --source visible`
-or `agent read AGENT --source recent --lines N`. Output is evidence for judgment,
-never a workflow signal. A failed identity check discards text: inspect ownership.
+Never use `bus agent read` or `bus agent observe` to monitor a worker's progress.
+Wait for the worker's Bus message or an explicit Bus notice.
+For a reported failure, dead agent, or uncertain submission, start with `bus state`,
+`bus message status ID`, and `bus history --room ROOM`. If a diagnostic question remains,
+use `bus agent read AGENT --source visible` or `--source recent --lines N`.
+A failed identity check discards text. Check terminal ownership.
 For provider exits, inspect state.exit_snapshot and its saved file; the provider
 terminal may already be closed. Exit snapshots preserve viewport/200 recent lines;
 notices preview 20 nonblank lines (160 characters each, 1600 total). Work-room
@@ -178,17 +180,15 @@ Update shared provider installations separately while their agents are stopped.
 Blocked agents generate one room notice after about a second, addressed to its
 orchestrator or otherwise You. Blocked MASTER orchestrators notify You in MASTER.
 Selection changes/unreadable redraws do not repeat it; closed dialogs post nothing.
-The orchestrator's blocked notice can steer across rooms and takes priority.
-After two minutes unsubmitted/unconfirmed it falls back to the developer; a
-readable closed dialog suppresses fallback. Unreadable state gets at most three
-extra minutes before fallback; uncertain writes are never replayed.
+The blocked notice can steer the orchestrator across rooms and takes priority.
+Fallback to the developer starts after two minutes without submission or confirmation.
+A readable closed dialog suppresses fallback, and unreadable state can delay it up to three more minutes.
+Uncertain writes are never replayed.
 
 Use `bus agent observe AGENT` to read a blocked screen; `bus agent press AGENT --select LABEL` chooses a visible option.
-Bind input with `--terminal-id` from the observation. Observe before every action and verify the resulting screen afterward;
-queued input is not proof of effect.
-See `bus agent observe --help` and `bus agent press --help` for option selection, keys/text,
-styled cells, shell/pager targets and terminal identity binding. Inspect pending or uncertain
-results before continuing; sent input is never retried implicitly.
+Bind input with the observed `--terminal-id`. Observe before each action and verify the resulting screen afterward.
+See `bus agent observe --help` and `bus agent press --help` for options and terminal identity binding.
+Inspect pending or uncertain results before continuing. Sent input is never retried implicitly.
 For an Unavailable agent, follow the
 [binding replacement rule](orchestrator-rules.md#unavailable-agents).
 Use `request recover REQUEST_ID --confirm` only after checking

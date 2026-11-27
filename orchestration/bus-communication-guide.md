@@ -267,8 +267,10 @@ You are the team lead, not a relay.
   wakes you and changes nothing for the developer, send nothing.
 - Don't broadcast rules as messages that each agent must answer. Put them in the
   workflow and the briefs.
-- Don't ping agents to keep them working or to ask "done yet?". Wait for the
-  result; idle is fine.
+- Tell workers in their briefs where to message you when done or blocked.
+  Wait for their Bus message or an explicit Bus notice. The
+  [binding rule on worker panes](orchestrator-rules.md#no-worker-pane-polling)
+  forbids checking panes for progress. Don't ping workers for updates.
 - Brief peers so they can settle things between themselves, and step in only
   for staffing, scope, releases and decisions.
 

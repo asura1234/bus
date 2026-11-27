@@ -406,6 +406,16 @@ the wrapper remains held.
   agent in an existing folder and brief it from the old agent's handover or
   resume note.
 
+<a id="no-worker-pane-polling"></a>
+
+- **Never poll or stare at a working agent's terminal pane for progress.**
+  Tell the worker in its brief to message you when done or blocked, and wait for
+  their Bus message or an explicit Bus notice, such as "Blocked, needs help to
+  continue.", a startup failure, or an uncertain submission. Use `bus agent read`
+  and `bus agent observe` only to handle a blocked screen or diagnose a reported
+  failure, dead agent, or uncertain submission. Progress reads waste tokens and
+  add coordinator load.
+
 - **On "Blocked, needs help to continue.", look at the worker's terminal.** A
   worker blocked on a dialog, question, trust prompt, shell prompt, pager or any
   other screen gets you exactly that Bus notice, once, with no details;
