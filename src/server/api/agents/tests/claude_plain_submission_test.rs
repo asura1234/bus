@@ -307,6 +307,51 @@ struct IsolatedDraftEnv {
     previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
 }
 
+#[tokio::test]
+async fn claude_send_now_hint_blocks_confirmation_from_an_empty_composer() {
+    for (hint, expires) in [
+        ("ctrl+enter to send now", false),
+        ("1 queued · ctrl+enter to send now\r\n✻ Working…", true),
+    ] {
+        let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+        let expiry = confirmation_expiry(&method);
+        let response = start(&mut app, method);
+        assert_eq!(
+            next_write(&mut writes).await.as_ref(),
+            b"\x1b[200~from bus\x1b[201~"
+        );
+        redraw(&app, AgentKind::Claude, "from bus");
+        assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+        clock(&app).wait_for_enters(1);
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        app.lookup_runtime_sender(0, pane).unwrap().test_process_pty_bytes(
+            format!("\x1b[2J\x1b[H❯ from bus\r\n  {hint}\r\n\r\n────────────────────────\r\n❯ \r\n────────────────────────\r\n").as_bytes(),
+        );
+        let generation = clock(&app).advance(Duration::from_millis(300));
+        clock(&app).wait_for_submission_check(generation);
+        assert!(
+            response.try_recv().is_err(),
+            "native queue is not consumption"
+        );
+        assert!(writes.try_recv().is_err(), "do not force-send or replay");
+        if expires {
+            clock(&app).advance(expiry);
+            let reply = response.recv_timeout(WAIT).unwrap();
+            assert!(reply.contains("The message may have run"), "{reply}");
+        } else {
+            redraw(&app, AgentKind::Claude, "");
+            assert!(response
+                .recv_timeout(WAIT)
+                .unwrap()
+                .contains("agent_prompted"));
+        }
+        assert!(
+            writes.try_recv().is_err(),
+            "leave native queue editing to Claude"
+        );
+    }
+}
+
 impl IsolatedDraftEnv {
     fn new() -> Self {
         let env = crate::utils::test_env::env_lock();
@@ -407,6 +452,94 @@ async fn claude_interrupt_delivery_discards_returned_aborted_payload_without_sta
         writes.try_recv().is_err(),
         "no stash/restore keys and no stray bytes after submit; a later Enter sees an empty composer"
     );
+}
+
+#[tokio::test]
+async fn claude_interrupt_chain_replays_framed_pastes_once_without_stashing() {
+    let _env = IsolatedDraftEnv::new();
+    let kind = AgentKind::Claude;
+    let (mut app, template, mut writes) = provider_fixture(kind, true, "");
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let mut submitted = String::new();
+    for message in [59882, 59884, 59886, 59888] {
+        let next = format!("[Bus message {message} from you (room 0)]\nstep {message}");
+        let mut method = template.clone();
+        let Method::AgentPromptIfIdle(params) = &mut method else {
+            unreachable!();
+        };
+        params.text = next.clone();
+        let replaying = !submitted.is_empty();
+        let mut returned = Vec::new();
+        if replaying {
+            let agent = app.agent_info(0, pane).unwrap();
+            let response = app.handle_api_request(Request {
+                id: "stop".into(),
+                method: Method::AgentSendKeys(crate::protocol::api::schema::AgentSendKeysParams {
+                    target: agent.pane_id,
+                    keys: vec!["esc".into()],
+                    expected_terminal_id: Some(agent.terminal_id),
+                    expected_activity: None,
+                    native_interrupt: None,
+                }),
+            });
+            assert!(response.contains("\"type\":\"ok\""), "{response}");
+            assert_eq!(next_write(&mut writes).await.as_ref(), b"\x1b");
+            if message != 59884 {
+                returned.push("<pasted_content id=\"8bad00\">".to_owned());
+            }
+            returned.extend(submitted.split('\n').map(str::to_owned));
+            if message != 59884 {
+                returned.push("</pasted_content id=\"8bad00\">".to_owned());
+            }
+            redraw(&app, kind, &returned.join("\r\n"));
+            params.discard_aborted_payload =
+                Some(crate::protocol::api::schema::AbortedPayloadAction::Replay {
+                    replay: submitted.clone(),
+                });
+            submitted = format!("{submitted}\n\n{next}");
+        } else {
+            submitted = next;
+        }
+        let response = start(&mut app, method);
+        while !returned.is_empty() {
+            assert_eq!(
+                next_write(&mut writes).await.as_ref(),
+                b"\x01",
+                "clear the Bus paste, never stash it"
+            );
+            redraw(&app, kind, &returned.join("\r\n"));
+            assert_eq!(next_write(&mut writes).await.as_ref(), b"\x0b");
+            returned.remove(0);
+            while returned.first().is_some_and(String::is_empty) {
+                returned.remove(0);
+            }
+            if returned.is_empty() {
+                redraw(&app, kind, "");
+            } else {
+                redraw(&app, kind, &format!("\r\n{}", returned.join("\r\n")));
+                assert_eq!(next_write(&mut writes).await.as_ref(), b"\x15");
+                redraw(&app, kind, &returned.join("\r\n"));
+            }
+        }
+        assert_eq!(
+            next_write(&mut writes).await,
+            Bytes::from(format!("\x1b[200~{submitted}\x1b[201~"))
+        );
+        redraw(&app, kind, &submitted.replace('\n', "\r\n"));
+        assert_eq!(next_write(&mut writes).await.as_ref(), b"\r");
+        redraw(&app, kind, "");
+        let reply: serde_json::Value =
+            serde_json::from_str(&response.recv_timeout(WAIT).unwrap()).unwrap();
+        assert_eq!(reply["result"]["type"], "agent_prompted", "{reply}");
+        assert_eq!(
+            reply["result"]["discarded_aborted_payload"]
+                .as_bool()
+                .unwrap_or_default(),
+            replaying,
+            "{reply}"
+        );
+        assert!(writes.try_recv().is_err());
+    }
 }
 
 #[tokio::test]

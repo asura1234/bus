@@ -112,20 +112,20 @@ fn claude_api_error(value: &Value) -> String {
 fn unwrap_claude_paste(prompt: String) -> String {
     let placeholders = claude_image_placeholders(&prompt).0;
     let (images, body) = prompt.split_at(placeholders);
-    let unwrapped = (|| {
-        let framed = body.trim_matches(|c: char| c.is_ascii_whitespace());
-        let rest = framed.strip_prefix("<pasted_content id=\"")?;
-        let (id, rest) = rest.split_once("\">\n")?;
-        if id.is_empty() || id.contains(['"', '<', '>', '\n']) {
-            return None;
-        }
-        rest.strip_suffix(&format!("\n</pasted_content id=\"{id}\">"))
-            .map(str::to_owned)
-    })();
-    match unwrapped {
+    match claude_complete_paste_body(body) {
         Some(text) => format!("{images}{text}"),
         None => prompt,
     }
+}
+
+pub(crate) fn claude_complete_paste_body(body: &str) -> Option<&str> {
+    let framed = body.trim_matches(|character: char| character.is_ascii_whitespace());
+    let rest = framed.strip_prefix("<pasted_content id=\"")?;
+    let (id, rest) = rest.split_once("\">\n")?;
+    if id.is_empty() || id.contains(['"', '<', '>', '\n']) {
+        return None;
+    }
+    rest.strip_suffix(&format!("\n</pasted_content id=\"{id}\">"))
 }
 
 /// A complete leading paste can coexist with text typed beside its atomic
