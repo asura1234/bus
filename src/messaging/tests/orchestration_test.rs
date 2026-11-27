@@ -60,6 +60,23 @@ fn written_cli_guide_points_to_command_help() {
 }
 
 #[test]
+fn written_guides_show_one_send_for_multiple_recipients() {
+    let data = temp_root("multi-recipient-send");
+    let docs = write_docs(&data).unwrap();
+    for file in ["bus-communication-guide.md", "how-to-bus-cli.md"] {
+        let guide = flat(&std::fs::read_to_string(docs.join(file)).unwrap());
+        for phrase in [
+            "bus send --room ROOM --as AGENT --to agent1,agent2,agent3",
+            "multiple workers or multiple orchestrators",
+            "instead of looping over recipients",
+        ] {
+            assert!(guide.contains(phrase), "{file} is missing {phrase}");
+        }
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
 fn worker_brief_rule_preserves_original_links_and_file_paths() {
     let data = temp_root("original-brief-references");
     let docs = write_docs(&data).unwrap();

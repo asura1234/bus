@@ -37,6 +37,14 @@ in MASTER, not even to their own orchestrator: send from your own work room
 reached from your own room too; names resolve across rooms.
 Bus refuses new worker sends in MASTER; replies to requests received there remain allowed.
 
+**Send the same message, brief, or result once** to multiple workers or
+multiple orchestrators instead of looping over recipients. Put comma-separated
+agent names or IDs in `--to`:
+
+```sh
+bus send --room ROOM --as AGENT --to agent1,agent2,agent3 --text 'Review the updated brief'
+```
+
 A message sent to several recipients lists them all in its header. Anyone
 listed already has it: never relay or summarise it to them. Send only the
 changed instruction, grant or result to the people whose next action it changes.
