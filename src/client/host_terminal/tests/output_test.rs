@@ -288,6 +288,44 @@ fn host_geometry_rejects_old_frames_and_patches_before_the_resize_event() {
 }
 
 #[test]
+fn discarded_text_frame_requires_a_new_composition_before_patching() {
+    let width = Arc::new(AtomicU16::new(4));
+    let grid = width.clone();
+    let (mut output, capture, entered) =
+        slow_with_grid(false, move || Some((grid.load(Ordering::Acquire), 1)));
+    output.frame(frame("A", 4), false, false).unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    output.frame(frame("B", 4), true, false).unwrap();
+    width.store(3, Ordering::Release);
+    release(&capture);
+    output.wait_idle();
+    assert_eq!(capture.0.lock().unwrap().flushes, 1);
+    output.feedback().unwrap();
+
+    width.store(4, Ordering::Release);
+    assert!(
+        !output.patch(&[], None, false).unwrap(),
+        "a discarded frame is not an eligible patch baseline"
+    );
+}
+
+#[test]
+fn geometry_change_during_write_does_not_acknowledge_the_frame() {
+    let width = Arc::new(AtomicU16::new(4));
+    let grid = width.clone();
+    let (mut output, capture, entered) =
+        slow_with_grid(false, move || Some((grid.load(Ordering::Acquire), 1)));
+    output.frame(frame("A", 4), false, false).unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    width.store(3, Ordering::Release);
+    release(&capture);
+    output.wait_idle();
+
+    assert_eq!(capture.0.lock().unwrap().flushes, 1);
+    assert_eq!(output.feedback().unwrap().cleared, None);
+}
+
+#[test]
 fn discarded_graphics_holds_composition_until_the_cache_can_recover() {
     let (mut output, capture, entered) = slow(false);
     let _route = output.route();

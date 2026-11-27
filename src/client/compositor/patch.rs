@@ -60,7 +60,9 @@ fn fast_path_blocker(
     state: &ClientShellState,
     patch: &crate::protocol::wire::PaneSurfacePatch,
 ) -> Option<&'static str> {
-    if state.config_diagnostic.is_some() {
+    if state.resized_surface_pending {
+        Some("client_surface_patch.fallback.resize")
+    } else if state.config_diagnostic.is_some() {
         Some("client_surface_patch.fallback.config_diagnostic")
     } else if state.copy_feedback.is_some() {
         Some("client_surface_patch.fallback.copy_feedback")

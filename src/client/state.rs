@@ -44,6 +44,12 @@ impl ClientState {
             .output
             .feedback()
             .inspect_err(|_| self.request_repaint())?;
+        if feedback.discarded_frame {
+            self.request_repaint();
+            if let Some(shell) = self.shell.as_mut() {
+                shell.compose_deferred = true;
+            }
+        }
         let Some(shell) = self.shell.as_mut() else {
             return Ok(());
         };

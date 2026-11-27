@@ -38,8 +38,13 @@ impl TerminalOutput {
     }
 
     #[cfg(test)]
-    fn with_writer(writer: impl Write + Send + 'static) -> io::Result<Self> {
+    pub(in crate::client) fn with_writer(writer: impl Write + Send + 'static) -> io::Result<Self> {
         Self::with_metrics(writer, &metrics::OUTPUT)
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn wait_idle(&self) {
+        self.handle.wait_idle();
     }
 
     #[cfg(test)]
@@ -162,8 +167,12 @@ impl TerminalOutput {
         self.handle.push(Command::EncodedFrame(bytes))
     }
 
-    pub(in crate::client) fn feedback(&self) -> io::Result<Feedback> {
-        self.handle.feedback()
+    pub(in crate::client) fn feedback(&mut self) -> io::Result<Feedback> {
+        let feedback = self.handle.feedback()?;
+        if feedback.discarded_frame {
+            self.reset_baseline();
+        }
+        Ok(feedback)
     }
 
     pub(in crate::client) fn finish(&mut self) -> io::Result<()> {
@@ -282,6 +291,10 @@ fn write_command(
                 let _flush = metrics.frame.flush.start();
                 writer.flush()?;
             }
+            if !is_current() {
+                encoder.invalidate();
+                return Ok(None);
+            }
             // The only baseline commit: all bytes and the flush succeeded.
             encoder.commit(frame, encoded);
             *sequence = request.sequence;
@@ -322,7 +335,7 @@ fn write_patch(
     patch: &Patch,
     drawn_cursor: bool,
     metrics: &'static OutputMetrics,
-    is_current: impl FnOnce() -> bool,
+    is_current: impl Fn() -> bool,
 ) -> io::Result<PatchOutcome> {
     let encode = metrics.patch.encode.start();
     let rows = if drawn_cursor {
@@ -350,6 +363,10 @@ fn write_patch(
     {
         let _flush = metrics.patch.flush.start();
         writer.flush()?;
+    }
+    if !is_current() {
+        encoder.invalidate();
+        return Ok(PatchOutcome::Stale);
     }
     if !encoder.commit_patch(&rows, patch.cursor.clone(), encoded) {
         return Err(io::Error::other("host output patch baseline lost"));

@@ -5,6 +5,7 @@ use crate::messaging::{
     prefs::settings::BusSettings,
 };
 use std::sync::Mutex;
+use std::time::Instant;
 
 #[cfg(feature = "dev-tools")]
 #[path = "footer_version_test.rs"]
@@ -66,6 +67,7 @@ fn driver(cols: u16) -> (ClientLoopDriver, Arc<Mutex<Vec<ClientMessage>>>) {
             #[cfg(unix)]
             will_query_host_cell_size: false,
             connection_id: 0,
+            resize_settle_deadline: None,
         },
         sent,
     )
@@ -85,6 +87,63 @@ fn receive_width(driver: &mut ClientLoopDriver, width: u16) {
             shell::ClientShellInput::default()
         })
         .unwrap();
+}
+
+#[test]
+fn resize_burst_clears_once_after_the_last_resize_without_keyboard_input() {
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let capture = Capture::default();
+    let (mut driver, _) = driver(120);
+    driver.state.output =
+        crate::client::host_terminal::output::TerminalOutput::with_writer(capture.clone()).unwrap();
+    let _route = driver.state.output.route();
+    let mut timer = timer::ClientLoopTimer::new();
+    let start = Instant::now();
+    for (elapsed, cols) in [(0, 112), (140, 120)] {
+        driver
+            .handle_event(
+                ClientLoopEvent::Resize(cols, 40, 8, 16, true),
+                start + Duration::from_millis(elapsed),
+                &mut timer,
+            )
+            .unwrap();
+        driver.state.output.wait_idle();
+    }
+    capture.0.lock().unwrap().clear();
+
+    for (elapsed, expected_clears) in [(250, 0), (400, 1), (700, 1)] {
+        driver
+            .handle_event(
+                ClientLoopEvent::Timer,
+                start + Duration::from_millis(elapsed),
+                &mut timer,
+            )
+            .unwrap();
+        driver.state.output.wait_idle();
+        let bytes = capture.0.lock().unwrap();
+        let clear = b"\x1b[H\x1b[J";
+        assert_eq!(
+            bytes
+                .windows(clear.len())
+                .filter(|part| *part == clear)
+                .count(),
+            expected_clears,
+            "at {elapsed}ms"
+        );
+    }
 }
 
 #[test]

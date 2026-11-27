@@ -79,6 +79,12 @@ impl crate::client::compositor::ClientShellState {
             .is_some_and(|bus| std::mem::take(&mut bus.full_repaint))
     }
 
+    pub(super) fn request_bus_full_repaint(&mut self) {
+        if let Some(bus) = self.bus.as_mut() {
+            bus.full_repaint = true;
+        }
+    }
+
     pub(super) fn compute_bus_view(&mut self, cols: u16, rows: u16) {
         let cell = self.graphics_cell_size;
         if let Some(bus) = self.bus.as_mut() {

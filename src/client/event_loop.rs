@@ -97,7 +97,10 @@ pub(super) async fn run_client_loop(
             .map_or(Duration::from_millis(100), |shell| {
                 shell.timer_delay(std::time::Instant::now())
             });
-        let timer_deadline = client_timer.deadline(std::time::Instant::now(), timer_delay);
+        let mut timer_deadline = client_timer.deadline(std::time::Instant::now(), timer_delay);
+        if let Some(settle) = driver.resize_settle_deadline {
+            timer_deadline = timer_deadline.min(settle);
+        }
         let event = {
             #[cfg(windows)]
             {
@@ -163,7 +166,10 @@ struct ClientLoopDriver {
     will_query_host_cell_size: bool,
     /// Identifies the reader whose events belong to the active connection.
     connection_id: u64,
+    resize_settle_deadline: Option<std::time::Instant>,
 }
+
+const RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(220);
 
 fn start_client_loop(
     initial: Option<(LocalStream, handshake::HandshakeResult)>,
@@ -227,6 +233,7 @@ fn start_client_loop(
         #[cfg(unix)]
         will_query_host_cell_size: cell_size_query,
         connection_id: 0,
+        resize_settle_deadline: None,
     })
 }
 
@@ -396,6 +403,9 @@ impl ClientLoopDriver {
                     cell_height_px,
                     pixel_geometry_exact,
                 )?;
+                if self.state.shell.is_some() {
+                    self.resize_settle_deadline = Some(now + RESIZE_SETTLE_DELAY);
+                }
             }
             ClientLoopEvent::ServerMessage {
                 connection_id,
@@ -543,10 +553,18 @@ impl ClientLoopDriver {
         if self.state.shell.is_none() {
             return Ok(false);
         }
+        let resize_settled = self
+            .resize_settle_deadline
+            .is_some_and(|deadline| now >= deadline);
+        if resize_settled {
+            self.resize_settle_deadline = None;
+            self.state.output.invalidate();
+            self.state.request_repaint();
+        }
         let expired = self.endpoint_commands.expire(now);
         self.apply_shell_input(|shell| {
             let mut outcome = shell.tick_selection_autoscroll(now);
-            outcome.repaint |= shell.compose_deferred;
+            outcome.repaint |= resize_settled || shell.compose_deferred;
             if shell.editor_pending && !crate::client::host_terminal::output::busy() {
                 shell.editor_pending = false;
                 outcome.actions.push(shell::ClientShellAction::EditComposer);

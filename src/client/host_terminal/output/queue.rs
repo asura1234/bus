@@ -89,6 +89,7 @@ pub(super) struct Queued {
 #[derive(Default)]
 pub(in crate::client) struct Feedback {
     pub(in crate::client) cleared: Option<bool>,
+    pub(in crate::client) discarded_frame: bool,
     /// Some, even with no Kitty IDs, records a discarded graphics transaction.
     pub(in crate::client) discarded_graphics: Option<BTreeSet<u32>>,
 }
@@ -234,6 +235,7 @@ impl Handle {
         self.observe_age(&state);
         state.active.is_some()
             || !state.pending.is_empty()
+            || state.feedback.discarded_frame
             || state.feedback.discarded_graphics.is_some()
     }
 
@@ -299,6 +301,10 @@ impl Handle {
                 }
             }
             Ok(None) => {
+                if matches!(&queued.command, Command::Frame(frame) if frame.epoch == self.frame_epoch())
+                {
+                    state.feedback.discarded_frame = true;
+                }
                 if let Some(ids) = discarded_images {
                     state
                         .feedback
