@@ -292,6 +292,7 @@ pub(in crate::client) struct ClientSelectionAutoscroll {
 pub(crate) struct ClientShellState {
     /// Model changes accumulate while a host-output transaction is in flight.
     pub(in crate::client) compose_deferred: bool,
+    resized_surface_pending: bool,
     pub(in crate::client) editor_pending: bool,
     pub(in crate::client) bus: Option<crate::client::rooms::BusUi>,
     pub(in crate::client) config: ClientShellConfig,
@@ -345,6 +346,7 @@ impl ClientShellState {
         let local_config_diagnostic = config.startup_config_diagnostic.take();
         Self {
             compose_deferred: false,
+            resized_surface_pending: false,
             editor_pending: false,
             bus: None,
             config,
@@ -455,6 +457,7 @@ impl ClientShellState {
     }
 
     pub(crate) fn invalidate_pane_surface(&mut self) {
+        self.resized_surface_pending = self.has_bus();
         self.pane_surface = None;
         self.pending_pane_surface = None;
         self.hits = ShellHitMap::default();

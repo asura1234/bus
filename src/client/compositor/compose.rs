@@ -89,6 +89,8 @@ impl ClientShellState {
             return None;
         }
         let layout = self.layout(cols, rows);
+        let matching_surface = (surface.frame.width, surface.frame.height)
+            == (layout.pane_surface.width, layout.pane_surface.height);
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
         if let Some(bus) = self.bus.as_ref() {
             bus.render(&mut buffer);
@@ -113,6 +115,9 @@ impl ClientShellState {
         blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
         self.compose_overlays(&mut frame, layout.pane_surface, cols, rows)?;
         self.compose_graphics(&mut frame, layout);
+        if matching_surface && std::mem::take(&mut self.resized_surface_pending) {
+            self.request_bus_full_repaint();
+        }
         if let Some(bus) = self.bus.as_mut() {
             frame.graphics.extend(bus.thumbnail_graphics());
             self.presented_bus_terminal = bus.terminal_pane().map(str::to_owned);

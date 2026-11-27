@@ -1061,6 +1061,53 @@ fn rename_preview_swallows_paste_text_and_pane_clicks() {
 }
 
 #[test]
+fn resize_preview_does_not_consume_the_matching_surface_repaint() {
+    use crate::client::compositor::tests::surface;
+    use crate::protocol::wire::FrameData;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let (mut ui, _, agent) = fixture();
+    bind_pane(&mut ui, agent, "pane_1");
+    let mut shell = shell_with(ui);
+    let mut other_surface = surface();
+    other_surface.panes[0].pane_id = "pane_2".into();
+    shell.set_pane_surface(other_surface);
+    shell.set_pane_surface(surface());
+    shell.bus.as_mut().unwrap().open_terminal(agent);
+    shell.compose(100, 30).unwrap();
+    shell.take_bus_full_repaint();
+
+    shell.invalidate_pane_surface();
+    let preview = shell.compose(120, 40).unwrap();
+    let preview_text: String = preview
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect();
+    assert!(
+        preview_text.contains("LIVE"),
+        "the cached terminal must still be visible"
+    );
+    shell.take_bus_full_repaint();
+
+    let size = shell.surface_size(120, 40);
+    let mut resized = surface();
+    resized.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
+        &Buffer::empty(Rect::new(0, 0, size.cols, size.rows)),
+        None,
+        &[],
+    );
+    shell.set_pane_surface(resized);
+    shell.compose(120, 40).unwrap();
+    assert!(
+        shell.take_bus_full_repaint(),
+        "the first matching native surface needs its own full repaint"
+    );
+    shell.compose(120, 40).unwrap();
+    assert!(!shell.take_bus_full_repaint());
+}
+
+#[test]
 fn rename_preview_survives_resize_and_enter_hands_keys_back_to_the_pane() {
     let (mut ui, _, agent) = fixture();
     bind_pane(&mut ui, agent, "pane_1");
