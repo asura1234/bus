@@ -166,7 +166,7 @@ Never use `bus agent read` or `bus agent observe` to monitor a worker's progress
 Wait for the worker's Bus message or an explicit Bus notice.
 For a reported failure, dead agent, or uncertain submission, start with `bus state`,
 `bus message status ID`, and `bus history --room ROOM`. If a diagnostic question remains,
-use `bus agent read AGENT --source visible` or `--source recent --lines N`.
+use `bus agent read AGENT --source visible` or `bus agent read AGENT --source recent --lines N`.
 A failed identity check discards text. Check terminal ownership.
 For provider exits, inspect state.exit_snapshot and its saved file; the provider
 terminal may already be closed. Exit snapshots preserve viewport/200 recent lines;
