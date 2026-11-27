@@ -73,8 +73,8 @@ even if background shells keep Working; later background results are follow-ups,
 
 ### Who to message
 
-Use the [Bus communication guide](bus-communication-guide.md). Send only the body; do not add a "from X", "X here" or signature line.
-Bus adds one sender header, `name:`; numeric/historical names include an ID. Agent-authored batches add position/time without repeating that header.
+**Same message, brief, or result for several agents?** Use one send to multiple workers or multiple orchestrators instead of looping over recipients: `bus send --room ROOM --as AGENT --to agent1,agent2,agent3 --text 'Review the updated brief'`. Use comma-separated names or IDs.
+Follow the [Bus communication guide](bus-communication-guide.md) and send only the body: no "from X", "X here" or signature. Bus adds one `name:` header, with IDs for numeric/historical names. Batches add position/time without repeating it.
 New agents get protocol instructions at launch; upgrades do not insert task turns into existing conversations with saved instructions.
 
 For scripts, register a sender-only identity with `bus bot add --name notifications` (optionally add `--room ROOM`). Names are trimmed, case-sensitive, and unique across bots and live agents.
